@@ -155,6 +155,19 @@
   .tile svg { width: 82%; height: 82%; }
   .tile .txt { font-weight: 800; }
 
+  /* ---------- v8: voice recording booth ---------- */
+  #boothScreen { justify-content: flex-start; padding-top: 10px; }
+  #boothStatus { display: none; font-size: 13px; max-width: 640px; background: #fff6ea; border: 1px solid var(--tile-border); border-radius: 10px; padding: 8px 12px; text-align: left; }
+  .booth-section-head { width: 100%; max-width: 640px; text-align: left; font-weight: 800; color: #8a7d66; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; margin-top: 12px; }
+  .booth-row { width: 100%; max-width: 640px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--tile-border); }
+  .booth-label { flex: 1 1 140px; font-size: 14px; text-align: left; }
+  .booth-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .booth-btn { font-size: 12px; padding: 6px 10px; border: 2px solid var(--tile-border); border-radius: 10px; background: white; cursor: pointer; color: var(--ink); touch-action: manipulation; }
+  .booth-btn:disabled { opacity: .4; cursor: default; }
+  .booth-btn.booth-rec.recording { background: var(--bad); border-color: #c0392b; color: white; }
+  .booth-indicator { font-size: 14px; min-width: 20px; }
+  .booth-note { flex-basis: 100%; font-size: 12px; color: #c0392b; text-align: left; }
+
   #progressWrap { height: 10px; background: #f0e6d2; border-radius: 5px; margin: 6px 4px; overflow: hidden; }
   #progressBar { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent2), var(--accent)); border-radius: 5px; transition: width .4s; }
 
@@ -226,6 +239,7 @@
     <p class="subtitle" style="font-size:13px">The word checklist (done by a grown-up, ~3 min) powers the vocabulary-size estimate. The game measures understanding by tapping pictures.</p>
     <button class="smallbtn" onclick="testVoice()">🔊 Test voice</button>
     <div id="voiceDiag" style="display:none;font-size:12px;color:#8a7d66;max-width:520px;text-align:left;background:#fff;border:1px solid #f0e0c0;border-radius:10px;padding:8px 12px;white-space:pre-wrap"></div>
+    <button class="smallbtn" onclick="showBooth()">🎙 Grown-up recording booth</button>
   </div>
 
   <!-- PICKER -->
@@ -311,12 +325,24 @@
       <h3>📋 Session history</h3>
       <div id="sessionList"></div>
     </div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;align-items:center">
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px;color:#8a7d66">
+        <input type="checkbox" id="exportIncludeAudio"> Include voice recordings
+      </label>
       <button class="smallbtn" onclick="exportData()">⬇ Export backup</button>
       <button class="smallbtn" onclick="document.getElementById('importFile').click()">⬆ Import backup</button>
       <input type="file" id="importFile" accept="application/json" style="display:none">
     </div>
     <button class="bigbtn" onclick="show('startScreen')">← Back</button>
+  </div>
+
+  <!-- RECORDING BOOTH -->
+  <div id="boothScreen" class="screen">
+    <h2>🎙 Grown-up recording booth</h2>
+    <p class="subtitle">Record prompts in your own voice — great for sounds the built-in voice mangles, like "mmm" or "buh". Saved on this device only, unless you export them from the Progress screen.</p>
+    <div id="boothStatus"></div>
+    <div id="boothList" style="width:100%;max-width:640px"></div>
+    <button class="bigbtn" onclick="closeBooth()">← Back</button>
   </div>
 </div>
 
@@ -952,7 +978,7 @@ function renderBodyRound(dom, ds){
   state.currentItem = it; state.locked = false; state.firstTry = true;
   $("promptText").textContent = it.prompt;
   $("progressBar").style.width = progressPct(ds) + "%";
-  speak(it.say);
+  sayCue(it.cueKey, it.say); // v8: no-op fallback to speak() — mybody items never set cueKey
 }
 function tapBodyPart(part, el){
   if (state.locked || !state.domain) return;
@@ -1056,6 +1082,12 @@ function makeRhymeItem(d, arity){
   return { label: d.label, b: d.b, c: 1/choices.length, s: 4,
     prompt: `Which one rhymes with "${d.word}"?`,
     say: `Which one rhymes with ${d.word}? Choices are ${words.join(", ")}.`,
+    // v8: recording-booth playback cue — a parent-recorded clip of just the
+    // stimulus word (e.g. "cat") plays INSTEAD of this whole compound
+    // sentence when one exists (see sayCue()). Deliberate whole-item
+    // substitution, not word-splicing — matches the task's own worked
+    // example ("word:cat") for what this domain's cue should be.
+    cueKey: `word:${d.word}`,
     tiles: choices.map(c => emojiTile(c.e)), correct: choices.findIndex(c => c.correct) };
 }
 function makeLetterSoundItem(d, pool, arity){
@@ -1064,6 +1096,10 @@ function makeLetterSoundItem(d, pool, arity){
   return { label: d.label, b: d.age, c: 1/choices.length, s: 4,
     prompt: `Which letter says "${d.sound}"?`,
     say: `Which letter says ${d.sound}? Find the letter that makes that sound!`,
+    // v8: recording-booth playback cue — this is the actual motivating case
+    // (TTS mangles "mmm"/"buh" as phonics phones); a parent's own recording
+    // of the phone replaces the whole spoken line when one exists.
+    cueKey: `phone:${d.sound}`,
     tiles: choices.map(c => `<span class="txt" style="color:#e67e22">${c.letter}</span>`), correct: choices.indexOf(d) };
 }
 function makePhonoItem(d, pool, arity){
@@ -1132,6 +1168,360 @@ const DOMAINS = [
     defs: PHONO_DEFS,
     make: makePhonoItem },
 ];
+
+/* =====================================================================
+   v8: VOICE RECORDING BOOTH — lets a parent record prompts in their own
+   voice (motivated by TTS mangling phonetic prompts like "mmm"/"buh"),
+   stored in IndexedDB (blobs are too big for localStorage). Recordings are
+   keyed by a normalized CUE STRING, e.g. "phone:mmm" or "word:cat" — a flat
+   namespace any domain's item can opt into by tagging itself with `cueKey`
+   (see makeRhymeItem/makeLetterSoundItem above, the only current producer).
+   sayCue() is the generic playback entry point: play the recorded clip if
+   one exists for that cue, else fall back to the existing speak() TTS path
+   — wired in everywhere an item's `say` string used to be spoken directly,
+   so every domain without a cueKey (i.e. every domain except phono today)
+   behaves byte-for-byte as before.
+   ===================================================================== */
+
+// ---- registry: enumerate every recordable cue, grouped by source. Generic
+// by design — RECORDABLE_CUE_SOURCES is a list of `collect()` fns any future
+// domain can push onto — but only the phono domain populates it today, per
+// the task's scope ("optionally later other domains"). Cues are derived
+// programmatically from PHONO_DEFS' own source arrays (RHYME_DEFS/
+// LETTER_SOUND_DEFS), so a future new rhyme or letter-sound def shows up in
+// the booth automatically, with zero registry edits.
+function collectPhonoCueGroups(){
+  const words = new Map(); // word -> emoji (best-effort, label display only)
+  const noteWord = (w, e) => { if (!w) return; if (!words.has(w) || (e && !words.get(w))) words.set(w, e || words.get(w) || ""); };
+  for (const d of RHYME_DEFS){
+    noteWord(d.word, "");           // the rhyme STIMULUS word — spoken only, never pictured
+    noteWord(d.correct.w, d.correct.e);
+    d.distractors.forEach(x => noteWord(x.w, x.e));
+  }
+  const wordCues = [...words.entries()].sort((a,b) => a[0].localeCompare(b[0]))
+    .map(([w,e]) => ({ key: `word:${w}`, label: `${e ? e + " " : ""}"${w}"` }));
+  const phoneCues = LETTER_SOUND_DEFS.map(d => ({ key: `phone:${d.sound}`, label: `${d.letter} says "${d.sound}"` }));
+  return [
+    { section: "Letter Sounds & Rhymes — words", cues: wordCues },
+    { section: "Letter Sounds & Rhymes — phones", cues: phoneCues },
+  ];
+}
+const RECORDABLE_CUE_SOURCES = [ collectPhonoCueGroups ];
+function collectAllCueGroups(){
+  const groups = [];
+  for (const collect of RECORDABLE_CUE_SOURCES) groups.push(...collect());
+  return groups;
+}
+
+// ---- IndexedDB wrapper: db "tg_audio", store "clips" (out-of-line keys —
+// created with no keyPath, so `put(blob, cueKey)` supplies the key
+// explicitly), key = cue string, value = Blob. Every call is wrapped so a
+// failure (private browsing, quota, disabled storage) resolves to a safe
+// fallback (null / [] / a promise callers already catch) instead of
+// throwing into game code — see sayCue()'s "IndexedDB unavailable -> TTS
+// fallback" and dbGetAllKeys()'s use in the booth's availability banner.
+const AUDIO_DB_NAME = "tg_audio", AUDIO_STORE = "clips";
+let _audioDBPromise = null;
+function openAudioDB(){
+  if (_audioDBPromise) return _audioDBPromise;
+  _audioDBPromise = new Promise((resolve, reject) => {
+    if (!("indexedDB" in window)){ reject(new Error("indexedDB unavailable")); return; }
+    let req;
+    try { req = indexedDB.open(AUDIO_DB_NAME, 1); } catch(e){ reject(e); return; }
+    req.onupgradeneeded = () => { try { req.result.createObjectStore(AUDIO_STORE); } catch(e){} };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error("indexedDB open failed"));
+    req.onblocked = () => reject(new Error("indexedDB open blocked"));
+  }).catch(err => { _audioDBPromise = null; throw err; }); // don't cache a dead promise — allow a later retry
+  return _audioDBPromise;
+}
+async function audioDBAvailable(){
+  try { await openAudioDB(); return true; } catch(e){ return false; }
+}
+async function dbGetClip(cueKey){
+  try {
+    const db = await openAudioDB();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(AUDIO_STORE, "readonly");
+      const req = tx.objectStore(AUDIO_STORE).get(cueKey);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch(e){ return null; }
+}
+async function dbSetClip(cueKey, blob){
+  const db = await openAudioDB(); // let this throw — callers surface a real error for a failed SAVE
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(AUDIO_STORE, "readwrite");
+    tx.objectStore(AUDIO_STORE).put(blob, cueKey);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error("save aborted (storage quota?)"));
+  });
+}
+async function dbDeleteClip(cueKey){
+  const db = await openAudioDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(AUDIO_STORE, "readwrite");
+    tx.objectStore(AUDIO_STORE).delete(cueKey);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function dbGetAllKeys(){
+  try {
+    const db = await openAudioDB();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(AUDIO_STORE, "readonly");
+      const req = tx.objectStore(AUDIO_STORE).getAllKeys();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  } catch(e){ return []; }
+}
+async function dbGetAllClips(){
+  // {cueKey: Blob} for every stored clip — used by Export.
+  try {
+    const db = await openAudioDB();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(AUDIO_STORE, "readonly");
+      const store = tx.objectStore(AUDIO_STORE);
+      const out = {};
+      const req = store.openCursor();
+      req.onsuccess = (e) => {
+        const cur = e.target.result;
+        if (cur){ out[cur.key] = cur.value; cur.continue(); } else resolve(out);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch(e){ return {}; }
+}
+
+// ---- playback: the ONE Audio element ever allowed to be mid-playback at a
+// time (mirrors speechSynthesis's single-utterance model). stopClip() is the
+// clip-audio analogue of ttsCancel() — pause()ing an <audio> element is
+// always safe (no browser has a "swallow the next play() if you pause() too
+// soon" bug the way Chrome's speechSynthesis.cancel() does), so unlike
+// ttsCancel() this needs no post-stop delay before the next sayCue()/play()
+// call. Wired into every one of ttsCancel()'s existing call sites (skip/
+// doesn't-know/map-out/repeat-prompt/finish/mute) per the task's "no-cancel
+// discipline" — a recorded clip is only ever interrupted via those same
+// sanctioned paths, never by ordinary game-flow praise/filler speech (which
+// still just plays over the tail of a clip, exactly like it already
+// overlaps a still-speaking TTS utterance today).
+let _currentClipAudio = null;
+function stopClip(){
+  if (_currentClipAudio){
+    try { _currentClipAudio.pause(); } catch(e){}
+    _currentClipAudio = null;
+  }
+}
+function sayCue(cueKey, fallbackText, cb){
+  // muted: skip the IndexedDB round-trip entirely and go straight to speak(),
+  // which already no-ops audio but still fires cb on its own timer — same
+  // "flow keeps moving even with no sound" contract sayCue callers rely on.
+  if (!cueKey || state.muted){ speak(fallbackText, cb); return; }
+  dbGetClip(cueKey).then(blob => {
+    if (!blob){ speak(fallbackText, cb); return; } // no recording for this cue -> TTS fallback
+    stopClip();
+    let url;
+    try { url = URL.createObjectURL(blob); } catch(e){ speak(fallbackText, cb); return; }
+    const audio = new Audio(url);
+    _currentClipAudio = audio;
+    let done = false, fallbackTimer = null;
+    const finish = () => {
+      if (done) return; done = true;
+      setSpeakPulse(false);
+      clearTimeout(fallbackTimer);
+      try { URL.revokeObjectURL(url); } catch(e){}
+      if (_currentClipAudio === audio) _currentClipAudio = null;
+      cb && cb();
+    };
+    audio.onplay = () => setSpeakPulse(true);
+    audio.onended = finish;
+    audio.onerror = finish; // a corrupt/unsupported clip falls silently to "just move on", not a crash
+    fallbackTimer = setTimeout(finish, 8000); // duration-based fallback, tightened once metadata loads
+    audio.onloadedmetadata = () => {
+      if (isFinite(audio.duration) && audio.duration > 0){
+        clearTimeout(fallbackTimer);
+        fallbackTimer = setTimeout(finish, audio.duration * 1000 + 800);
+      }
+    };
+    audio.play().catch(() => { clearTimeout(fallbackTimer); if (_currentClipAudio === audio) _currentClipAudio = null; speak(fallbackText, cb); });
+  }).catch(() => speak(fallbackText, cb)); // IndexedDB unavailable (e.g. private browsing) -> TTS fallback
+}
+
+// ---- recording booth UI ----
+function pickRecordMime(){
+  if (!("MediaRecorder" in window)) return null;
+  const candidates = ["audio/webm;codecs=opus","audio/webm","audio/mp4","audio/mp4;codecs=mp4a.40.2","audio/aac","audio/ogg;codecs=opus"];
+  for (const c of candidates){
+    try { if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(c)) return c; } catch(e){}
+  }
+  return ""; // MediaRecorder exists but none of our preferred types report supported — let the browser pick its own default
+}
+function micSupported(){
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && "MediaRecorder" in window);
+}
+let _micStreamPromise = null;
+function getMicStream(){
+  if (!_micStreamPromise){
+    _micStreamPromise = navigator.mediaDevices.getUserMedia({ audio: true }).catch(err => { _micStreamPromise = null; throw err; });
+  }
+  return _micStreamPromise;
+}
+function releaseMicStream(){
+  if (_micStreamPromise){
+    _micStreamPromise.then(stream => stream.getTracks().forEach(t => t.stop())).catch(() => {});
+    _micStreamPromise = null;
+  }
+}
+let _activeRecording = null; // { cueKey, recorder }
+function boothSetStatus(msg, isError){
+  const el = $("boothStatus");
+  if (!msg){ el.style.display = "none"; el.textContent = ""; return; }
+  el.style.display = "block";
+  el.textContent = msg;
+  el.style.color = isError ? "#c0392b" : "#8a7d66";
+}
+function boothRowEls(cueKey){
+  const row = $("boothList").querySelector(`.booth-row[data-cue="${cueKey}"]`);
+  if (!row) return null;
+  return {
+    row,
+    recBtn: row.querySelector(".booth-rec"),
+    previewBtn: row.querySelector(".booth-preview"),
+    delBtn: row.querySelector(".booth-del"),
+    indicator: row.querySelector(".booth-indicator"),
+    note: row.querySelector(".booth-note"),
+  };
+}
+function setBoothRowRecorded(cueKey, recorded){
+  const els = boothRowEls(cueKey);
+  if (!els) return;
+  els.indicator.textContent = recorded ? "🎙✅" : "";
+  els.previewBtn.disabled = !recorded;
+  els.delBtn.disabled = !recorded;
+}
+function setBoothRowRecording(cueKey, recording){
+  const els = boothRowEls(cueKey);
+  if (!els) return;
+  els.recBtn.textContent = recording ? "■ Stop" : "● Record";
+  els.recBtn.classList.toggle("recording", recording);
+  // one recording at a time — disable every OTHER row's record button while one is live
+  $("boothList").querySelectorAll(".booth-rec").forEach(btn => { if (btn !== els.recBtn) btn.disabled = recording; });
+}
+async function startBoothRecording(cueKey){
+  if (_activeRecording) return; // defensive — the other rows' buttons are already disabled too
+  if (!micSupported()){ boothSetStatus("Voice recording isn't supported in this browser.", true); return; }
+  const els = boothRowEls(cueKey);
+  let stream;
+  try { stream = await getMicStream(); }
+  catch(err){
+    if (els) els.note.textContent = "Microphone access was denied. Allow microphone access for this page in your browser's site settings, then try again.";
+    boothSetStatus("Microphone access was denied — see the note under that row.", true);
+    return;
+  }
+  if (els) els.note.textContent = "";
+  const mime = pickRecordMime();
+  let recorder;
+  try { recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
+  catch(e){ boothSetStatus("Couldn't start the recorder: " + (e.message || e), true); return; }
+  const chunks = [];
+  recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  recorder.onstop = async () => {
+    _activeRecording = null;
+    setBoothRowRecording(cueKey, false);
+    if (!chunks.length){ boothSetStatus("Recording was empty — try again, speaking right after you tap Record.", true); return; }
+    const blob = new Blob(chunks, { type: recorder.mimeType || mime || "audio/webm" });
+    try { await dbSetClip(cueKey, blob); setBoothRowRecorded(cueKey, true); boothSetStatus(""); }
+    catch(e){ boothSetStatus("Couldn't save that recording (storage may be full or unavailable): " + (e.message || e), true); }
+  };
+  recorder.onerror = (e) => {
+    _activeRecording = null;
+    setBoothRowRecording(cueKey, false);
+    boothSetStatus("Recording error: " + (e.error ? (e.error.message || e.error.name) : "unknown"), true);
+  };
+  try { recorder.start(); } catch(e){ boothSetStatus("Couldn't start the recorder: " + (e.message || e), true); return; }
+  _activeRecording = { cueKey, recorder };
+  setBoothRowRecording(cueKey, true);
+}
+function stopBoothRecording(cueKey){
+  if (_activeRecording && _activeRecording.cueKey === cueKey){
+    try { _activeRecording.recorder.stop(); } catch(e){}
+  }
+}
+async function previewBoothClip(cueKey){
+  const blob = await dbGetClip(cueKey);
+  if (!blob) return;
+  stopClip();
+  let url;
+  try { url = URL.createObjectURL(blob); } catch(e){ return; }
+  const audio = new Audio(url);
+  _currentClipAudio = audio;
+  audio.onended = () => { try { URL.revokeObjectURL(url); } catch(e){} if (_currentClipAudio === audio) _currentClipAudio = null; };
+  audio.play().catch(() => {});
+}
+async function deleteBoothClip(cueKey){
+  try { await dbDeleteClip(cueKey); setBoothRowRecorded(cueKey, false); }
+  catch(e){ boothSetStatus("Couldn't delete that recording: " + (e.message || e), true); }
+}
+function buildBoothRow(cue){
+  const row = document.createElement("div");
+  row.className = "booth-row";
+  row.dataset.cue = cue.key;
+  row.innerHTML = `
+    <div class="booth-label">${cue.label}</div>
+    <div class="booth-controls">
+      <button class="booth-btn booth-rec">● Record</button>
+      <button class="booth-btn booth-preview" disabled>▶ Preview</button>
+      <button class="booth-btn booth-del" disabled>🗑</button>
+      <span class="booth-indicator"></span>
+    </div>
+    <div class="booth-note"></div>`;
+  row.querySelector(".booth-rec").onclick = () => {
+    if (_activeRecording && _activeRecording.cueKey === cue.key) stopBoothRecording(cue.key);
+    else startBoothRecording(cue.key);
+  };
+  row.querySelector(".booth-preview").onclick = () => previewBoothClip(cue.key);
+  row.querySelector(".booth-del").onclick = () => {
+    if (confirm(`Delete the recording for ${cue.label.replace(/<[^>]+>/g,"")}?`)) deleteBoothClip(cue.key);
+  };
+  return row;
+}
+async function renderBoothList(){
+  const wrap = $("boothList");
+  wrap.innerHTML = "";
+  const warnings = [];
+  if (!micSupported()) warnings.push("Voice recording (microphone capture) isn't supported in this browser.");
+  const groups = collectAllCueGroups();
+  for (const g of groups){
+    if (!g.cues.length) continue;
+    const head = document.createElement("div");
+    head.className = "booth-section-head";
+    head.textContent = g.section;
+    wrap.appendChild(head);
+    for (const cue of g.cues) wrap.appendChild(buildBoothRow(cue));
+  }
+  if (!micSupported()) wrap.querySelectorAll(".booth-rec").forEach(b => b.disabled = true);
+  const idbOk = await audioDBAvailable();
+  if (!idbOk) warnings.push("Saved recordings aren't available in this browser/mode (e.g. Private Browsing) — recordings won't persist here, but built-in spoken prompts still work during play.");
+  boothSetStatus(warnings.join(" "), warnings.length > 0);
+  const keys = idbOk ? await dbGetAllKeys() : [];
+  const recorded = new Set(keys);
+  for (const g of groups) for (const cue of g.cues) setBoothRowRecorded(cue.key, recorded.has(cue.key));
+}
+function showBooth(){
+  stopClip(); ttsCancel();
+  renderBoothList();
+  show("boothScreen");
+}
+function closeBooth(){
+  if (_activeRecording) stopBoothRecording(_activeRecording.cueKey);
+  stopClip();
+  releaseMicStream();
+  show("startScreen");
+}
 
 function shuffle(a){ a=a.slice(); for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]];} return a; }
 
@@ -2253,7 +2643,7 @@ function toggleMute(){
   state.muted = !state.muted;
   localStorage.setItem("tg_muted", state.muted ? "1" : "0");
   updateMuteBtn();
-  if (state.muted) ttsCancel();
+  if (state.muted){ ttsCancel(); stopClip(); } // v8: muting is a sanctioned interrupt path too
 }
 
 /* ---------- flow ---------- */
@@ -2411,7 +2801,7 @@ function backToMap(){
   // `if (!ds) return` check (showPicker nulls state.domain).
   if (state.domain) finalizeDomain(state.domain);
   state.sessionMode = "single";
-  ttsCancel();
+  ttsCancel(); stopClip(); // v8: map-out is a sanctioned interrupt path — stop any playing recorded clip too
   showPicker();
 }
 
@@ -2543,7 +2933,7 @@ function renderItem(){
     board.appendChild(tile);
   });
   $("progressBar").style.width = progressPct(ds) + "%";
-  speak(it.say);
+  sayCue(it.cueKey, it.say); // v8: it.cueKey is set by makeRhymeItem/makeLetterSoundItem (phono); every other domain's item has no cueKey, so this is a no-op fallback to the previous speak(it.say) call
 }
 
 function skipItem(){
@@ -2568,7 +2958,7 @@ function skipItem(){
     if (state.domain.sf && state.domain.sf.scene) state.domain.sf.scene.resolved++;
   }
   state.domain.log.push({ label: it.label, b: it.b, skipped: true });
-  ttsCancel();
+  ttsCancel(); stopClip(); // v8: skip is a sanctioned interrupt path — stop any playing recorded clip too
   setTimeout(() => { renderItem(); }, 150);
 }
 
@@ -2598,7 +2988,7 @@ function dontKnowItem(){
   // in Chrome (see speak()'s own doc comment on this exact anti-pattern) — repeatPrompt()
   // works around it with a delay after cancel(); do the same here instead of firing speak()
   // synchronously on the next line.
-  ttsCancel();
+  ttsCancel(); stopClip(); // v8: "doesn't know" is a sanctioned interrupt path — stop any playing recorded clip too
   setTimeout(() => { speak("On to the next one!"); }, 150);
   setTimeout(() => { renderItem(); }, 1000);
 }
@@ -2683,7 +3073,7 @@ function renderSeekfindRound(dom, ds){
   state.currentItem = it; state.locked = false; state.firstTry = true;
   $("promptText").textContent = it.prompt;
   $("progressBar").style.width = progressPct(ds) + "%";
-  speak(it.say);
+  sayCue(it.cueKey, it.say); // v8: no-op fallback to speak() — seekfind items never set cueKey
 }
 function tapSeekObj(word, el){
   // v6 adversarial-review fix: mirrors skipItem/dontKnowItem's guard (they already check
@@ -2727,10 +3117,12 @@ function tapSeekObj(word, el){
 function repeatPrompt(){
   if (!state.currentItem) return;
   // interrupt anything in-flight, then wait a beat: Chrome swallows a speak()
-  // issued synchronously after cancel().
-  ttsCancel();
+  // issued synchronously after cancel(). stopClip() (v8) needs no such delay
+  // — pause() has no swallow-window bug — but it's grouped here anyway since
+  // repeatPrompt is one of the sanctioned interrupt paths.
+  ttsCancel(); stopClip();
   const it = state.currentItem;
-  setTimeout(() => { if (state.currentItem === it) speak(it.say); }, 150);
+  setTimeout(() => { if (state.currentItem === it) sayCue(it.cueKey, it.say); }, 150);
 }
 
 function tapTile(i, tileEl){
@@ -2869,7 +3261,7 @@ function endGame(){
   // adversarial-review fix).
   if (state.domain) finalizeDomain(state.domain);
   state.domain = null; // guard against a stale nextDomain()->speak() callback firing renderItem() late
-  ttsCancel();
+  ttsCancel(); stopClip(); // v8: Finish is a sanctioned interrupt path — stop any playing recorded clip too
   $("quitBtn").style.display = "none";
   $("progressWrap").style.display = "none";
   $("mapBtn").style.display = "none"; // v4 (mod 2)
@@ -3063,8 +3455,44 @@ function renderSessionList(){
 }
 
 /* ---------- export / import ---------- */
-function exportData(){
+function blobToBase64(blob){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+function base64ToBlob(b64, type){
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: type || "audio/webm" });
+}
+async function exportData(){
   const payload = { exportedAt: new Date().toISOString(), tg_sessions: loadSessions(), tg_checklist: JSON.parse(localStorage.getItem("tg_checklist") || "[]") };
+  // v8: voice recordings are OPT-IN (checkbox on the Progress screen) — plain
+  // sessions-only export stays the default, unaffected by this addition.
+  const includeAudio = $("exportIncludeAudio") && $("exportIncludeAudio").checked;
+  if (includeAudio){
+    const clips = await dbGetAllClips();
+    const keys = Object.keys(clips);
+    if (keys.length){
+      let totalBytes = 0;
+      const encoded = {};
+      for (const k of keys){
+        const blob = clips[k];
+        totalBytes += blob.size;
+        try { encoded[k] = { type: blob.type || "audio/webm", data: await blobToBase64(blob) }; }
+        catch(e){ /* skip a clip that fails to encode rather than aborting the whole export */ }
+      }
+      if (totalBytes > 5*1024*1024){
+        const mb = (totalBytes/1024/1024).toFixed(1);
+        if (!confirm(`Voice recordings add about ${mb}MB to this backup, which may take a moment to download/import. Continue?`)) return;
+      }
+      payload.tg_audio = encoded;
+    }
+  }
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -3076,7 +3504,7 @@ function importData(evt){
   const file = evt.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     let data;
     try { data = JSON.parse(reader.result); } catch(e){ alert("That file isn't valid JSON."); evt.target.value = ""; return; }
     const incoming = Array.isArray(data.tg_sessions) ? data.tg_sessions : null;
@@ -3096,7 +3524,11 @@ function importData(evt){
     const byDate = new Map(existing.map(s => [s.date, s]));
     let added = 0;
     for (const s of incoming){ if (!byDate.has(s.date)){ byDate.set(s.date, s); added++; } }
-    if (!confirm(`Import ${incoming.length} session(s) from backup — ${added} new (by date), ${incoming.length-added} already present. Overwrite/merge now?`)){
+    // v8: surface how many voice recordings the backup carries, if any, before the same
+    // single confirm() prompt (no separate audio-specific confirmation — one decision point).
+    const audioCount = data.tg_audio && typeof data.tg_audio === "object" ? Object.keys(data.tg_audio).length : 0;
+    const audioNote = audioCount ? ` Plus ${audioCount} voice recording(s).` : "";
+    if (!confirm(`Import ${incoming.length} session(s) from backup — ${added} new (by date), ${incoming.length-added} already present.${audioNote} Overwrite/merge now?`)){
       evt.target.value = ""; return;
     }
     const merged = [...byDate.values()].sort((a,b) => new Date(a.date) - new Date(b.date));
@@ -3105,6 +3537,15 @@ function importData(evt){
       const cur = new Set(JSON.parse(localStorage.getItem("tg_checklist") || "[]"));
       data.tg_checklist.forEach(w => cur.add(w));
       localStorage.setItem("tg_checklist", JSON.stringify([...cur]));
+    }
+    if (audioCount){
+      let imported = 0, failed = 0;
+      for (const [key, rec] of Object.entries(data.tg_audio)){
+        if (!rec || typeof rec.data !== "string"){ failed++; continue; }
+        try { await dbSetClip(key, base64ToBlob(rec.data, rec.type)); imported++; }
+        catch(e){ failed++; }
+      }
+      if (failed) alert(`Imported ${imported} recording(s); ${failed} couldn't be saved (storage may be unavailable in this browser).`);
     }
     refreshProgressBtn();
     showProgress();
