@@ -1213,6 +1213,100 @@ function collectAllCueGroups(){
   return groups;
 }
 
+/* =====================================================================
+   v9: BUNDLED AUDIO — collectAllSayStrings() is a PURE function enumerating
+   every string the game can ever hand to speak() (praise/try-again/reveal/
+   domain-intro/interlude/greeting/every domain's per-item prompt), by
+   walking the SAME defs/arrays/domain make() functions the game itself
+   uses at runtime — never a hand-copied list — so the audio bundle
+   (tools/gen_audio.sh's output) can't silently drift from what the game
+   actually says. Motivation: the Amazon Kids browser on Fire tablets has
+   no speechSynthesis engine at all (chimes play, prompts are silent) — see
+   NOTES.md v9. Deterministic: no Math.random anywhere in this function or
+   in the parts of each domain's `say` text it reads (verified per-domain,
+   see the comment above the per-domain loop below); the SAME arity is used
+   for every domain regardless of session age because a domain's `say` text
+   never depends on which random distractors got chosen, only the item def
+   itself (again, see below for the one exception).
+   ===================================================================== */
+function collectAllSayStrings(){
+  const set = new Set();
+  const add = (s) => { if (s) set.add(s); };
+
+  // ---- fixed filler lines (correct / try-again / doesn't-know transition) ----
+  ["Yes!","Great job!","You got it!","Wow!","Awesome!"].forEach(add); // tapTile/tapSeekObj/tapBodyPart correct-answer praise
+  ["Good try! Look again!","Hmm, try again!"].forEach(add);           // first-miss remediation prompt
+  add("On to the next one!");                                        // dontKnowItem transition
+  // v9: name-free greeting variant — `Hi ${state.name}!` is per-child and can
+  // never be pre-bundled, so startGame() now speaks this fixed line instead
+  // (the on-screen flow is unaffected; only the SPOKEN greeting changed).
+  add("Hi friend! Let's play!");
+
+  // ---- domain intro / celebration, one per DOMAINS[] entry (beginDomain/domainDone) ----
+  for (const dom of DOMAINS){
+    add(`Now let's play with ${dom.label}!`);
+    add(`Hooray! Great job with ${dom.label}!`);
+  }
+
+  // ---- per-item `say` + reveal text ("This one is the X!"), walking each
+  // domain's OWN defs through its OWN make() function (or the equivalent
+  // inline item-construction for the two domains — mybody, seekfind — that
+  // don't use dom.make). Arity is fixed at 4 for this enumeration: every
+  // domain's `say` text is determined entirely by the item DEF, never by
+  // which random distractors got chosen or their shuffled tile order
+  // (verified when this function was written — arity/distractor-choice only
+  // changes WHICH tiles render, not the wording), with exactly one
+  // exception: PHONO_DEFS rhyme items (d.kind==="rhyme") build `say` as
+  // "...Choices are X, Y, Z." from a RANDOMLY shuffled+sliced distractor
+  // set, so no single fixed string exists to bundle for them — deliberately
+  // skipped here. This isn't a coverage gap in practice: makeRhymeItem sets
+  // `cueKey: word:${d.word}`, and every recordable cue (below) IS bundled,
+  // so sayCue() substitutes that bundled single-word clip for the entire
+  // rhyme question before it would ever fall through to this un-bundleable
+  // compound sentence — see sayCue()'s bundled-tier lookup.
+  const ARITY = 4;
+  for (const dom of DOMAINS){
+    if (dom.key === "seekfind"){
+      // renderSeekfindRound's item shape, replicated here (see its `it.say`/
+      // reveal call) — every SEEKFIND_SCENES word, not dom.defs (empty for
+      // this domain by design; see the DOMAINS[] entry's own comment).
+      for (const scene of SEEKFIND_SCENES) for (const w of scene.words){
+        add(`Can you find the ${w}? Tap the ${w}!`);
+        add(`This one is the ${w}!`);
+      }
+      continue;
+    }
+    if (dom.key === "mybody"){
+      // renderBodyRound/tapBodyPart's item shape, replicated here — this
+      // domain has no dom.make (rendered via a persistent-figure board, see
+      // its DOMAINS[] entry), so its `say`/reveal templates are inlined.
+      for (const d of dom.defs){
+        add(`Can you find the ${d.label}? Tap it!`);
+        add(`This one is the ${d.label}!`);
+      }
+      continue;
+    }
+    if (!dom.make) continue;
+    for (const d of dom.defs){
+      if (d.kind === "rhyme") continue; // see doc comment above
+      let it;
+      try { it = dom.make(d, dom.defs, ARITY); } catch(e){ continue; } // defensive only — every real def succeeds
+      add(it.say);
+      add(`This one is the ${it.label}!`);
+    }
+  }
+
+  // ---- recordable cue "natural text" (the word/phone alone, e.g. "cat" /
+  // "mmm") — the SAME registry the recording booth uses (collectAllCueGroups
+  // above), so a bundled clip for `word:cat` always matches exactly what
+  // sayCue()'s bundled-tier lookup constructs via cueNaturalText(). A future
+  // cue source pushed onto RECORDABLE_CUE_SOURCES gets bundled coverage
+  // automatically, zero edits needed here.
+  for (const group of collectAllCueGroups()) for (const cue of group.cues) add(cueNaturalText(cue.key));
+
+  return [...set].sort();
+}
+
 // ---- IndexedDB wrapper: db "tg_audio", store "clips" (out-of-line keys —
 // created with no keyPath, so `put(blob, cueKey)` supplies the key
 // explicitly), key = cue string, value = Blob. Every call is wrapped so a
@@ -1310,45 +1404,147 @@ async function dbGetAllClips(){
 // still just plays over the tail of a clip, exactly like it already
 // overlaps a still-speaking TTS utterance today).
 let _currentClipAudio = null;
+// v9 adversarial-review fix: stopClip() used to just pause()+null the audio,
+// WITHOUT firing that clip's own finish()/cb. Pausing fires neither 'ended'
+// nor 'error', so the interrupted playAudioClip() call's cb was left to be
+// invoked (if at all) by its own up-to-8s fallback timer, arbitrarily late
+// and against whatever state.domain/state.currentItem happen to be current
+// BY THEN — not what the call was actually about. Concretely: beginDomain()
+// speaks the domain intro with cb=renderItem; interrupting that intro clip
+// via backToMap()/mute/a new beginDomain() left a stray renderItem() call
+// armed to fire seconds later against a domain the player had already left
+// or replaced. Fix: stopClip() now invokes the in-flight call's OWN finish()
+// synchronously — same effective contract speechSynthesis already has today
+// (ttsCancel() -> cancel() -> the utterance's onerror -> finish() -> cb,
+// promptly, not via a fallback timer), so an interrupted clip's cb fires
+// immediately instead of asynchronously-late. The existing `if (!ds) return`
+// style guards elsewhere handle a promptly-fired stale cb exactly as they
+// already handle stale TTS callbacks; a MULTI-SECOND-LATE one is what was
+// never guarded against and is what this fixes.
+let _currentClipFinish = null;
 function stopClip(){
-  if (_currentClipAudio){
+  if (_currentClipFinish){ _currentClipFinish(); }
+  else if (_currentClipAudio){
     try { _currentClipAudio.pause(); } catch(e){}
     _currentClipAudio = null;
   }
 }
+// v9: shared "play this <audio> element, fire cb exactly once" driver for
+// BOTH a parent-recorded blob clip and a bundled pre-generated clip (unifies
+// what used to be sayCue()'s own inline Audio-wiring into one registry/one
+// code path — every ttsCancel()-paired interrupt site already calls
+// stopClip() too, so it now stops whichever of the two is actually playing
+// without needing to know which one it is). Same onplay/onended/onerror/
+// duration-fallback-timer discipline speak() already follows for TTS, so
+// every caller's "the callback always eventually fires" contract holds
+// regardless of which of the three audio sources answered. Resolves true if
+// playback actually started, false if audio.play() itself failed (autoplay
+// policy, corrupt/missing file) — false is the caller's signal to fall
+// through to its own next tier.
+function playAudioClip(audio, cb, revokeUrl){
+  stopClip(); // finishes (fires cb for) whatever was previously registered here, same as any other interrupt
+  _currentClipAudio = audio;
+  let done = false, fallbackTimer = null;
+  const finish = () => {
+    if (done) return; done = true;
+    setSpeakPulse(false);
+    clearTimeout(fallbackTimer);
+    try { audio.pause(); } catch(e){} // no-op if already ended/errored; actually silences it when stopClip() forced this
+    if (revokeUrl){ try { URL.revokeObjectURL(audio.src); } catch(e){} }
+    if (_currentClipAudio === audio) _currentClipAudio = null;
+    if (_currentClipFinish === finish) _currentClipFinish = null;
+    cb && cb();
+  };
+  _currentClipFinish = finish;
+  audio.onplay = () => setSpeakPulse(true);
+  audio.onended = finish;
+  audio.onerror = finish; // a corrupt/unsupported/404 clip falls silently to "just move on", not a crash
+  fallbackTimer = setTimeout(finish, 8000); // duration-based fallback, tightened once metadata loads
+  audio.onloadedmetadata = () => {
+    if (isFinite(audio.duration) && audio.duration > 0){
+      clearTimeout(fallbackTimer);
+      fallbackTimer = setTimeout(finish, audio.duration * 1000 + 800);
+    }
+  };
+  return audio.play().then(() => true).catch(() => {
+    // never actually started — neutralize every handler so a later stray
+    // event on this same <audio> can't fire finish()/cb() a second time
+    // after the caller has already moved on to its own next fallback tier.
+    done = true;
+    clearTimeout(fallbackTimer);
+    audio.onplay = audio.onended = audio.onerror = audio.onloadedmetadata = null;
+    if (revokeUrl){ try { URL.revokeObjectURL(audio.src); } catch(e){} }
+    if (_currentClipAudio === audio) _currentClipAudio = null;
+    if (_currentClipFinish === finish) _currentClipFinish = null;
+    return false;
+  });
+}
+
+/* ---------- v9: bundled pre-generated audio ----------
+   audio/manifest.json (exact spoken string -> filename, built by
+   tools/gen_audio.sh from collectAllSayStrings()'s own enumeration) is
+   fetched ONCE at load, fire-and-forget (see loadAudioManifest(), called
+   from init() below) — never awaited by startup code, so it can't block
+   first paint, and a failed/absent fetch (offline, 404, or file:// CORS)
+   just leaves AUDIO_MANIFEST null/empty; every consumer below already
+   treats "no bundled entry" as a no-op fall-through to the next tier, the
+   same graceful-degradation contract sayCue() already has for a missing
+   IndexedDB clip. This is the tier that lets the game run with zero
+   dependency on live TTS — the motivating case (see NOTES.md v9): the
+   Amazon Kids browser on Fire tablets has no speechSynthesis engine at all.
+*/
+let AUDIO_MANIFEST = null;
+function loadAudioManifest(){
+  if (typeof fetch !== "function"){ AUDIO_MANIFEST = {}; return; }
+  fetch("audio/manifest.json").then(r => r.ok ? r.json() : {}).then(m => {
+    AUDIO_MANIFEST = m || {};
+    // dev-diagnostic only (console, non-blocking) — how much of what the
+    // game can currently say has a bundled clip. Catches a stale bundle
+    // (new copy/def added, gen_audio.sh not rerun) without affecting play.
+    try {
+      const need = collectAllSayStrings();
+      const missing = need.filter(s => !AUDIO_MANIFEST[s]);
+      console.log(`bundled audio: ${need.length - missing.length}/${need.length} strings covered by audio/manifest.json`);
+      if (missing.length) console.log("bundled audio missing (falls back to live TTS):", missing.slice(0, 20));
+    } catch(e){}
+  }).catch(() => { AUDIO_MANIFEST = {}; });
+}
+// cueKey ("word:cat" / "phone:mmm") -> the cue's own natural spoken text
+// ("cat" / "mmm") — the SAME text collectAllSayStrings() bundles for every
+// entry in collectAllCueGroups(), so a bundled cue clip and its cueKey
+// always agree on what string to look up.
+function cueNaturalText(cueKey){
+  if (!cueKey) return null;
+  const i = cueKey.indexOf(":");
+  return i < 0 ? cueKey : cueKey.slice(i + 1);
+}
+// Plays the bundled clip for an exact string if the manifest is loaded and
+// has an entry for it; otherwise (or if playback fails to start) calls
+// onMiss() — the caller's next fallback tier. Always "handled" one way or
+// the other, synchronously deciding whether to attempt playback and always
+// eventually calling either cb (via playAudioClip) or onMiss (never both).
+function playBundledText(text, cb, onMiss){
+  const file = AUDIO_MANIFEST && text ? AUDIO_MANIFEST[text] : null;
+  if (!file){ onMiss(); return; }
+  const audio = new Audio(`audio/${file}`);
+  playAudioClip(audio, cb, false).then(started => { if (!started) onMiss(); });
+}
+
 function sayCue(cueKey, fallbackText, cb){
   // muted: skip the IndexedDB round-trip entirely and go straight to speak(),
   // which already no-ops audio but still fires cb on its own timer — same
   // "flow keeps moving even with no sound" contract sayCue callers rely on.
   if (!cueKey || state.muted){ speak(fallbackText, cb); return; }
+  // v9: recorded clip -> bundled clip (keyed by the cue's own natural text,
+  // e.g. "cat" for word:cat) -> live TTS, in that order.
+  const tryBundledThenTTS = () => playBundledText(cueNaturalText(cueKey), cb, () => speak(fallbackText, cb));
   dbGetClip(cueKey).then(blob => {
-    if (!blob){ speak(fallbackText, cb); return; } // no recording for this cue -> TTS fallback
-    stopClip();
+    if (!blob){ tryBundledThenTTS(); return; } // no parent recording for this cue
     let url;
-    try { url = URL.createObjectURL(blob); } catch(e){ speak(fallbackText, cb); return; }
+    try { url = URL.createObjectURL(blob); } catch(e){ tryBundledThenTTS(); return; }
     const audio = new Audio(url);
-    _currentClipAudio = audio;
-    let done = false, fallbackTimer = null;
-    const finish = () => {
-      if (done) return; done = true;
-      setSpeakPulse(false);
-      clearTimeout(fallbackTimer);
-      try { URL.revokeObjectURL(url); } catch(e){}
-      if (_currentClipAudio === audio) _currentClipAudio = null;
-      cb && cb();
-    };
-    audio.onplay = () => setSpeakPulse(true);
-    audio.onended = finish;
-    audio.onerror = finish; // a corrupt/unsupported clip falls silently to "just move on", not a crash
-    fallbackTimer = setTimeout(finish, 8000); // duration-based fallback, tightened once metadata loads
-    audio.onloadedmetadata = () => {
-      if (isFinite(audio.duration) && audio.duration > 0){
-        clearTimeout(fallbackTimer);
-        fallbackTimer = setTimeout(finish, audio.duration * 1000 + 800);
-      }
-    };
-    audio.play().catch(() => { clearTimeout(fallbackTimer); if (_currentClipAudio === audio) _currentClipAudio = null; speak(fallbackText, cb); });
-  }).catch(() => speak(fallbackText, cb)); // IndexedDB unavailable (e.g. private browsing) -> TTS fallback
+    playAudioClip(audio, cb, true).then(started => { if (!started) tryBundledThenTTS(); });
+  }).catch(() => tryBundledThenTTS()); // IndexedDB unavailable (e.g. private browsing)
 }
 
 // ---- recording booth UI ----
@@ -2533,13 +2729,22 @@ function setSpeakPulse(on){
   if (btn) btn.classList.toggle("pulse", on);
 }
 function speak(text, cb){
-  if (!("speechSynthesis" in window)) { cb && cb(); return; }
   if (state.muted){
-    // muted: skip actual TTS, but the item-flow still advances strictly on
-    // this callback, so run the same fallback timer speak() would use anyway.
+    // muted: skip actual TTS (and the bundled-audio tier below), but the
+    // item-flow still advances strictly on this callback, so run the same
+    // fallback timer speak() would use anyway.
     if (cb) setTimeout(cb, Math.max(1200, text.length * 90));
     return;
   }
+  // v9: bundled pre-generated clip, if the manifest has one for this exact
+  // string, BEFORE even checking whether speechSynthesis exists — this is
+  // what lets the game speak on a browser with no TTS engine at all (the
+  // motivating case, see NOTES.md v9). Falls through to speakTTS() (which
+  // itself no-ops safely with no engine) on any miss.
+  playBundledText(text, cb, () => speakTTS(text, cb));
+}
+function speakTTS(text, cb){
+  if (!("speechSynthesis" in window)) { cb && cb(); return; }
   // NEVER cancel() in the normal flow. The v5-era backlog-drop branch here
   // interacted fatally with the hang guard: on a slow engine start the guard
   // advanced to the next prompt, whose cancel() killed the still-pending
@@ -2668,7 +2873,9 @@ function startGame(){
   state.stars = 0; state.domainIdx = -1; state.domain = null; state.sessionMode = null;
   localStorage.setItem("tg_profile", JSON.stringify({name: state.name, age, bday: $("childBday").value}));
   $("quitBtn").style.display = "block";
-  speak(`Hi ${state.name}! Let's play!`);
+  // v9: name-free greeting so it's cacheable as one bundled clip regardless
+  // of which child is playing — see collectAllSayStrings()'s doc comment.
+  speak("Hi friend! Let's play!");
   showPicker();
 }
 
@@ -3567,6 +3774,7 @@ function importData(evt){
   runCategorySelfTest(); // v6 (fix 4a): dev-time assertion sweep, see its own comment above
   runVocabRungSelfTest(); // v6 (fix 5a): see its own comment above
   runVocabThemeSelfTest(); // v7 (Part B): see its own comment above
+  loadAudioManifest(); // v9: fire-and-forget fetch of audio/manifest.json — see its own comment above
 })();
 </script>
 </body>
