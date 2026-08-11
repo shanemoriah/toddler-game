@@ -1,0 +1,3132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Milo's Learning Adventure</title>
+<style>
+  :root {
+    --bg: #fdf6e3; --card: #ffffff; --ink: #3a3226;
+    --accent: #ff8a3d; --accent2: #4ecdc4; --good: #6bcb77; --bad: #ff6b6b;
+    --tile: #fff8ec; --tile-border: #f0e0c0;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; height: 100%; touch-action: manipulation; overscroll-behavior: none; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--ink);
+    display: flex; flex-direction: column; align-items: center;
+    overflow: hidden; user-select: none;
+  }
+  #app { width: 100%; max-width: 900px; height: 100%; display: flex; flex-direction: column; padding: 12px; }
+
+  /* ---------- header ---------- */
+  #hud { display: flex; align-items: center; gap: 12px; padding: 6px 4px; min-height: 52px; }
+  #mascot { font-size: 42px; transition: transform .3s; cursor: default; }
+  #mascot.bounce { animation: bounce .6s; }
+  @keyframes bounce { 0%,100%{transform:translateY(0)} 40%{transform:translateY(-16px) rotate(-8deg)} 70%{transform:translateY(0)} 85%{transform:translateY(-6px)} }
+  #stars { flex: 1; display: flex; flex-wrap: wrap; gap: 2px; font-size: 20px; min-height: 24px; }
+  #muteBtn { background: none; border: none; font-size: 24px; cursor: pointer; padding: 4px 6px; line-height: 1; }
+  #mapBtn { background: none; border: none; font-size: 24px; cursor: pointer; padding: 4px 6px; line-height: 1; }
+  #quitBtn { background: none; border: 2px solid var(--tile-border); border-radius: 12px; padding: 6px 12px; font-size: 14px; color: #999; cursor: pointer; }
+  /* ---------- skip (parent-facing, deliberately unobtrusive — not a kid-attractor) ---------- */
+  .skip-btn { background: none; border: none; font-size: 12px; color: #b8ab90; cursor: pointer; padding: 4px 10px; opacity: .7; touch-action: manipulation; }
+  .skip-btn:active { opacity: 1; }
+  /* ---------- categories (Feature 6): anchor strip above the tile grid ---------- */
+  #categoryAnchors { display: none; text-align: center; padding: 4px 0 2px; }
+  #categoryAnchors .anchor-label { font-size: 14px; color: #8a7d66; margin-bottom: 4px; }
+  #categoryAnchors .anchor-row { font-size: 38px; display: flex; gap: 14px; justify-content: center; }
+
+  /* ---------- screens ---------- */
+  /* v6: "safe center" (not plain "center") — with overflow-y:auto + justify-content:center, a
+     flex column that's taller than its container centers its content by overflowing EQUALLY
+     above and below, but scrollTop can never go negative, so the top overflow is permanently
+     invisible with no way to scroll to it (classic flexbox-centering-clips-content bug). This
+     silently clipped the ~80px fox on #startScreen — verified via CDP at 1280x800 (46px of its
+     105px-tall box was hidden above the container's own top edge) and worse at shorter/narrower
+     viewports. "safe center" falls back to start-alignment once content overflows instead of
+     centering-and-clipping — zero effect on the common case where content already fits. */
+  .screen { flex: 1; display: none; flex-direction: column; align-items: center; justify-content: safe center; text-align: center; gap: 18px; overflow-y: auto; }
+  .screen.active { display: flex; }
+  h1 { font-size: clamp(26px, 5vw, 40px); margin: 0; }
+  h2 { font-size: clamp(20px, 4vw, 30px); margin: 0; }
+  .subtitle { color: #8a7d66; font-size: 16px; max-width: 520px; }
+
+  .bigbtn {
+    font-size: clamp(20px, 4vw, 28px); padding: 18px 40px; border: none; border-radius: 24px;
+    background: var(--accent); color: white; cursor: pointer; box-shadow: 0 6px 0 #d96f26;
+    transition: transform .1s; touch-action: manipulation;
+  }
+  .bigbtn:active { transform: translateY(4px); box-shadow: 0 2px 0 #d96f26; }
+  .bigbtn.alt { background: var(--accent2); box-shadow: 0 6px 0 #35a89f; }
+  .bigbtn.alt:active { box-shadow: 0 2px 0 #35a89f; }
+  .smallbtn { font-size: 15px; padding: 10px 20px; border: 2px solid var(--tile-border); border-radius: 14px; background: white; cursor: pointer; color: var(--ink); touch-action: manipulation; }
+
+  input[type=number], input[type=text], input[type=date] {
+    font-size: 22px; padding: 10px 14px; border: 2px solid var(--tile-border); border-radius: 14px;
+    width: 220px; text-align: center; background: white; color: var(--ink);
+  }
+  label { font-size: 15px; color: #8a7d66; display: block; margin-bottom: 6px; }
+
+  /* ---------- game board ---------- */
+  #promptBar { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px; min-height: 76px; }
+  #promptText { font-size: clamp(20px, 4.5vw, 32px); font-weight: 700; }
+  #speakBtn { font-size: 30px; background: none; border: none; cursor: pointer; transition: transform .15s; }
+  #speakBtn.pulse { animation: speakPulse .55s ease-in-out infinite; }
+  @keyframes speakPulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.25)} }
+  #board {
+    flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    padding: 8px; align-content: center; max-height: 70vh;
+  }
+  /* ---------- v6: domain-transition loader ----------
+     Shown by beginDomain() for the "Now let's play with X!" narration window, cleared by
+     renderItem() right before it builds the first item's tiles (all board types, including
+     seekfind, since renderItem is the one shared entry point both paths run through). Fills the
+     same board-area footprint #board/#seekBoard occupy so nothing else needs to reflow. */
+  #domainTransition {
+    display: none; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  }
+  #domainTransition .dt-fox { font-size: 64px; line-height: 1; animation: bounce 1.1s ease-in-out infinite; }
+  #domainTransition .dt-emoji { font-size: 44px; line-height: 1; }
+  #domainTransition .dt-text { font-size: 20px; font-weight: 700; color: #8a7d66; }
+  /* ---------- seek & find scene board ---------- */
+  #seekBoard {
+    display: none; position: relative; flex: 1; width: 100%; min-height: 320px;
+    background: var(--tile); border: 4px solid var(--tile-border); border-radius: 28px;
+    overflow: hidden; touch-action: manipulation;
+  }
+  .seek-obj {
+    position: absolute; transform: translate(-50%,-50%); line-height: 1; cursor: pointer;
+    user-select: none; touch-action: manipulation; animation: seekbob 2.2s ease-in-out infinite;
+    filter: drop-shadow(0 2px 2px rgba(0,0,0,.12));
+  }
+  .seek-obj.correct { animation: none; transform: translate(-50%,-50%) scale(1.35); transition: transform .4s; }
+  /* pointer-events:none is load-bearing, not cosmetic: without it, an object
+     found/revealed in an earlier round within this scene stays clickable and
+     becomes a "free" wrong-tap target for later rounds (it can never BE the
+     target again since ds.used excludes it, but tapTile-equivalent scoring
+     doesn't know that) — a child re-tapping the same spot they just tapped
+     could convert into a false second-miss without ever looking at the new
+     target. See NOTES.md v3 adversarial-review fix. */
+  .seek-obj.found { opacity: .5; animation: none; pointer-events: none; }
+  .seek-obj.wrong { animation: seekshake .45s; }
+  .seek-obj.reveal { animation: pop .5s; filter: drop-shadow(0 0 0 var(--good)) drop-shadow(0 2px 2px rgba(0,0,0,.12)); outline: 4px solid var(--good); outline-offset: 4px; border-radius: 50%; }
+  @keyframes seekbob { 0%,100%{transform:translate(-50%,-50%) translateY(0)} 50%{transform:translate(-50%,-50%) translateY(-8px)} }
+  @keyframes seekshake { 0%,100%{transform:translate(-50%,-50%) translateX(0)} 20%,60%{transform:translate(-50%,-50%) translateX(-8px)} 40%,80%{transform:translate(-50%,-50%) translateX(8px)} }
+  /* ---------- picker (Feature 1) ---------- */
+  #pickerScreen { justify-content: flex-start; padding-top: 14px; }
+  #pickerGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 14px; width: 100%; max-width: 760px; padding: 8px; }
+  .picker-tile {
+    background: var(--tile); border: 4px solid var(--tile-border); border-radius: 24px;
+    padding: 18px 8px; display: flex; flex-direction: column; align-items: center; gap: 6px;
+    cursor: pointer; position: relative; transition: transform .12s; touch-action: manipulation;
+  }
+  .picker-tile:active { transform: scale(.95); }
+  .picker-tile-all { background: var(--accent); border-color: #d96f26; color: #fff; }
+  .picker-emoji { font-size: 42px; }
+  .picker-label { font-size: 14px; font-weight: 700; }
+  .picker-badge { position: absolute; top: 4px; right: 10px; font-size: 20px; }
+  /* ---------- v7: picker section headers (17 tiles grouped into 4 labeled sections) ---------- */
+  .picker-section-head { grid-column: 1/-1; text-align: left; font-weight: 800; color: #8a7d66; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; margin-top: 10px; }
+  .picker-section-head:first-of-type { margin-top: 2px; }
+  /* ---------- v7: My Body tap-on-figure hit regions (invisible unless mid-feedback) ---------- */
+  .body-hit.correct { background: rgba(107,203,119,.35); box-shadow: 0 0 0 4px var(--good); animation: pop .5s; }
+  .body-hit.wrong { animation: seekshake .45s; }
+  .body-hit.reveal { background: rgba(107,203,119,.35); box-shadow: 0 0 0 4px var(--good); }
+  .tile {
+    background: var(--tile); border: 4px solid var(--tile-border); border-radius: 28px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    font-size: clamp(56px, 14vw, 110px); min-height: 120px; height: 100%;
+    transition: transform .12s, border-color .2s, background .2s; position: relative; overflow: hidden;
+    touch-action: manipulation;
+  }
+  .tile:active { transform: scale(.95); }
+  /* ---------- v5 (mod 4): 5-6 tile "Tricky Pictures" items get a 3-column grid + a
+     shorter min-height so a 2-row layout still fits without scrolling on iPad portrait
+     (and mobile — see NOTES.md v5 testing) instead of the standard 120px tiles. ---------- */
+  #board.compact { max-height: 60vh; }
+  #board.compact .tile { min-height: 84px; font-size: clamp(40px, 11vw, 84px); }
+  .tile.correct { border-color: var(--good); background: #eaffea; animation: pop .5s; }
+  .tile.wrong { border-color: var(--bad); animation: shake .45s; }
+  .tile.reveal { border-color: var(--good); background: #eaffea; }
+  .tile.dim { opacity: .35; }
+  @keyframes pop { 0%{transform:scale(1)} 40%{transform:scale(1.12)} 100%{transform:scale(1)} }
+  @keyframes shake { 0%,100%{transform:translateX(0)} 20%,60%{transform:translateX(-10px)} 40%,80%{transform:translateX(10px)} }
+  .tile svg { width: 82%; height: 82%; }
+  .tile .txt { font-weight: 800; }
+
+  #progressWrap { height: 10px; background: #f0e6d2; border-radius: 5px; margin: 6px 4px; overflow: hidden; }
+  #progressBar { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent2), var(--accent)); border-radius: 5px; transition: width .4s; }
+
+  /* ---------- confetti ---------- */
+  .confetti { position: fixed; top: -20px; font-size: 22px; pointer-events: none; z-index: 50; animation: fall linear forwards; }
+  @keyframes fall { to { transform: translateY(105vh) rotate(720deg); opacity: .6; } }
+
+  /* ---------- interlude ---------- */
+  #interlude .bigEmoji { font-size: 110px; animation: bounce 1s infinite; }
+
+  /* ---------- checklist ---------- */
+  #checklistGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; width: 100%; max-width: 760px; padding: 8px; }
+  .word-chip {
+    padding: 10px 6px; border: 2px solid var(--tile-border); border-radius: 14px; background: white;
+    cursor: pointer; font-size: 15px; text-align: center;
+  }
+  .word-chip.on { background: var(--good); border-color: var(--good); color: white; font-weight: 700; }
+  .cat-head { grid-column: 1/-1; text-align: left; font-weight: 800; color: #8a7d66; font-size: 14px; text-transform: uppercase; letter-spacing: .05em; margin-top: 8px; }
+  #checklistScreen { justify-content: flex-start; padding-top: 10px; }
+  #checklistScreen .sticky-top { position: sticky; top: 0; background: var(--bg); width: 100%; padding: 8px 0; z-index: 5; }
+
+  /* ---------- results ---------- */
+  #resultsScreen { justify-content: flex-start; padding-top: 16px; }
+  .res-card { background: white; border: 2px solid var(--tile-border); border-radius: 20px; padding: 16px 20px; width: 100%; max-width: 640px; text-align: left; }
+  .res-card h3 { margin: 0 0 10px; font-size: 18px; }
+  .bar-row { display: flex; align-items: center; gap: 10px; margin: 7px 0; font-size: 14px; }
+  .bar-row .lbl { width: 108px; text-align: right; color: #8a7d66; flex-shrink: 0; }
+  .bar-track { flex: 1; height: 18px; background: #f4ecdc; border-radius: 9px; position: relative; }
+  .bar-fill { height: 100%; border-radius: 9px; background: var(--accent2); min-width: 4px; transition: width .8s; }
+  .bar-fill.low { background: #ffc36b; }
+  .bar-val { width: 70px; font-weight: 700; flex-shrink: 0; }
+  .chrono-mark { position: absolute; top: -4px; bottom: -4px; width: 3px; background: var(--accent); border-radius: 2px; }
+  .big-stat { font-size: 34px; font-weight: 800; color: var(--accent); }
+  .disclaimer { font-size: 12px; color: #a99; max-width: 640px; text-align: left; line-height: 1.5; }
+  details { width: 100%; max-width: 640px; text-align: left; font-size: 13px; color: #8a7d66; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="mascot">🦊</div>
+    <div id="stars"></div>
+    <button id="muteBtn" onclick="toggleMute()" aria-label="Mute">🔊</button>
+    <button id="mapBtn" onclick="backToMap()" style="display:none" aria-label="Back to map" title="Back to the map">🗺</button>
+    <button id="quitBtn" onclick="endGame()" style="display:none">Finish</button>
+  </div>
+  <div id="progressWrap" style="display:none"><div id="progressBar"></div></div>
+
+  <!-- START -->
+  <div id="startScreen" class="screen active">
+    <div style="font-size:80px">🦊</div>
+    <h1>Milo's Learning Adventure</h1>
+    <p class="subtitle">A play-based look at words and concepts — colors, shapes, letters, numbers, positions, opposites — with a gentle developmental-age estimate. A grown-up plays along!</p>
+    <div>
+      <label>Child's name</label>
+      <input type="text" id="childName" placeholder="Name" value="">
+    </div>
+    <div>
+      <label>Birthday (or enter age in months below)</label>
+      <input type="date" id="childBday">
+    </div>
+    <div>
+      <label>Age in months</label>
+      <input type="number" id="childAge" min="12" max="72" placeholder="e.g. 30">
+    </div>
+    <button class="bigbtn" onclick="startGame()">▶ Play!</button>
+    <button class="bigbtn alt" onclick="showChecklist()">📝 Parent word checklist</button>
+    <button class="smallbtn" id="progressBtn" style="display:none" onclick="showProgress()">📈 Progress</button>
+    <p class="subtitle" style="font-size:13px">The word checklist (done by a grown-up, ~3 min) powers the vocabulary-size estimate. The game measures understanding by tapping pictures.</p>
+    <button class="smallbtn" onclick="testVoice()">🔊 Test voice</button>
+    <div id="voiceDiag" style="display:none;font-size:12px;color:#8a7d66;max-width:520px;text-align:left;background:#fff;border:1px solid #f0e0c0;border-radius:10px;padding:8px 12px;white-space:pre-wrap"></div>
+  </div>
+
+  <!-- PICKER -->
+  <div id="pickerScreen" class="screen">
+    <h2>What should we play?</h2>
+    <p class="subtitle">Pick one, or play everything in a row!</p>
+    <div id="pickerGrid"></div>
+    <button class="smallbtn" onclick="endGame()">Finish for now — see results</button>
+  </div>
+
+  <!-- GAME -->
+  <div id="gameScreen" class="screen">
+    <div id="promptBar">
+      <button id="speakBtn" onclick="repeatPrompt()">🔊</button>
+      <div id="promptText"></div>
+      <button id="skipBtn" class="skip-btn" onclick="skipItem()" title="Skip this item (parent)">🤷 Skip</button>
+      <button id="dkBtn" class="skip-btn" onclick="dontKnowItem()" title="Child doesn't know this one (parent)">🙅 Doesn't know</button>
+    </div>
+    <div id="categoryAnchors"></div>
+    <div id="domainTransition"></div>
+    <div id="board"></div>
+    <div id="seekBoard"></div>
+  </div>
+
+  <!-- INTERLUDE -->
+  <div id="interlude" class="screen">
+    <div class="bigEmoji" id="interludeEmoji">🎈</div>
+    <h2 id="interludeText">Great job!</h2>
+    <button class="bigbtn" id="interludeBtn">Keep going! →</button>
+    <button class="smallbtn" onclick="endGame()">We're done for now — see results</button>
+  </div>
+
+  <!-- CHECKLIST -->
+  <div id="checklistScreen" class="screen">
+    <div class="sticky-top">
+      <h2>Which words does your child SAY?</h2>
+      <p class="subtitle" style="margin:6px auto">Tap every word your child says on their own (their own version counts — "baba" for bottle counts). Don't count words they only understand.</p>
+      <div style="margin-top:6px"><span id="checkCount" style="font-weight:800">0</span> selected
+        &nbsp; <button class="smallbtn" onclick="finishChecklist()">Done ✓</button></div>
+    </div>
+    <div id="checklistGrid"></div>
+  </div>
+
+  <!-- RESULTS -->
+  <div id="resultsScreen" class="screen">
+    <h2 id="resultsTitle">Results</h2>
+    <div class="res-card" id="vocabCard" style="display:none">
+      <h3>🗣 Expressive vocabulary estimate</h3>
+      <div class="big-stat" id="vocabEstimate"></div>
+      <div id="vocabAgeEq" style="margin-top:4px;color:#8a7d66"></div>
+    </div>
+    <div class="res-card">
+      <h3>🧠 Concept knowledge — age equivalents</h3>
+      <div id="domainBars"></div>
+      <div style="font-size:12px;color:#a99;margin-top:8px">Orange line = chronological age. Bars show the estimated age level demonstrated in each area.</div>
+    </div>
+    <div class="res-card" id="overallCard">
+      <h3>⭐ Overall estimate</h3>
+      <div class="big-stat" id="overallAge"></div>
+      <div id="overallNote" style="margin-top:4px;color:#8a7d66"></div>
+    </div>
+    <details><summary>Item-by-item detail</summary><div id="itemDetail"></div></details>
+    <p class="disclaimer">⚠️ This is a parent-facing play activity inspired by the structure of professional tools (MacArthur-Bates CDI word checklists; age-anchored concept items in the spirit of ASQ-3 / PLS-5 style screeners). It is <b>not</b> a validated or diagnostic instrument, one session is a snapshot, and toddler performance varies hugely day to day. If you ever have concerns about language development, talk to your pediatrician or ask about a free early-intervention evaluation.</p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">
+      <button class="bigbtn" onclick="location.reload()">🔁 Play again</button>
+      <button class="bigbtn alt" id="resultsProgressBtn" style="display:none" onclick="showProgress()">📈 Progress</button>
+    </div>
+  </div>
+
+  <!-- PROGRESS -->
+  <div id="progressScreen" class="screen">
+    <h2>📈 Progress over time</h2>
+    <div class="res-card" style="max-width:760px">
+      <h3>🧠 Concept domains — age-equivalent vs chronological age</h3>
+      <div id="domainCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px"></div>
+      <div style="font-size:12px;color:#a99;margin-top:8px">Dashed line = chronological age (typical pace). Shaded band = ±8 months, a rough "typical variation" range — this mirrors how growth-score charts track development.</div>
+    </div>
+    <div class="res-card" style="max-width:760px">
+      <h3>🗣 Vocabulary growth vs CDI median</h3>
+      <div id="vocabChart"></div>
+    </div>
+    <div class="res-card" style="max-width:760px">
+      <h3>📋 Session history</h3>
+      <div id="sessionList"></div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+      <button class="smallbtn" onclick="exportData()">⬇ Export backup</button>
+      <button class="smallbtn" onclick="document.getElementById('importFile').click()">⬆ Import backup</button>
+      <input type="file" id="importFile" accept="application/json" style="display:none">
+    </div>
+    <button class="bigbtn" onclick="show('startScreen')">← Back</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* =====================================================================
+   ITEM BANKS — each def: { label, age, ... } where `age` doubles as the
+   Rasch item difficulty b_i (mastery age in months, ~50% pass rate).
+   Anchors updated from RESEARCH.md Section 5 / the "quick table" in
+   Section 8 (Kachergis et al. CDI-CAT; Sarnecka & Lee give-N; ASHA
+   spatial-preposition norms; Boehm-3/Bracken BBCS opposites, etc).
+   Receptive understanding typically precedes expressive naming by ~2-4mo.
+   ===================================================================== */
+
+// ---- receptive vocabulary: emoji picture pointing ----
+// (RESEARCH's b-table only gives category anchors — "touch-named-object
+// ~20mo", "named objects/animals 16-22mo" — not a full per-word table, so
+// only the two earliest pairs were nudged up to match that floor.)
+// v7 (Part B): every word now carries a 4th tuple element, its THEME, drawn from the
+// 10-theme set in the task (food/animals/nature/vehicles/household/clothes/buildings/
+// professions/music/tools). Existing words were tagged in place with NO age changes
+// (retagging must never disturb the calibrated difficulty ladder above); a `themed`
+// new-words block was appended at the end for the 3 themes that were thin on natural
+// fits from the pre-existing 119-word list (buildings & places, professions, music) so
+// every theme clears the "6-10 words spanning a difficulty range" bar — see the
+// per-theme coverage table in NOTES.md v7. `makeVocabItem`'s distractor selection
+// (vocabDistractors) and cross-item theme rotation (pickNextItem/pickAmongTopN) both
+// read this field; VOCAB_BY_WORD (below) also carries it through to seek&find.
+const VOCAB_WORDS = [
+  // ---- v4 (mod 3, wider words bank): b=14 floor word, per the "rungs from b=14" ask.
+  ["milk","🥛",14,"food"],
+  ["dog","🐶",16,"animals"],["ball","⚽",16,"household"],["banana","🍌",18,"food"],["car","🚗",18,"vehicles"],
+  ["shoe","👟",16,"clothes"],["cup","🥤",16,"household"],["fish","🐟",16,"animals"],["apple","🍎",18,"food"],
+  ["bird","🐦",18,"animals"],["book","📖",18,"household"],["hat","🧢",20,"clothes"],["cookie","🍪",20,"food"],
+  ["spoon","🥄",22,"household"],["cow","🐮",22,"animals"],["train","🚂",24,"vehicles"],["moon","🌙",24,"nature"],
+  ["chair","🪑",26,"household"],["strawberry","🍓",26,"food"],["sock","🧦",25,"clothes"],["butterfly","🦋",28,"animals"],["turtle","🐢",28,"animals"],
+  ["carrot","🥕",30,"food"],["glasses","👓",30,"clothes"],["cheese","🧀",27,"food"],["penguin","🐧",32,"animals"],["drum","🥁",33,"music"],
+  ["umbrella","☂️",31,"household"],["ladder","🪜",36,"tools"],["broccoli","🥦",36,"food"],["octopus","🐙",38,"animals"],
+  ["pineapple","🍍",39,"food"],["cactus","🌵",40,"nature"],
+  ["wrench","🔧",44,"tools"],["globe","🌍",46,"household"],["magnet","🧲",48,"tools"],["microscope","🔬",52,"tools"],
+  // ---- v3 (Feature 2): raised ceiling, ~26 harder words spanning b=40-72,
+  // rungs every 2mo, so the adaptive ladder has somewhere to climb past ~52mo.
+  ["raccoon","🦝",40,"animals"],
+  ["mushroom","🍄",42,"nature"],["dinosaur","🦕",42,"animals"],
+  ["lizard","🦎",44,"animals"],["avocado","🥑",44,"food"],["hedgehog","🦔",44,"animals"],["pumpkin","🎃",43,"food"],
+  ["pretzel","🥨",46,"food"],["flamingo","🦩",46,"animals"],["tiger","🐯",47,"animals"],
+  ["rhinoceros","🦏",48,"animals"],["magnifying glass","🔍",48,"tools"],
+  ["kangaroo","🦘",50,"animals"],["violin","🎻",50,"music"],
+  ["lobster","🦞",52,"animals"],["telescope","🔭",52,"tools"],
+  ["anchor","⚓",54,"vehicles"],["peacock","🦚",54,"animals"],
+  ["saxophone","🎷",56,"music"],["compass","🧭",56,"tools"],
+  // ---- v6 (fix 5a): user-reported "gets stuck on DNA as the only top word — encourages
+  // memorizing it". Diagnosis: every rung from 56-75 had only 1-2 words, so top-3 item
+  // selection at the high end kept cycling the same tiny handful. Interleaved 10 new
+  // emoji-safe hard words (from the task's suggestion list) between the existing rungs so
+  // EVERY rung from 56-76 now has >=3 words within +/-2mo (verified — see
+  // runVocabRungSelfTest below) AND pushed the ceiling from 75 -> 76. This alone doesn't fully
+  // fix repetition at the very top (still just 3 words at 74-76) — see the cross-session
+  // rotation fix in pickAmongTopN/renderSeekfindRound for the other half of the fix.
+  ["stethoscope","🩺",57,"tools"],
+  ["thermometer","🌡️",58,"tools"],
+  ["clock","🕰️",59,"household"],
+  ["accordion","🪗",60,"music"],
+  ["statue","🗿",61,"buildings"],
+  ["stopwatch","⏱️",62,"tools"],
+  ["volcano","🌋",63,"nature"],
+  ["gears","⚙️",64,"tools"],
+  ["saturn","🪐",65,"nature"],
+  ["fire extinguisher","🧯",66,"tools"],
+  ["bone","🦴",67,"household"],
+  ["satellite","🛰️",68,"vehicles"],
+  ["ice cube","🧊",69,"food"],
+  ["abacus","🧮",70,"tools"],
+  ["scales","⚖️",71,"tools"],
+  ["dna","🧬",72,"nature"],
+  ["trident","🔱",73,"tools"],
+  // ---- v4 (mod 3 continued): pushed ceiling from 72 -> 75 per the wider-bank ask.
+  ["hourglass","⏳",74,"household"],["unicorn","🦄",75,"animals"],
+  ["feather","🪶",76,"nature"],
+  // ---- v6 (fix 5b follow-up): the rung-density fix above (fix 5a) still wasn't enough for the
+  // cross-session ROTATION fix to actually work — verified by simulation (see NOTES.md v6): a
+  // single strong/theta-70+ session's last ~5-7 items already touch nearly the ENTIRE b>=66 pool
+  // (only ~11 words), so next session's "avoid recently-correct" fallback constantly triggered
+  // (nothing fresh within 6mo of target) and the two sessions still shared 4-6 top words. Fix:
+  // substantially widen the top band and extend the ceiling further (66->88) so a single ~10-item
+  // session only ever touches a fraction of it, leaving plenty of never-touched (not just
+  // "not recently correct") words for the next session to land on.
+  ["castle","🏰",77,"buildings"],["crystal ball","🔮",78,"household"],["mask","🎭",79,"clothes"],["vase","🏺",80,"household"],
+  ["old key","🗝️",81,"tools"],["gem","💎",82,"nature"],["shield","🛡️",83,"tools"],["crown","👑",84,"clothes"],
+  // v6 (fix 5b, second iteration): the 66-84 band above still wasn't dense enough — simulation
+  // showed occasional 3-5 word overlap between two consecutive theta-70 sessions (each session's
+  // ~10 items nearly all land in this band once the prior is already seeded near 70, so two
+  // back-to-back sessions want up to 20 slots out of what was only a 19-word pool — some overlap
+  // is then unavoidable no matter how the rotation picks). Extended the ceiling further and added
+  // 6 more words so two full sessions (<=20 items) have a 25-word pool to draw from instead.
+  ["lantern","🏮",85,"household"],["ring","💍",86,"clothes"],["trophy","🏆",87,"household"],["wizard","🧙",88,"professions"],["dragon","🐉",89,"animals"],["genie","🧞",90,"professions"],
+  // v6 (fix 5b, third iteration): STILL not enough — traced a real failing pair via the actual
+  // engine (see NOTES.md v6): once the floor rule ratchets up past ~73, the "3 nearest to target"
+  // pool is deterministically {word@74,word@75,word@76,...} in strict b order — with exactly ONE
+  // word per integer b, if any single one of those is in the avoid set it's STILL one of the 3
+  // nearest (there's no same-difficulty sibling to substitute), so it keeps getting reselected
+  // regardless of freshness. Root cause: 1-word-per-rung density from fix 5a's own self-test bar
+  // (">=3 words within +/-2mo") is satisfied by adjacent DIFFERENT-difficulty rungs, but doesn't
+  // give the rotation an actual SAME-difficulty alternative once a specific rung's one-and-only
+  // word gets used up. Fix: a same-b "sibling" word for every rung from 66-90, doubling density
+  // (25 -> 38 words in that band) so the top-3-nearest-to-target set almost always has a fresh
+  // option even after a strong session works through most of the band. Verified this is what
+  // finally got the simulation to hold: max overlap 2 across 40 trials (was 3-5 before).
+  ["helmet","⛑️",66,"clothes"],["flashlight","🔦",68,"tools"],["puzzle","🧩",70,"household"],["robot","🤖",72,"household"],["ferris wheel","🎡",74,"buildings"],
+  ["candle","🕯️",76,"household"],["shooting star","🌠",78,"nature"],["chess piece","♟️",80,"household"],["paint palette","🎨",82,"tools"],
+  ["medal","🏅",84,"household"],["scroll","📜",86,"household"],["potion","🧪",88,"household"],["spaceship","🛸",90,"vehicles"],
+  // ---- v3 (Feature 3): scene-only words added so seek-and-find object pools
+  // (see SEEKFIND_SCENES below) draw b-values from the same single source of
+  // truth as the tap-a-picture vocabulary domain. Ages are rough placements,
+  // not from RESEARCH.md (which doesn't cover these words specifically).
+  ["squirrel","🐿️",34,"animals"],["kite","🪁",36,"household"],["duck","🦆",24,"animals"],["bee","🐝",30,"animals"],
+  ["flower","🌼",26,"nature"],["bicycle","🚲",32,"vehicles"],["ladybug","🐞",32,"animals"],["rainbow","🌈",34,"nature"],
+  ["egg","🥚",20,"food"],["pan","🍳",30,"household"],["crab","🦀",30,"animals"],["whale","🐳",34,"animals"],
+  ["shark","🦈",36,"animals"],["dolphin","🐬",32,"animals"],["squid","🦑",40,"animals"],
+  // ---- v7 (Part B): thematic vocabulary restructure. New words filling out the 3 themes
+  // that were thin on natural fits from the pre-existing list — buildings & places and
+  // professions deliberately skew hard (b=50-80 per the task; these are late-acquired,
+  // low-frequency words for a toddler) and use only the task's pre-vetted emoji-safe
+  // suggestions (professions ZWJ-sequence emoji render as one glyph on evergreen
+  // browsers — verified in CDP screenshots, see NOTES.md v7). Music fills out to a
+  // reasonable 7-word spread instead of the pre-existing 4.
+  ["school","🏫",50,"buildings"],["doctor","👩‍⚕️",45,"professions"],["guitar","🎸",42,"music"],
+  ["firefighter","👨‍🚒",48,"professions"],["hospital","🏥",55,"buildings"],["piano","🎹",44,"music"],
+  ["police officer","👮",52,"professions"],["farmer","👩‍🌾",54,"professions"],["tower","🗼",60,"buildings"],
+  ["trumpet","🎺",53,"music"],["chef","👨‍🍳",58,"professions"],["factory","🏭",65,"buildings"],
+  ["astronaut","🧑‍🚀",62,"professions"],["chapel","💒",72,"buildings"],["builder","👷",66,"professions"],
+];
+
+// lookup: word label -> {emoji, age, theme}, shared by the vocabulary domain and
+// the seek-and-find scenes below so both draw b-values from one bank.
+const VOCAB_BY_WORD = Object.fromEntries(VOCAB_WORDS.map(([w,e,a,th]) => [w, { emoji:e, age:a, theme:th }]));
+
+// v6 (fix 5a): dev-time assertion — every rung (b-value) above 55 must have >=3 words within
+// +/-2mo of it, so top-3 item selection at the hard end always has real variety to draw from
+// instead of the same 1-2 words every session. Also checks the pre-existing v4 invariant (every
+// gap between consecutive distinct b-values is <=2mo) still holds after the new words were
+// interleaved in.
+function runVocabRungSelfTest(){
+  const ages = [...new Set(VOCAB_WORDS.map(w => w[2]))].sort((a,b) => a-b);
+  let rungFailures = 0, gapFailures = 0;
+  for (const rung of ages.filter(a => a > 55)){
+    const count = VOCAB_WORDS.filter(w => Math.abs(w[2] - rung) <= 2).length;
+    if (count < 3){ rungFailures++; console.assert(false, `vocab self-test: rung ${rung}mo only has ${count} words within +/-2mo (need >=3)`); }
+  }
+  for (let i = 1; i < ages.length; i++){
+    if (ages[i] - ages[i-1] > 2){ gapFailures++; console.assert(false, `vocab self-test: gap of ${ages[i]-ages[i-1]}mo between ${ages[i-1]} and ${ages[i]}`); }
+  }
+  console.log(`vocab self-test: ${ages.length} distinct b-values, ${rungFailures} rung-density failures (>55mo), ${gapFailures} gap failures`);
+  return rungFailures === 0 && gapFailures === 0;
+}
+
+// v7 (Part B): dev-time assertion — every VOCAB_WORDS entry has a theme tag (required by
+// vocabDistractors/pickNextItem's theme-aware logic — an untagged word would silently fall
+// back to `undefined` as its theme, which is harmless functionally but would never rotate
+// correctly), and every theme has >=6 words (the task's "each theme has 6-10 words" floor).
+const VOCAB_THEMES = ["food","animals","nature","vehicles","household","clothes","buildings","professions","music","tools"];
+function runVocabThemeSelfTest(){
+  let untagged = 0, thin = 0;
+  const counts = {};
+  for (const w of VOCAB_WORDS){
+    const th = w[3];
+    if (!th || !VOCAB_THEMES.includes(th)){ untagged++; console.assert(false, `vocab theme self-test: "${w[0]}" has no valid theme (got ${JSON.stringify(th)})`); }
+    counts[th] = (counts[th] || 0) + 1;
+  }
+  for (const th of VOCAB_THEMES){
+    if ((counts[th] || 0) < 6){ thin++; console.assert(false, `vocab theme self-test: theme "${th}" only has ${counts[th]||0} words (need >=6)`); }
+  }
+  console.log(`vocab theme self-test: ${VOCAB_WORDS.length} words, ${untagged} untagged, ${thin} themes under 6 words —`, counts);
+  return untagged === 0 && thin === 0;
+}
+
+// ---- v3 (Feature 3): seek-and-find scenes. Each scene is a dense, single
+// board of 14 objects (drawn from VOCAB_WORDS, easy+hard mixed) instead of a
+// tile grid; "Find the X!" — child taps the matching object anywhere in the
+// scene. b = the target word's VOCAB_WORDS age; c (guess rate) = 1/objects
+// in the scene, set per-item in renderSeekfindRound.
+const SEEKFIND_SCENES = [
+  { key:"park", label:"Park", words:
+    ["dog","bird","butterfly","squirrel","kite","duck","bee","flower","bicycle","ladybug","rainbow","compass","telescope","magnifying glass"] },
+  { key:"kitchen", label:"Kitchen", words:
+    ["apple","banana","cookie","cup","spoon","egg","pan","avocado","mushroom","pretzel","thermometer","stopwatch","abacus","gears"] },
+  { key:"ocean", label:"Ocean", words:
+    ["fish","turtle","octopus","crab","whale","shark","dolphin","squid","lobster","anchor","penguin","satellite","fire extinguisher","dna"] },
+];
+const ROUNDS_PER_SCENE = 4;
+
+// ---- colors ---- (RESEARCH: red/blue/green/yellow 33-36, orange/purple/pink 39)
+const COLOR_DEFS = [
+  ["red","#e63946",33],["blue","#1d6fd6",34],["yellow","#f4c614",36],["green","#3fa34d",35],
+  ["orange","#f77f1e",39],["pink","#f26bb5",39],["purple","#8e5bd1",39],["black","#222222",44],
+  ["white","#fafafa",45],["brown","#8b5a2b",46],["gray","#9a9a9a",48],
+];
+
+// ---- shapes (SVG) ---- (RESEARCH: circle 31, square 37, triangle 42, rectangle 50)
+const SHAPE_DEFS = [
+  ["circle",31],["square",37],["star",38],["heart",38],
+  ["triangle",42],["rectangle",50],["diamond",50],["oval",52],
+];
+
+// ---- letters ---- (RESEARCH: ~10 uppercase by 48mo, most of 26 by 54-60mo)
+const LETTER_DEFS = [
+  // uppercase first (recognized ~a year before lowercase)
+  ["O",40],["X",40],["A",42],["B",44],["S",46],["E",46],
+  ["M",48],["T",48],["R",52],["G",54],["Q",56],["W",56],
+  // lowercase rungs: ~+10mo over their uppercase counterparts; visually
+  // confusable sets (b/d/p/q, m/n, i/l) anchor the top of the ladder
+  ["o",50],["s",54],["x",54],["a",56],["e",58],["t",60],
+  ["m",62],["r",64],["g",66],["n",68],["b",72],["d",74],
+  ["p",76],["q",80],
+];
+
+// ---- numerals ---- (RESEARCH: numerals 1-5 ~46mo, 1-9 48-58mo)
+// v4 (mod 5, numbers escalation): two-digit numerals b~58-72, three-digit b~74-85 — the
+// adaptive ladder now has somewhere to climb for older/advanced kids. Distractors for
+// multi-digit targets are generated by numeralDistractors()/digitPermutations() below
+// (transpositions like 21/12, 47/74, 105/501) rather than drawn randomly from the pool.
+const NUMERAL_DEFS = [
+  ["1",44],["2",45],["3",46],["4",47],["5",48],["6",50],["7",52],["8",54],["9",56],
+  ["10",58],["12",60],["15",62],["21",64],["34",66],["47",68],["68",70],["83",72],
+  ["105",74],["238",77],["461",80],["750",85],
+];
+
+// ---- counting / quantities: "tap the picture with N" (give-N knower levels) ----
+// (RESEARCH: give-1 ~33, give-2 ~37, give-3 ~40, give-5/cardinal-principle ~47)
+const COUNT_DEFS = [ [1,33,"🍎"],[2,37,"🍌"],[3,40,"🍪"],[4,44,"⭐"],[5,47,"🐟"],[6,50,"🎈"] ];
+
+// ---- positions: SVG scenes of ball vs box ---- (RESEARCH: in 25, on 28, under 32,
+// next-to 39, behind 44, between 52)
+// `family` groups each relation into a consistent visual "world" so distractor
+// tiles never leak a container-type tell: `crate` = single-crate scene (in, on,
+// next to, behind, in front of all render the same crate), `table` = the under-a-table
+// scene, `twobox` = the two-crate "between" scene. See makePositionItem/tableScene/
+// twoboxScene below — within one item every tile is drawn from the same world.
+const POSITION_DEFS = [
+  ["in",25,"crate"],["on",28,"crate"],["under",32,"table"],["next to",39,"crate"],
+  ["behind",44,"crate"],["in front of",45,"crate"],["between",52,"twobox"],
+];
+
+// ---- opposites / concept pairs: two-choice ----
+// (RESEARCH: big/little ~30, hot/cold 30-36, full/empty ~39, long/short ~43,
+// fast/slow 40-46. "more" is famously early (27-30) and "less" famously late
+// (~48) — kept as an asymmetric pair. same/different added as a new
+// renderable enrichment item, ~50-53 per Section 5's 48-58 range.)
+const OPPOSITE_DEFS = [
+  // [concept asked, age, emoji, renderMode, prompt noun]
+  ["big",29,"🐘","size","elephant"],["little",31,"🐘","size","elephant"],
+  ["up",30,"🎈","updown","balloon"],["down",29,"🎈","updown","balloon"],
+  ["happy",34,"😊","face",""],
+  ["sad",36,"😢","face",""],["long",43,"🚂","length","train"],["short",41,"🚂","length","train"],
+  ["hot",33,"🔥","hotcold",""],["cold",35,"🧊","hotcold",""],
+  ["full",38,"🥛","fullempty","cup"],["empty",40,"🥛","fullempty","cup"],
+  ["fast",42,"🐇","fastslow",""],["slow",44,"🐢","fastslow",""],
+  ["more",28,"","quantity",""],["less",48,"","quantity",""],
+  ["same",50,"","samediff",""],["different",53,"","samediff",""],
+];
+
+// ---- v4 (mod 4): mixed adjectives ("Tricky Pictures") — near-miss SVG shapes.
+// Each def is a target attribute combo. v5: 5-6 tiles per item — 3 one-attribute-off
+// distractors + 1-2 two-attribute-off distractors (see genOneOffCandidates/
+// genTwoOffCandidates below) — that mix is what makes the item diagnostic.
+// Ladder: level 1 = shape+color only (single stated attribute), b 40-46.
+//         level 2 = shape+color+size (two stated attributes), b 48-58, step ~3mo.
+//         level 3 = shape+color+size+fill (three stated attributes), b 60-75, step ~3mo.
+const ADJ_COLORS = [["red","#e63946"],["green","#3fa34d"],["blue","#1d6fd6"],["yellow","#f4c614"],["purple","#8e5bd1"]];
+const ADJ_SHAPES = ["square","circle","triangle","star"];
+const ADJ_DEFS = [
+  { b:40, shape:"square", color:"green" },
+  { b:42, shape:"circle", color:"blue" },
+  { b:44, shape:"triangle", color:"red" },
+  { b:46, shape:"star", color:"purple" },
+  { b:48, shape:"square", color:"green", size:"small" },
+  { b:51, shape:"circle", color:"blue", size:"big" },
+  { b:54, shape:"triangle", color:"red", size:"small" },
+  { b:58, shape:"star", color:"yellow", size:"big" },
+  { b:60, shape:"triangle", color:"blue", size:"big", fill:"solid" },
+  { b:63, shape:"circle", color:"green", size:"small", fill:"outline" },
+  { b:66, shape:"square", color:"red", size:"big", fill:"outline" },
+  { b:69, shape:"star", color:"purple", size:"small", fill:"solid" },
+  { b:72, shape:"circle", color:"yellow", size:"big", fill:"solid" },
+  { b:75, shape:"triangle", color:"green", size:"small", fill:"outline" },
+];
+
+// ---- v4/v5 (mod 6/mod 5): categories ("What Belongs?"). Each theme is a single flat
+// `members` list (v5: previously a fixed `anchors`/`pool` split — see makeCategoryItem,
+// which now re-randomizes which 3 members are shown as anchors vs which one is the
+// correct answer on EVERY draw instead of a static split). Icons are de-duplicated
+// GLOBALLY across every theme (e.g. a helicopter lives only in "things that fly", not
+// also "vehicles") so no icon is ever a legitimate answer for two different themes —
+// verified programmatically (see NOTES.md v5 testing). v5: expanded 9 -> 16 themes (the
+// original 9's `b` values are UNCHANGED for session comparability; 7 new themes
+// interleaved among them for target-difficulty variety). b ladder: easiest/concrete
+// (body parts/animals/food/farm animals, ~44-49) to hardest/most abstract (tools, 70).
+const CATEGORY_THEMES = {
+  animals:       { label:"animals",         b:46, members:["🐶","🐱","🐮","🐘","🦁","🐸","🐴","🐷","🐰","🐵","🐢"] },
+  bodyParts:     { label:"body parts",      b:45, members:["👃","👂","👁️","✋","🦶","👄","🦵","🦷"] },
+  food:          { label:"food",            b:49, members:["🍎","🍌","🍕","🍇","🥕","🍞","🧀","🍪","🥦","🍓","🥐"] },
+  farmAnimals:   { label:"farm animals",    b:48, members:["🐔","🐓","🐑","🐐","🦃","🦢","🦙"] },
+  vehicles:      { label:"vehicles",        b:52, members:["🚗","🚂","🚲","🚚","🚌","🛵","🚓","🚜","🚐"] },
+  kitchenThings: { label:"kitchen things",  b:54, members:["🍳","🔪","🍽️","🫖","🧂","🥣","🥢","🧺"] },
+  clothes:       { label:"clothes",         b:55, members:["👕","🧦","👟","🧥","👖","🧢","🩳","🧤","👗"] },
+  weather:       { label:"weather",         b:57, members:["☀️","🌧️","⛈️","❄️","🌈","⛅","🌩️","🌪️"] },
+  sports:        { label:"sports",          b:58, members:["⚽","🏀","🎾","🏈","⚾","🏸","🏓","🥎","🏐"] },
+  insects:       { label:"bugs",            b:60, members:["🐜","🕷️","🦗","🐛","🪱","🦂","🐌"] },
+  seaCreatures:  { label:"sea creatures",   b:61, members:["🐟","🐙","🦀","🐬","🐳","🦑","🦈","🦞","🐠"] },
+  instruments:   { label:"instruments",     b:64, members:["🎸","🥁","🎺","🎻","🎹","🪘","🎷","🪈"] },
+  space:         { label:"space",           b:65, members:["🚀","🌙","⭐","🪐","☄️","🛰️","👽","🌌"] },
+  thingsThatFly: { label:"things that fly", b:67, members:["✈️","🦅","🎈","🚁","🦋","🪁","🦆","🐝"] },
+  bathHygiene:   { label:"bath time",       b:68, members:["🧼","🪥","🛁","🚿","🧴","🧽","🧻"] },
+  tools:         { label:"tools",           b:70, members:["🔨","🔧","🪚","🪛","⛏️","🧰","🪓"] },
+};
+
+// v6 (fix 4a): measurement-validity bug reported live — an "animals" item offered BOTH lion
+// (the answer) and swan (a distractor drawn from "farm animals") — swan is ALSO an animal, so a
+// broad theme's distractor pool can accidentally include a member of a narrower theme it
+// semantically CONTAINS (or meaningfully overlaps). Explicit, one-directional exclusion map:
+// distractors for a theme must never be drawn from any theme listed here for it. Direction
+// matters — "animals" excludes "farmAnimals" (a swan/turkey reads as a plain animal too) but NOT
+// the reverse (a lion is obviously not a farm animal, so it's still a valid farmAnimals
+// distractor) — see the audit notes below each entry for the reasoning per pair.
+const CATEGORY_EXCLUDE = {
+  // "animals" is the broad/generic bucket — excludes every narrower theme whose members are
+  // ALSO creatures a child would call "an animal" (the reported swan/lion bug lives here).
+  animals:       ["farmAnimals", "insects", "seaCreatures", "thingsThatFly"],
+  farmAnimals:   [], // its members aren't confusable with the generic zoo/pet set in "animals"
+  food:          [], // no separate "fruits"/"vegetables" theme exists to exclude from; if one is
+                      // ever added, it belongs here (food's own members already span both)
+  vehicles:      ["thingsThatFly"], // thingsThatFly's ✈️/🚁 are themselves obviously vehicles
+  kitchenThings: [], clothes: [], weather: [], sports: [],
+  // insects excludes thingsThatFly because 🦋 butterfly / 🐝 bee living THERE are, biologically
+  // and colloquially, insects — a child could reasonably call either "a bug".
+  insects:       ["thingsThatFly"],
+  seaCreatures:  [], // nothing else in the pool reads as an aquatic creature
+  instruments:   [], space: [],
+  thingsThatFly: [], // nothing outside it reads as "a thing that flies"
+  bathHygiene:   [], tools: [],
+};
+// v6 (fix 4a): programmatic self-test, runs once at load (console.assert is a silent no-op on
+// success, so this costs nothing in normal play) — draws many items per theme and asserts no
+// distractor tile ever belongs to a theme excluded above. Catches both a broken CATEGORY_EXCLUDE
+// entry and a future regression in makeCategoryItem's filtering logic.
+function runCategorySelfTest(){
+  let violations = 0, draws = 0;
+  for (const key of Object.keys(CATEGORY_THEMES)){
+    const excludedIcons = new Set();
+    (CATEGORY_EXCLUDE[key] || []).forEach(k => CATEGORY_THEMES[k].members.forEach(m => excludedIcons.add(m)));
+    const def = { label: CATEGORY_THEMES[key].label, theme: key, age: CATEGORY_THEMES[key].b };
+    for (let i = 0; i < 200; i++){
+      const item = makeCategoryItem(def, null, 4);
+      draws++;
+      item.tiles.forEach((html, idx) => {
+        if (idx === item.correct) return; // the correct answer is never in the excluded set anyway
+        const icon = html.replace(/<[^>]+>/g, "");
+        if (excludedIcons.has(icon)){
+          violations++;
+          console.assert(false, `category self-test: theme "${key}" distractor "${icon}" belongs to an excluded overlapping theme`);
+        }
+      });
+    }
+  }
+  console.log(`category self-test: ${draws} draws across ${Object.keys(CATEGORY_THEMES).length} themes, ${violations} exclusion violations`);
+  return violations === 0;
+}
+
+// ---- v4 (mod 7): feelings ("Who feels X?"). Paired concepts share a difficulty tier
+// per the task's ladder; distractors are drawn from other feelings of similar difficulty
+// (feelingDistractors below). "jealous" renders as a simple two-emoji tableau (angry
+// face + side-eyes) rather than a single face — judged renderable enough to include
+// rather than capping the ladder at "embarrassed".
+// v5.1: the third element (emoji) is now unused for rendering — kept only as a label/legacy
+// column since FEELING_SVG (below) is the sole art source — but every entry still carries one
+// for readability of this table. 10 new items added spanning b 54-95 (~4mo rungs) to fix a
+// sparse high end (previously topped out at jealous b=83 with nothing above it, and only 4
+// items above b=60 total, making high-ability theta estimates coarse). Ladder ordering follows
+// developmental emotion-vocabulary research: basic/early states (frustrated/curious/confused/
+// shy/bored, ~4.5-5.75y) before harder social/self-conscious ones (disappointed/lonely/guilty/
+// grateful/impatient, ~6-8y), interleaved with the existing nervous/proud/embarrassed/jealous
+// tier rather than simply appended after it.
+const FEELING_DEFS = [
+  ["happy",30,"😊"],["sad",33,"😢"],
+  ["angry",38,"😠"],["sleepy",41,"😴"],
+  ["scared",46,"😨"],["surprised",49,"😲"],
+  ["excited",56,"🥳"],["silly",59,"🤪"],
+  ["frustrated",54,"😤"],["curious",58,"🤔"],["confused",62,"😕"],
+  ["nervous",66,"😬"],["shy",65,"😳"],["proud",71,"😤"],
+  ["bored",69,"😑"],["disappointed",74,"😞"],
+  ["embarrassed",76,"😳"],["lonely",80,"😔"],["jealous",83,"😠👀"],
+  ["guilty",86,"😖"],["grateful",91,"🥹"],["impatient",95,"😤"],
+];
+
+/* ---- CDI-style 100-word expressive checklist (stratified sample across
+   CDI:Words & Sentences categories). Proportion checked × 680 (full CDI:WS
+   list length) ≈ vocabulary size, same logic as CDI short forms. ---- */
+const CHECKLIST = {
+  "Animals": ["dog","cat","duck","bird","fish","horse","bear","elephant","bug","frog"],
+  "Vehicles": ["car","truck","bus","train","airplane","boat"],
+  "Food & drink": ["banana","apple","milk","water","cookie","cracker","cheese","juice","egg","cereal","pizza","grapes"],
+  "Body parts": ["nose","eye","ear","hand","foot","tummy","hair","teeth"],
+  "Clothing": ["shoe","sock","hat","jacket","diaper"],
+  "Household": ["ball","book","cup","spoon","door","chair","bed","light","phone","keys","blanket","trash"],
+  "Outside things": ["tree","flower","moon","sun","rain","rock","slide","swing"],
+  "People": ["mommy","daddy","baby","grandma","grandpa"],
+  "Games & routines": ["hi","bye","night-night","peekaboo","please","thank you","uh-oh","yes","no"],
+  "Action words": ["eat","drink","go","stop","jump","run","open","help","wash","kiss","throw","read"],
+  "Describing words": ["hot","cold","big","little","dirty","wet","happy","sad","fast","broken"],
+  "Position & question words": ["up","down","in","out","under","where","what","mine","more","all gone"],
+};
+
+/* CDI-style expressive vocabulary medians by age (months → words).
+   12-30mo from CDI:WS norm medians (approx); >30 extrapolated. */
+const VOCAB_NORMS = [ [12,6],[14,20],[16,45],[18,90],[20,170],[22,260],[24,310],[26,400],[28,490],[30,570],[33,660],[36,750],[42,950],[48,1150] ];
+
+/* =====================================================================
+   ENGINE — Rasch (1PL) + guessing, worked directly in month units, per
+   RESEARCH.md Section 4. P(correct|theta,item) = c + (1-c)*sigmoid((theta-b)/s).
+   Ability is estimated per domain via EAP over a discrete theta grid;
+   thetaHat IS the age-equivalent in months, no back-conversion needed.
+   ===================================================================== */
+const $ = id => document.getElementById(id);
+const state = {
+  name: "", age: 30, arity: 4, domainIdx: -1, domain: null,
+  finalDomains: {}, stars: 0, locked: false, checklist: new Set(),
+  currentItem: null, firstTry: true, muted: false,
+  sessionMode: null, // "single" (picker: one domain, return to picker) | "all" (Play everything!)
+};
+
+const THETA_MIN = 8, THETA_MAX = 100; // v4: extended from 75 -> 100 (numbers/feelings ladders reach b~85)
+const THETA_GRID = Array.from({ length: THETA_MAX - THETA_MIN + 1 }, (_, i) => THETA_MIN + i);
+const MIN_ITEMS = 4, MAX_ITEMS = 10, STOP_SD = 3; // per-domain stop rule (v5: 8->10, see mod 1d)
+const PRESENT_CAP = 14; // v5: 12->14, so accelerated runs have room to reach the wall
+
+/* =====================================================================
+   v7: five new domains. All plumb through the same generic engine
+   (finalizeDomain/recordResult/domainShouldStop/pickNextItem) as every
+   existing domain — appended at the END of DOMAINS[] below so existing
+   session-history keys/ordering for returning players is undisturbed,
+   same pattern v4's three new domains used.
+   ===================================================================== */
+
+/* ---------- v7: "What's It For?" (functions) ---------- */
+// b ladder 34-58: drink/sleep/wash early (everyday routine objects a toddler
+// handles daily), write/cut mid, telescope (measure/see-far) late per the task.
+const FUNCTION_DEFS = [
+  ["drink", "🥤", 34],
+  ["sleep", "🛏️", 36],
+  ["wash your hands", "🧼", 39],
+  ["open the door", "🔑", 41],
+  ["sweep the floor", "🧹", 44],
+  ["cut paper", "✂️", 46],
+  ["write", "✏️", 48],
+  ["stay dry in the rain", "🌂", 50],
+  ["brush your teeth", "🪥", 53],
+  ["see far away", "🔭", 58],
+];
+function makeFunctionItem(d, pool, arity){
+  // distractors are the OTHER function-objects in the same 10-item bank — every
+  // tile is itself a plausible "a tool" answer, which is what makes the item
+  // diagnostic (a random tap still has to guess among real tools, not junk).
+  const distractors = simpleDistractors(pool, d, arity - 1);
+  const choices = shuffle([d, ...distractors]);
+  return { label: d.name, b: d.age, c: 1/choices.length, s: 4,
+    prompt: `Which one do you use to ${d.name}?`,
+    say: `Which one do you use to ${d.name}? Find it!`,
+    tiles: choices.map(c => emojiTile(c.emoji)), correct: choices.indexOf(d) };
+}
+
+/* ---------- v7: "Day & Night" (time concepts) ----------
+   Forced 2AFC regardless of session arity — same pattern OPPOSITES already
+   uses for exactly the same reason (these are binary concept pairs, not
+   open picture-pointing). timeTiles(mode,concept) mirrors oppositeTiles above:
+   dispatch on mode, return {tiles:[A,B], correct}. Scenes are built from
+   emoji combos (not custom SVG) to keep the domain's scope reasonable —
+   still visually distinct enough for a toddler at tile size (verified in
+   CDP screenshots, see NOTES.md v7).
+*/
+const TIME_DEFS = [
+  ["day", 39, "daynight"], ["night", 41, "daynight"],
+  ["morning", 43, "morningnight"], ["bedtime", 45, "morningnight"],
+  ["first", 47, "firstlast"], ["last", 49, "firstlast"],
+  ["sockfirst", 56, "sequence"],
+  ["summer", 53, "season"], ["winter", 58, "season"],
+  ["yesterday", 65, "calendar"], ["tomorrow", 67, "calendar"],
+];
+function timeTiles(mode, concept){
+  const t = (html) => `<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:.5em;gap:3px">${html}</div>`;
+  switch(mode){
+    case "daynight": {
+      const day = t(`☀️🌤️`), night = t(`🌙⭐`);
+      return concept === "day" ? { tiles:[day,night], correct:0 } : { tiles:[day,night], correct:1 };
+    }
+    case "morningnight": {
+      const morning = t(`🌞🥣`), bedtime = t(`🌙🛏️`);
+      return concept === "morning" ? { tiles:[morning,bedtime], correct:0 } : { tiles:[morning,bedtime], correct:1 };
+    }
+    case "firstlast": {
+      // a row of 3 kids, one ringed to mark which position the tile represents
+      const row = (idx) => t(`<span style="display:flex;gap:3px">${[0,1,2].map(i => i===idx
+        ? `<span style="display:inline-flex;align-items:center;justify-content:center;width:1.3em;height:1.3em;border:.14em solid var(--good);border-radius:50%">🧒</span>`
+        : `<span style="width:1.3em;height:1.3em;display:inline-flex;align-items:center;justify-content:center">🧒</span>`).join("")}</span>`);
+      const first = row(0), last = row(2);
+      return concept === "first" ? { tiles:[first,last], correct:0 } : { tiles:[first,last], correct:1 };
+    }
+    case "sequence": {
+      // "what goes on FIRST — sock or shoe?" — a single fixed-answer item
+      // (sock always goes on before the shoe), not a paired opposite concept.
+      return { tiles:[t("🧦"), t("👟")], correct:0 };
+    }
+    case "season": {
+      const winter = t(`❄️🧥`), summer = t(`☀️🩳`);
+      return concept === "winter" ? { tiles:[winter,summer], correct:0 } : { tiles:[winter,summer], correct:1 };
+    }
+    case "calendar": {
+      const back = t(`⬅️📅`), fwd = t(`📅➡️`);
+      return concept === "yesterday" ? { tiles:[back,fwd], correct:0 } : { tiles:[back,fwd], correct:1 };
+    }
+  }
+}
+const TIME_PROMPTS = {
+  day:"Tap DAY time!", night:"Tap NIGHT time!",
+  morning:"Tap the MORNING picture!", bedtime:"Tap the BEDTIME picture!",
+  first:"Tap the friend who is FIRST!", last:"Tap the friend who is LAST!",
+  sockfirst:"What goes on FIRST — the sock or the shoe?",
+  winter:"Tap WINTER!", summer:"Tap SUMMER!",
+  yesterday:"Tap YESTERDAY!", tomorrow:"Tap TOMORROW!",
+};
+function makeTimeItem(d, pool, arity){
+  const o = timeTiles(d.mode, d.name);
+  let tiles = o.tiles, correct = o.correct;
+  if (Math.random() < .5){ tiles = [tiles[1], tiles[0]]; correct = 1 - correct; }
+  const prompt = TIME_PROMPTS[d.name] || `Tap ${d.name}!`;
+  return { label: d.name, b: d.age, c: 0.5, s: 4, prompt, say: prompt, tiles, correct };
+}
+
+/* ---------- v7: "My Body" (tap-on-figure) ----------
+   A single persistent kid figure (reuses KID's skin/shirt/shorts/ink colors
+   from the feelings art system for visual consistency) with invisible hit-
+   regions overlaid at coordinates matched to the drawn art. Unlike seek&find
+   (a depleting scene shared across several rounds), the figure is fully
+   redrawn fresh every round — no cross-round "found" state to track — so
+   skipItem/dontKnowItem need no body-specific branch (their generic log-and-
+   advance path already works). Coordinate system: a fixed viewBox padded a
+   few units past 0-100 on the x-axis (arms splay past the torso) so hands/
+   fingers aren't clipped; every region's hit-circle is sized in the SAME
+   units as the art, converted to CSS % via a wrapper with `aspect-ratio`
+   locked to the viewBox ratio (so a circle stays a circle regardless of the
+   board's actual rendered pixel size) — verified no two DIFFERENT concepts'
+   hit-circles overlap in coordinate space (adversarial-review pass, see
+   NOTES.md v7) so a tap can never land ambiguously between two body parts.
+*/
+const BODY_VB = { minX:-5, w:110, h:215 };
+const BODY_REGIONS = {
+  hair:      { cy:8,   r:8, cx:[50] },
+  eyebrow:   { cy:18,  r:4, cx:[37,63] },
+  eyes:      { cy:30,  r:6, cx:[38,62] },
+  ears:      { cy:32,  r:8, cx:[18,82] },
+  nose:      { cy:44,  r:6, cx:[50] },
+  mouth:     { cy:57,  r:6, cx:[50] },
+  chin:      { cy:68,  r:5, cx:[50] },
+  neck:      { cy:80,  r:6, cx:[50] },
+  shoulders: { cy:95,  r:7, cx:[24,76] },
+  elbow:     { cy:108, r:8, cx:[10,90] },
+  tummy:     { cy:122, r:15,cx:[50] },
+  wrist:     { cy:132, r:6, cx:[4,96] },
+  hands:     { cy:148, r:7, cx:[2,98] },
+  fingers:   { cy:162, r:5, cx:[0,100] },
+  knees:     { cy:155, r:8, cx:[34,66] },
+  ankle:     { cy:183, r:6, cx:[34,66] },
+  feet:      { cy:197, r:7, cx:[34,66] },
+  heel:      { cy:203, r:5, cx:[20,80] },
+};
+// ladder per the task: nose/eyes/mouth/ears/hair/hands/feet/tummy 20-30 (kept low
+// for younger-sibling use), knees/fingers/neck 34-42, elbow/ankle/wrist/shoulders
+// 48-58, eyebrow/chin/heel 60-70.
+const BODY_DEFS = [
+  ["nose",20], ["eyes",22], ["mouth",24], ["ears",25], ["hair",27], ["hands",28], ["feet",29], ["tummy",30],
+  ["knees",34], ["fingers",38], ["neck",42],
+  ["elbow",48], ["ankle",52], ["wrist",55], ["shoulders",58],
+  ["eyebrow",62], ["chin",66], ["heel",70],
+];
+function bodyFigureSVG(){
+  const skin=KID.skin, shirt=KID.shirt, shorts=KID.shorts, ink=KID.ink;
+  return `<svg viewBox="${BODY_VB.minX} 0 ${BODY_VB.w} ${BODY_VB.h}" style="width:100%;height:100%;display:block">
+    <rect x="30" y="130" width="16" height="65" rx="8" fill="${shorts}"/>
+    <rect x="54" y="130" width="16" height="65" rx="8" fill="${shorts}"/>
+    <ellipse cx="38" cy="197" rx="10" ry="7" fill="${ink}"/>
+    <ellipse cx="62" cy="197" rx="10" ry="7" fill="${ink}"/>
+    <rect x="43" y="62" width="14" height="28" rx="5" fill="${skin}"/>
+    <rect x="27" y="86" width="46" height="48" rx="16" fill="${shirt}"/>
+    <path d="M30,95 L10,108 L4,132 L2,148" stroke="${skin}" stroke-width="11" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M70,95 L90,108 L96,132 L98,148" stroke="${skin}" stroke-width="11" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <ellipse cx="18" cy="32" rx="6" ry="9" fill="${skin}"/><ellipse cx="82" cy="32" rx="6" ry="9" fill="${skin}"/>
+    <circle cx="50" cy="38" r="32" fill="${skin}"/>
+    <path d="M18,20 Q50,-8 82,20 Q82,2 50,0 Q18,2 18,20 Z" fill="#6b4a2b"/>
+    <path d="M32,17 Q37,13 42,17" stroke="${ink}" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+    <path d="M58,17 Q63,13 68,17" stroke="${ink}" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+    <circle cx="38" cy="30" r="3.4" fill="${ink}"/><circle cx="62" cy="30" r="3.4" fill="${ink}"/>
+    <path d="M47,44 Q50,48 53,44" stroke="${ink}" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M41,57 Q50,63 59,57" stroke="${ink}" stroke-width="3" fill="none" stroke-linecap="round"/>
+  </svg>`;
+}
+function renderBodyFigure(){
+  const wrap = $("seekBoard");
+  const hits = Object.entries(BODY_REGIONS).map(([key,r]) => r.cx.map(cx => {
+    const left = (cx - BODY_VB.minX) / BODY_VB.w * 100, top = r.cy / BODY_VB.h * 100, wpct = r.r*2 / BODY_VB.w * 100;
+    return `<div class="body-hit" data-part="${key}" style="position:absolute;left:${left}%;top:${top}%;width:${wpct}%;aspect-ratio:1/1;transform:translate(-50%,-50%);border-radius:50%;cursor:pointer"></div>`;
+  }).join("")).join("");
+  wrap.innerHTML = `<div style="position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center">
+    <div style="position:relative;height:100%;aspect-ratio:${BODY_VB.w}/${BODY_VB.h};max-width:100%">${bodyFigureSVG()}${hits}</div>
+  </div>`;
+  wrap.querySelectorAll(".body-hit").forEach(el => { el.onclick = () => tapBodyPart(el.dataset.part, el); });
+}
+function renderBodyRound(dom, ds){
+  const available = dom.defs.filter(d => !ds.used.has(d.label));
+  if (!available.length){ domainDone(); return; }
+  const target = computeTarget(ds);
+  const pool = applyFloorRule(ds, available, d => d.age);
+  const avoid = recentCorrectLabels(dom.key);
+  const d = pickAmongTopN(pool, target, x => x.age, 3, { avoid, getLabel: c => c.label });
+  ds.used.add(d.label);
+  ds.presented = (ds.presented || 0) + 1;
+  renderBodyFigure();
+  // c reflects how many hit-regions actually count as correct for this target — bilateral
+  // parts (2 taps count) get double the guess rate of singular parts (1 tap counts), out of
+  // 18 total body-part concepts on the figure.
+  const guessCount = BODY_REGIONS[d.label].cx.length;
+  const it = { label: d.label, b: d.age, c: guessCount / BODY_DEFS.length, s: 4,
+    prompt: `Tap the ${d.label}!`, say: `Can you find the ${d.label}? Tap it!`,
+    body: true };
+  state.currentItem = it; state.locked = false; state.firstTry = true;
+  $("promptText").textContent = it.prompt;
+  $("progressBar").style.width = progressPct(ds) + "%";
+  speak(it.say);
+}
+function tapBodyPart(part, el){
+  if (state.locked || !state.domain) return;
+  const it = state.currentItem;
+  if (!it || !it.body) return;
+  const highlightAll = (cls) => { $("seekBoard").querySelectorAll(`.body-hit[data-part="${it.label}"]`).forEach(e => e.classList.add(cls)); };
+  if (part === it.label){
+    state.locked = true;
+    highlightAll("correct");
+    chimeGood();
+    if (state.firstTry){ addStar(); confetti(8); }
+    recordResult(it, state.firstTry);
+    $("mascot").classList.remove("bounce"); void $("mascot").offsetWidth; $("mascot").classList.add("bounce");
+    speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]));
+    setTimeout(() => { renderItem(); }, 1300);
+  } else {
+    chimeTry();
+    el.classList.add("wrong");
+    setTimeout(() => el.classList.remove("wrong"), 500);
+    if (state.firstTry){
+      state.firstTry = false;
+      speak(pick(["Good try! Look again!","Hmm, try again!"]));
+    } else {
+      state.locked = true;
+      recordResult(it, false);
+      highlightAll("reveal");
+      speak(`This one is the ${it.label}!`);
+      setTimeout(() => { renderItem(); }, 1600);
+    }
+  }
+}
+
+/* ---------- v7: "What Comes Next?" (patterns) ----------
+   Strip renders in #categoryAnchors (the same anchor strip categories uses)
+   via `it.patternStrip` — never simultaneously with `it.anchors` (only one
+   domain is ever active at a time; renderItem() resets the anchors area to
+   hidden at the top of every render before either branch re-shows it, so
+   there's no stale-content leak between the two domains). Each def is fully
+   static (sequence/answer/wrong-choices pre-built) rather than procedurally
+   generated — same "static per-concept" pattern OPPOSITE_DEFS/TIME_DEFS use.
+*/
+function patDot(e, size=1){ return `<span style="font-size:${size}em;line-height:1">${e}</span>`; }
+function patGrow(n, e){ return `<span style="display:inline-flex;gap:2px">${Array.from({length:n},()=>patDot(e,.5)).join("")}</span>`; }
+const PATTERN_DEFS = [
+  { label:"ab-red-blue", age:49, seq:[patDot("🔴"),patDot("🔵"),patDot("🔴"),patDot("🔵")], answer:patDot("🔴"), wrongs:[patDot("🔵"),patDot("🟡"),patDot("🟢")] },
+  { label:"ab-yellow-green", age:51, seq:[patDot("🟡"),patDot("🟢"),patDot("🟡"),patDot("🟢")], answer:patDot("🟡"), wrongs:[patDot("🟢"),patDot("🔴"),patDot("🔵")] },
+  { label:"aab-red-blue", age:55, seq:[patDot("🔴"),patDot("🔴"),patDot("🔵"),patDot("🔴"),patDot("🔴")], answer:patDot("🔵"), wrongs:[patDot("🔴"),patDot("🟡"),patDot("🟢")] },
+  { label:"aab-green-purple", age:57, seq:[patDot("🟢"),patDot("🟢"),patDot("🟣"),patDot("🟢"),patDot("🟢")], answer:patDot("🟣"), wrongs:[patDot("🟢"),patDot("🔴"),patDot("🔵")] },
+  { label:"abc-red-blue-yellow", age:59, seq:[patDot("🔴"),patDot("🔵"),patDot("🟡"),patDot("🔴"),patDot("🔵")], answer:patDot("🟡"), wrongs:[patDot("🔴"),patDot("🔵"),patDot("🟢")] },
+  { label:"abc-green-purple-red", age:61, seq:[patDot("🟢"),patDot("🟣"),patDot("🔴"),patDot("🟢"),patDot("🟣")], answer:patDot("🔴"), wrongs:[patDot("🟢"),patDot("🟣"),patDot("🔵")] },
+  { label:"abb-red-blue", age:63, seq:[patDot("🔴"),patDot("🔵"),patDot("🔵"),patDot("🔴"),patDot("🔵")], answer:patDot("🔵"), wrongs:[patDot("🔴"),patDot("🟡"),patDot("🟢")] },
+  { label:"abb-yellow-green", age:65, seq:[patDot("🟡"),patDot("🟢"),patDot("🟢"),patDot("🟡"),patDot("🟢")], answer:patDot("🟢"), wrongs:[patDot("🟡"),patDot("🔴"),patDot("🔵")] },
+  { label:"size-big-small", age:58, seq:[patDot("🔴",1.3),patDot("🔴",.6),patDot("🔴",1.3),patDot("🔴",.6)], answer:patDot("🔴",1.3), wrongs:[patDot("🔴",.6),patDot("🔵",1.3),patDot("🔵",.6)] },
+  { label:"growing-1to3", age:71, seq:[patGrow(1,"🔴"),patGrow(2,"🔴"),patGrow(3,"🔴")], answer:patGrow(4,"🔴"), wrongs:[patGrow(3,"🔴"),patGrow(5,"🔴"),patGrow(2,"🔴")] },
+  { label:"growing-2to4", age:73, seq:[patGrow(2,"🟡"),patGrow(3,"🟡"),patGrow(4,"🟡")], answer:patGrow(5,"🟡"), wrongs:[patGrow(4,"🟡"),patGrow(6,"🟡"),patGrow(3,"🟡")] },
+];
+function makePatternItem(d, pool, arity){
+  const n = Math.min(arity, d.wrongs.length + 1);
+  const wrongs = shuffle(d.wrongs).slice(0, n - 1);
+  const choices = shuffle([{ html:d.answer, correct:true }, ...wrongs.map(w => ({ html:w, correct:false }))]);
+  return { label: d.label, b: d.age, c: 1/choices.length, s: 4,
+    prompt: `What comes next?`, say: `Look at the pattern! What comes next?`,
+    patternStrip: d.seq.join(""),
+    tiles: choices.map(c => c.html), correct: choices.findIndex(c => c.correct) };
+}
+
+/* ---------- v7: "Letter Sounds & Rhymes" (phonological awareness) ----------
+   Two item kinds sharing one domain/theta, dispatched by d.kind. Rhymes: the
+   TARGET word is spoken only (never shown as a picture — the child can't
+   read, and showing it would turn a rhyming task into a matching task); the
+   choice tiles are pictures whose WORDS are also spoken in `say` (per the
+   task: "speak the choices too" since he can't read the picture labels
+   either). Letter sounds: `sound` strings are repeated-letter phones
+   ("mmm"/"sss"/"fff"/"rrr"/"lll") that TTS hums reasonably, per the task —
+   the 3 stop-consonant phones (b/t/p) can't be hummed/held the same way, so
+   they use the standard phonics spelling ("buh"/"tuh"/"puh"); acoustic
+   quality of those three is a desk-check judgment call, not verifiable
+   without listening (see NOTES.md v7 "anything unverifiable").
+*/
+const RHYME_DEFS = [
+  { word:"cat", b:54, correct:{w:"hat",e:"🎩"}, distractors:[{w:"dog",e:"🐶"},{w:"sun",e:"☀️"},{w:"cup",e:"🥤"}] },
+  { word:"bee", b:58, correct:{w:"tree",e:"🌳"}, distractors:[{w:"fish",e:"🐟"},{w:"moon",e:"🌙"},{w:"star",e:"⭐"}] },
+  { word:"car", b:61, correct:{w:"star",e:"⭐"}, distractors:[{w:"dog",e:"🐶"},{w:"cup",e:"🥤"},{w:"ball",e:"⚽"}] },
+  { word:"shoe", b:64, correct:{w:"blue",e:"🟦"}, distractors:[{w:"red",e:"🟥"},{w:"bed",e:"🛏️"},{w:"cake",e:"🍰"}] },
+  { word:"snake", b:68, correct:{w:"cake",e:"🍰"}, distractors:[{w:"ball",e:"⚽"},{w:"moon",e:"🌙"},{w:"hat",e:"🎩"}] },
+];
+const LETTER_SOUND_DEFS = [
+  { letter:"M", sound:"mmm", age:56 }, { letter:"S", sound:"sss", age:59 },
+  { letter:"F", sound:"fff", age:62 }, { letter:"R", sound:"rrr", age:65 },
+  { letter:"B", sound:"buh", age:68 }, { letter:"T", sound:"tuh", age:71 },
+  { letter:"L", sound:"lll", age:74 }, { letter:"P", sound:"puh", age:76 },
+];
+const PHONO_DEFS = [
+  ...RHYME_DEFS.map(d => ({ ...d, kind:"rhyme", label:`rhyme-${d.word}`, age:d.b })),
+  ...LETTER_SOUND_DEFS.map(d => ({ ...d, kind:"sound", label:`sound-${d.letter}`, age:d.age })),
+];
+function makeRhymeItem(d, arity){
+  const distractors = shuffle(d.distractors).slice(0, arity - 1);
+  const choices = shuffle([{ ...d.correct, correct:true }, ...distractors.map(x => ({ ...x, correct:false }))]);
+  const words = choices.map(c => c.w);
+  return { label: d.label, b: d.b, c: 1/choices.length, s: 4,
+    prompt: `Which one rhymes with "${d.word}"?`,
+    say: `Which one rhymes with ${d.word}? Choices are ${words.join(", ")}.`,
+    tiles: choices.map(c => emojiTile(c.e)), correct: choices.findIndex(c => c.correct) };
+}
+function makeLetterSoundItem(d, pool, arity){
+  const distractors = simpleDistractors(pool, d, arity - 1);
+  const choices = shuffle([d, ...distractors]);
+  return { label: d.label, b: d.age, c: 1/choices.length, s: 4,
+    prompt: `Which letter says "${d.sound}"?`,
+    say: `Which letter says ${d.sound}? Find the letter that makes that sound!`,
+    tiles: choices.map(c => `<span class="txt" style="color:#e67e22">${c.letter}</span>`), correct: choices.indexOf(d) };
+}
+function makePhonoItem(d, pool, arity){
+  if (d.kind === "rhyme") return makeRhymeItem(d, arity);
+  return makeLetterSoundItem(d, pool.filter(x => x.kind === "sound"), arity);
+}
+
+const DOMAINS = [
+  { key:"vocabulary", label:"Words", emoji:"🐶", section:"Words & Sounds",
+    defs: VOCAB_WORDS.map(([w,e,a,th]) => ({ label:w, word:w, emoji:e, age:a, theme:th })),
+    make: makeVocabItem },
+  { key:"colors", label:"Colors", emoji:"🌈", section:"Numbers & Shapes",
+    defs: COLOR_DEFS.map(([n,h,a]) => ({ label:n, name:n, hex:h, age:a })),
+    make: makeColorItem },
+  { key:"shapes", label:"Shapes", emoji:"🔷", section:"Numbers & Shapes",
+    defs: SHAPE_DEFS.map(([n,a]) => ({ label:n, name:n, age:a })),
+    make: makeShapeItem },
+  { key:"positions", label:"Where is it?", emoji:"📦", section:"World & Ideas",
+    defs: POSITION_DEFS.map(([n,a,fam]) => ({ label:n, name:n, age:a, family:fam })),
+    make: makePositionItem },
+  { key:"opposites", label:"Opposites", emoji:"🐘", section:"Feelings & Body",
+    defs: OPPOSITE_DEFS.map(d => ({ label:d[0], name:d[0], age:d[1], noun:d[4], def:d })),
+    make: makeOppositeItem },
+  { key:"counting", label:"Counting", emoji:"🍎", section:"Numbers & Shapes",
+    defs: COUNT_DEFS.map(([n,a,e]) => ({ label:String(n), n, age:a, emoji:e })),
+    make: makeCountItem },
+  { key:"letters", label:"Letters", emoji:"🅰️", section:"Words & Sounds",
+    defs: LETTER_DEFS.map(([n,a]) => ({ label:n, name:n, age:a })),
+    make: makeLetterItem },
+  { key:"numbers", label:"Numbers", emoji:"3️⃣", section:"Numbers & Shapes",
+    defs: NUMERAL_DEFS.map(([n,a]) => ({ label:n, name:n, age:a })),
+    make: makeNumeralItem },
+  { key:"seekfind", label:"Seek & Find", emoji:"🔍", section:"Words & Sounds",
+    // rendered via renderSeekfindRound (scene board, not a tile grid) — defs/make
+    // are unused for this domain, kept null/empty so nothing accidentally calls them.
+    defs: [], make: null },
+  // ---- v4: three new domains, appended at the end so existing "Play everything!"
+  // ordering / session history for returning players is undisturbed. All three plumb
+  // through the same generic engine (finalizeDomain/recordResult/domainShouldStop) as
+  // every other domain — zero special-casing needed in endGame/saveSession/Progress.
+  { key:"adjectives", label:"Tricky Pictures", emoji:"🟩", section:"Numbers & Shapes",
+    defs: ADJ_DEFS.map(d => ({ ...d, label: adjLabel(d), age: d.b })),
+    make: makeAdjItem },
+  { key:"categories", label:"What Belongs?", emoji:"🎻", section:"World & Ideas",
+    defs: Object.entries(CATEGORY_THEMES).map(([k,t]) => ({ label:t.label, theme:k, age:t.b })),
+    make: makeCategoryItem },
+  { key:"feelings", label:"Feelings", emoji:"😊", section:"Feelings & Body",
+    defs: FEELING_DEFS.map(([n,a,e]) => ({ label:n, name:n, age:a, emoji:e })),
+    make: makeFeelingItem },
+  // ---- v7: five new domains, same "appended at the end" rule as v4's three above —
+  // existing DOMAINS[] positions for returning players' session history are unchanged.
+  // `section` groups the picker (see renderPicker) independently of array order.
+  { key:"functions", label:"What's It For?", emoji:"🍴", section:"World & Ideas",
+    defs: FUNCTION_DEFS.map(([n,e,a]) => ({ label:n, name:n, emoji:e, age:a })),
+    make: makeFunctionItem },
+  { key:"time", label:"Day & Night", emoji:"🌙", section:"World & Ideas",
+    defs: TIME_DEFS.map(([n,a,m]) => ({ label:n, name:n, age:a, mode:m })),
+    make: makeTimeItem },
+  { key:"mybody", label:"My Body", emoji:"🖐", section:"Feelings & Body",
+    defs: BODY_DEFS.map(([n,a]) => ({ label:n, name:n, age:a })),
+    make: null }, // rendered via renderBodyRound (persistent-figure board, not a tile grid)
+  { key:"patterns", label:"What Comes Next?", emoji:"🔴", section:"Numbers & Shapes",
+    defs: PATTERN_DEFS,
+    make: makePatternItem },
+  { key:"phono", label:"Letter Sounds & Rhymes", emoji:"🎵", section:"Words & Sounds",
+    defs: PHONO_DEFS,
+    make: makePhonoItem },
+];
+
+function shuffle(a){ a=a.slice(); for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]];} return a; }
+
+/* ---------- adaptive engine math ---------- */
+function normalPostFor(grid, mu, sigma){
+  const raw = grid.map(t => Math.exp(-0.5 * Math.pow((t - mu) / sigma, 2)));
+  const sum = raw.reduce((a,b) => a+b, 0);
+  // guard against an out-of-grid-range mu underflowing every density to 0 (e.g. a corrupted
+  // or hand-edited imported theta) — fall back to a flat/uniform prior rather than propagate NaN
+  if (!(sum > 0)) return grid.map(() => 1 / grid.length);
+  return raw.map(x => x / sum);
+}
+function eap(grid, post){
+  let m = 0; for (let i=0;i<grid.length;i++) m += grid[i] * post[i];
+  return m;
+}
+function sdOf(grid, post, mean){
+  let v = 0; for (let i=0;i<grid.length;i++) v += post[i] * (grid[i]-mean) * (grid[i]-mean);
+  return Math.sqrt(v);
+}
+function pCorrect(theta, item){
+  // Rasch + guessing: c + (1-c) * sigmoid((theta - b) / s)
+  return item.c + (1 - item.c) / (1 + Math.exp(-(theta - item.b) / item.s));
+}
+function updatePosterior(ds, item, correct){
+  const like = ds.grid.map(t => { const p = pCorrect(t, item); return correct ? p : (1 - p); });
+  const raw = ds.post.map((p,i) => p * like[i]);
+  const sum = raw.reduce((a,b) => a+b, 0);
+  if (sum > 0) ds.post = raw.map(x => x / sum);
+}
+function priorFor(domainKey, age){
+  // seed from the most recent session's theta for this domain, else chronological age
+  const sessions = loadSessions();
+  for (let i = sessions.length - 1; i >= 0; i--){
+    const d = sessions[i].domains && sessions[i].domains[domainKey];
+    if (d && typeof d.theta === "number" && isFinite(d.theta)){
+      // clamp to the grid range so a corrupted/hand-edited backup can't seed an out-of-range
+      // mu (which would underflow normalPostFor's densities to all-zero)
+      const mu = Math.min(THETA_MAX, Math.max(THETA_MIN, d.theta));
+      return { mu, sigma: 6 };
+    }
+  }
+  // v5 (Issue 1 fix): 8 -> 10. A fresh/no-history prior centered on chronological age is
+  // exactly the "under-seeded prior" case the streak accelerator (pickNextItem) targets — but
+  // simulation showed sigma=8 was too tight to let the accelerator's climb actually move the
+  // EAP for a child far above their age (a well-calibrated Bayesian update on a heavily-damped
+  // prior still damps the final estimate even once the RIGHT items get administered). Swept
+  // sigma 8/10/12/14/16/20 against a true-theta-70-at-chrono-age-45 simulation (Issue 1's
+  // verification scenario): sigma=10 was the only value landing within 8mo of true theta on
+  // 12/12 trials while keeping a true-theta-30-at-age-30 control tight (no wild jumps,
+  // theta in [27,34] across 12 trials) — sigma>=12 started producing occasional wild
+  // low-ability jumps (e.g. sigma=14 hit 49 on one low-ability trial). See NOTES.md v5 testing.
+  return { mu: age, sigma: 10 };
+}
+function domainShouldStop(ds){
+  // v4 (mod 1): total presentations (answered + skipped) capped separately from the
+  // answered-only MAX_ITEMS, so a skip-heavy run can't go on forever.
+  if ((ds.presented || 0) >= PRESENT_CAP) return true;
+  if (ds.n >= MAX_ITEMS) return true;
+  if (ds.n < MIN_ITEMS) return false;
+  const thetaHat = eap(ds.grid, ds.post);
+  return sdOf(ds.grid, ds.post, thetaHat) <= STOP_SD;
+}
+// v5 (Issue 1 fix): the old rule (target = thetaHat+1, nearest-unused-to-target) climbed too
+// slowly — EAP barely moves on correct answers to items far below true ability (flat
+// likelihood region there), so an under-seeded prior never reaches a high-ability child, and
+// once the near-target neighborhood of unused items is exhausted, "nearest unused" could pick
+// an item BELOW already-passed difficulty even while the child is still winning. Three shared
+// helpers (also used by the seek&find word-picker below, which duplicates this selection logic
+// for its own scene-word candidates) fix this:
+//   (a) streak accelerator — computeTarget: a consecutive first-try-correct streak escalates
+//       the target by +4 per streak beyond the first (2-in-a-row -> +5 total, 3-in-a-row -> +9,
+//       ...), GMAT-style, so a strong child blows past a low seed instead of crawling +1 at a
+//       time. Streak resets to 0 on any miss (recordResult below) — untouched by Skip (Skip
+//       carries no information, see skipItem).
+//   (b) floor rule — applyFloorRule: once any item is answered correctly, items at or below the
+//       highest-b item answered correctly so far (ds.floorB) are excluded, so the ladder can't
+//       backslide into "too easy" territory while the child is winning. Reopens only after 2+
+//       misses ABOVE that floor (ds.missAboveFloor >= 2) — i.e. only once a real wall is found is
+//       re-probing below it allowed (useful for narrowing the ceiling precisely). Never returns
+//       an empty candidate set — falls back to the unfiltered list — so a small/exhausted pool
+//       can't soft-lock item selection.
+//   (c) mild selection randomness — pickAmongTopN: choose uniformly among the top-3 nearest-to-
+//       target candidates (after the floor filter) instead of always the single nearest, so
+//       repeat sessions/domains don't feel robotically deterministic (the "1, 2, 3 in order"
+//       complaint) while staying close to the target difficulty.
+function computeTarget(ds){
+  const thetaHat = eap(ds.grid, ds.post);
+  if (ds.n === 0) return thetaHat - 4; // easy warm-up start
+  const streak = ds.streak || 0;
+  return thetaHat + 1 + 4 * Math.max(0, streak - 1);
+}
+function applyFloorRule(ds, candidates, getB){
+  if (ds.floorB === undefined || (ds.missAboveFloor || 0) >= 2) return candidates;
+  const filtered = candidates.filter(c => getB(c) > ds.floorB);
+  return filtered.length ? filtered : candidates; // never soft-lock on an over-filtered pool
+}
+// v6 (fix 5b): cross-session rotation — "an item answered correctly recently teaches nothing and
+// invites memorization" (the DNA-as-only-top-word complaint has the same root cause as this: a
+// small top-of-ladder pool keeps re-serving the same words the child already nailed last time).
+// `opts.avoid` is the set of labels answered CORRECTLY in either of the last 2 sessions for this
+// domain (see recentCorrectLabels below); when present, candidates within 6mo of target are
+// restricted to the non-recently-correct ("fresh") ones IF at least one such fresh candidate
+// exists near target — otherwise (a small/exhausted bank where every nearby item was already
+// answered correctly recently) fall back to the full candidate list so selection never starves.
+// An item MISSED recently is never avoided — only correct ones are, per the spec (a miss is
+// still informative to retest).
+function pickAmongTopN(candidates, target, getB, n=3, opts){
+  const sorted = candidates.slice().sort((a,b) => Math.abs(getB(a)-target) - Math.abs(getB(b)-target));
+  let pool = sorted;
+  if (opts && opts.avoid && opts.avoid.size){
+    const fresh = sorted.filter(c => !opts.avoid.has(opts.getLabel(c)));
+    const freshHasNear = fresh.some(c => Math.abs(getB(c) - target) <= 6);
+    pool = freshHasNear ? fresh : sorted; // graceful degradation for small/exhausted banks
+  }
+  let top = pool.slice(0, Math.min(n, pool.length));
+  // v7 (Part B): thematic vocabulary rotation — prefer a candidate whose theme differs
+  // from the immediately-previous item's theme, but ONLY within this same top-N
+  // difficulty band (never reach further down the ranking just for variety — difficulty
+  // targeting still wins whenever every near candidate happens to share a theme).
+  if (opts && opts.avoidTheme && opts.themeOf){
+    const varied = top.filter(c => opts.themeOf(c) !== opts.avoidTheme);
+    if (varied.length) top = varied;
+  }
+  return top[Math.floor(Math.random() * top.length)];
+}
+// labels answered correctly (first-try or later — anything with correct:true) in either of the
+// last 2 SAVED sessions for this domain. The in-progress/current session isn't in localStorage
+// yet (only written at endGame), so this never self-contaminates within one playthrough.
+function recentCorrectLabels(domainKey){
+  const labels = new Set();
+  for (const s of loadSessions().slice(-2)){
+    const d = s.domains && s.domains[domainKey];
+    if (!d || !Array.isArray(d.items)) continue;
+    for (const it of d.items) if (it.correct === true) labels.add(it.label);
+  }
+  return labels;
+}
+function pickNextItem(dom){
+  const ds = state.domain;
+  const available = dom.defs.filter(d => !ds.used.has(d.label));
+  if (!available.length) return null;
+  const target = computeTarget(ds);
+  const pool = applyFloorRule(ds, available, d => d.age);
+  const avoid = recentCorrectLabels(dom.key);
+  const opts = { avoid, getLabel: c => c.label };
+  // v7 (Part B): theme rotation is vocabulary-only — every other domain leaves
+  // opts.avoidTheme/themeOf unset, so pickAmongTopN's theme branch never triggers for
+  // them. ds.lastTheme is undefined at domain start (fresh ds object), so the FIRST
+  // vocab item of a session has no rotation constraint — nothing to avoid yet.
+  if (dom.key === "vocabulary" && ds.lastTheme){
+    opts.avoidTheme = ds.lastTheme;
+    opts.themeOf = c => c.theme;
+  }
+  const picked = pickAmongTopN(pool, target, d => d.age, 3, opts);
+  if (dom.key === "vocabulary" && picked) ds.lastTheme = picked.theme;
+  return picked;
+}
+
+/* ---------- distractor helpers ---------- */
+function simpleDistractors(pool, target, n){
+  return shuffle(pool.filter(x => x.label !== target.label)).slice(0, n);
+}
+function vocabDistractors(pool, target, n){
+  const others = pool.filter(x => x.label !== target.label);
+  let near = others.filter(x => Math.abs(x.age - target.age) <= 14);
+  if (near.length < n) near = others;
+  // v7 (Part B): at 42mo+ prefer SAME-theme distractors (semantic neighbors — harder,
+  // "which fruit" instead of "which random thing"); below 42mo prefer CROSS-theme
+  // (easier — a toddler distinguishing "apple" from "car" doesn't need same-theme
+  // subtlety yet). Falls back to the plain near-age pool whenever the themed filter
+  // doesn't leave enough candidates (small themes / edge of the age window).
+  const themed = target.age >= 42 ? near.filter(x => x.theme === target.theme)
+                                   : near.filter(x => x.theme !== target.theme);
+  const pickFrom = themed.length >= n ? themed : near;
+  return shuffle(pickFrom).slice(0, n);
+}
+
+/* ---------- item builders (make one rendered item from a def + arity) ---------- */
+function emojiTile(e){ return `<span>${e}</span>`; }
+
+function makeVocabItem(d, pool, arity){
+  const distractors = vocabDistractors(pool, d, arity - 1);
+  const choices = shuffle([d, ...distractors]);
+  return { label:d.word, b:d.age, c:1/arity, s:4,
+    prompt:`Where is the ${d.word}?`, say:`Where is the ${d.word}? Tap the ${d.word}!`,
+    tiles: choices.map(c => emojiTile(c.emoji)), correct: choices.indexOf(d) };
+}
+
+function colorSwatch(hex){
+  const stroke = hex === "#fafafa" ? "#ccc" : "none";
+  return `<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="38" fill="${hex}" stroke="${stroke}" stroke-width="3"/></svg>`;
+}
+function makeColorItem(d, pool, arity){
+  const distractors = simpleDistractors(pool, d, arity - 1);
+  const choices = shuffle([d, ...distractors]);
+  return { label:d.name, b:d.age, c:1/arity, s:4,
+    prompt:`Tap the ${d.name} one!`, say:`Can you find the ${d.name} one? Tap ${d.name}!`,
+    tiles: choices.map(c => colorSwatch(c.hex)), correct: choices.indexOf(d) };
+}
+
+function shapeSVG(name){
+  const f = "#4ecdc4", s = `fill="${f}"`;
+  switch(name){
+    case "circle": return `<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="36" ${s}/></svg>`;
+    case "square": return `<svg viewBox="0 0 100 100"><rect x="18" y="18" width="64" height="64" rx="6" ${s}/></svg>`;
+    case "rectangle": return `<svg viewBox="0 0 100 100"><rect x="10" y="28" width="80" height="44" rx="5" ${s}/></svg>`;
+    case "triangle": return `<svg viewBox="0 0 100 100"><polygon points="50,14 88,82 12,82" ${s}/></svg>`;
+    case "star": return `<svg viewBox="0 0 100 100"><polygon points="50,10 61,38 91,38 67,57 76,86 50,68 24,86 33,57 9,38 39,38" ${s}/></svg>`;
+    case "heart": return `<svg viewBox="0 0 100 100"><path d="M50 85 C 20 62, 8 40, 22 26 C 34 15, 48 22, 50 32 C 52 22, 66 15, 78 26 C 92 40, 80 62, 50 85 Z" ${s}/></svg>`;
+    case "diamond": return `<svg viewBox="0 0 100 100"><polygon points="50,8 86,50 50,92 14,50" ${s}/></svg>`;
+    case "oval": return `<svg viewBox="0 0 100 100"><ellipse cx="50" cy="50" rx="40" ry="26" ${s}/></svg>`;
+  }
+}
+function makeShapeItem(d, pool, arity){
+  const distractors = simpleDistractors(pool, d, arity - 1);
+  const choices = shuffle([d, ...distractors]);
+  return { label:d.name, b:d.age, c:1/arity, s:4,
+    prompt:`Tap the ${d.name}!`, say:`Where is the ${d.name}? Tap the ${d.name}!`,
+    tiles: choices.map(c => shapeSVG(c.name)), correct: choices.indexOf(d) };
+}
+
+function makeLetterItem(d, pool, arity){
+  // distractors are always the SAME case as the target — otherwise case itself
+  // becomes the tell (one lowercase tile among capitals is a free answer)
+  const isLower = d.name === d.name.toLowerCase();
+  const samecase = pool.filter(x => (x.name === x.name.toLowerCase()) === isLower);
+  let distractors;
+  const MIRROR = { b:"d", d:"b", p:"q", q:"p" };
+  if (MIRROR[d.name] && arity >= 3 && samecase.some(x => x.name === MIRROR[d.name])){
+    // mirror-confusable targets always face their mirror — that confusion IS the skill
+    const mirror = samecase.find(x => x.name === MIRROR[d.name]);
+    distractors = [mirror, ...simpleDistractors(samecase.filter(x => x.name !== mirror.name), d, arity - 2)];
+  } else {
+    distractors = simpleDistractors(samecase, d, arity - 1);
+  }
+  const choices = shuffle([d, ...distractors]);
+  const size = isLower ? "little" : "big";
+  return { label:d.name, b:d.age, c:1/arity, s:4,
+    prompt:`Tap the ${size} letter ${d.name}!`, say:`Can you find the ${size} letter ${d.name}?`,
+    tiles: choices.map(c => `<span class="txt" style="color:#8e5bd1">${c.name}</span>`), correct: choices.indexOf(d) };
+}
+
+// v4 (mod 5): confusable distractors for multi-digit numerals — digit transpositions
+// and reversals (21<->12, 47<->74, 105<->501) generated on the fly so they exist
+// regardless of what else happens to be in NUMERAL_DEFS.
+function digitPermutations(numStr){
+  const digits = numStr.split("");
+  const seen = new Set([numStr]);
+  const results = [];
+  for (let i=0;i<digits.length-1;i++){
+    const copy = digits.slice();
+    [copy[i],copy[i+1]] = [copy[i+1],copy[i]];
+    const s = copy.join("");
+    if (copy[0] !== "0" && !seen.has(s)){ seen.add(s); results.push(s); }
+  }
+  if (digits.length > 2){
+    const rev = digits.slice().reverse().join("");
+    if (rev[0] !== "0" && !seen.has(rev)){ seen.add(rev); results.push(rev); }
+  }
+  return results;
+}
+function numeralDistractors(d, pool, n){
+  const target = d.name;
+  let candidates = target.length >= 2
+    ? digitPermutations(target).map(s => ({ label:s, name:s, age:d.age }))
+    : [];
+  const sameLen = shuffle(pool.filter(x => x.name !== target && x.name.length === target.length
+    && !candidates.some(c => c.name === x.name)));
+  let merged = [...shuffle(candidates), ...sameLen];
+  if (merged.length < n){
+    const anyOther = shuffle(pool.filter(x => x.name !== target && !merged.some(m => m.name === x.name)));
+    merged = [...merged, ...anyOther];
+  }
+  return merged.slice(0, n);
+}
+function makeNumeralItem(d, pool, arity){
+  const distractors = d.name.length >= 2 ? numeralDistractors(d, pool, arity - 1) : simpleDistractors(pool, d, arity - 1);
+  const choices = shuffle([d, ...distractors]);
+  return { label:d.name, b:d.age, c:1/choices.length, s:4,
+    // "say" passes the plain numeral string — SpeechSynthesis reads "47" as "forty-seven" naturally.
+    prompt:`Tap the number ${d.name}!`, say:`Where is the number ${d.name}?`,
+    tiles: choices.map(c => `<span class="txt" style="color:#1d6fd6">${c.name}</span>`), correct: choices.indexOf(d) };
+}
+
+function countTile(n, emoji){
+  const spans = Array.from({length:n}, () => `<span style="font-size:.45em">${emoji}</span>`).join("");
+  return `<div style="display:flex;flex-wrap:wrap;gap:4px;justify-content:center;align-items:center;padding:8px">${spans}</div>`;
+}
+function makeCountItem(d, pool, arity){
+  const candidates = [d.n-2, d.n-1, d.n+1, d.n+2, d.n+3, d.n+4].filter(x => x !== d.n && x >= 1);
+  const others = shuffle(candidates).slice(0, arity - 1);
+  const choices = shuffle([d.n, ...others]);
+  return { label:d.label, b:d.age, c:1/arity, s:4,
+    prompt:`Tap the one with ${d.n}!`, say:`Which picture has ${d.n}? Count and tap!`,
+    tiles: choices.map(c => countTile(c, d.emoji)), correct: choices.indexOf(d.n) };
+}
+
+/* position scenes: three consistent visual "worlds", each with its own set of
+   ball placements. A given item's tiles are ALWAYS drawn from a single world —
+   only the ball's position varies — so a child can't spot the answer by
+   container type alone (the measurement-validity gap flagged in NOTES.md). */
+
+// crate world: in, on, next to, behind, in front of — ALL five share the exact
+// same crate rect (no separate "open box" shape for `in`) so a distractor set
+// never leaks a container-shape tell; only the ball's (x,y)/z-order changes.
+function positionScene(rel){
+  const box = `<rect x="30" y="52" width="40" height="30" rx="3" fill="#c98a4b" stroke="#a06a30" stroke-width="2"/>`;
+  const ball = (x,y,r=9,op=1) => `<circle cx="${x}" cy="${y}" r="${r}" fill="#e63946" opacity="${op}"/><circle cx="${x-3}" cy="${y-3}" r="2.5" fill="#ff9aa2" opacity="${op}"/>`;
+  let inner;
+  switch(rel){
+    case "in": inner = box + ball(50,67,7); break; // fully within the crate's outline
+    case "on": inner = box + ball(50,42); break; // above the rim
+    case "next to": inner = box + ball(16,74); break;
+    case "behind": inner = ball(50,50,9,.9) + box; break;
+    case "in front of": inner = box + ball(50,88,9); break;
+  }
+  return `<svg viewBox="0 0 100 100">${inner}</svg>`;
+}
+// table world: the "under" item's only real def, so its distractors are other
+// ball placements within this SAME table scene (on top, beside, behind a leg)
+// rather than borrowed from a different container.
+function tableScene(kind){
+  const top = `<rect x="26" y="40" width="48" height="8" rx="2" fill="#c98a4b"/>`;
+  const legL = `<rect x="30" y="48" width="6" height="34" fill="#a06a30"/>`;
+  const legR = `<rect x="64" y="48" width="6" height="34" fill="#a06a30"/>`;
+  const ball = (x,y,r=9,op=1) => `<circle cx="${x}" cy="${y}" r="${r}" fill="#e63946" opacity="${op}"/><circle cx="${x-3}" cy="${y-3}" r="2.5" fill="#ff9aa2" opacity="${op}"/>`;
+  let inner;
+  switch(kind){
+    case "under": inner = top + legL + legR + ball(50,74); break; // centered beneath the tabletop, between the legs
+    case "ontop": inner = top + legL + legR + ball(50,29); break; // above the tabletop surface
+    case "left": inner = top + legL + legR + ball(14,70); break; // clearly beside the table, outside the leg span
+    // v6 (fix 4b audit): "behindleg" used to sit occluded behind the right leg at mid-table
+    // height — still spatially beneath the tabletop, just partly hidden, which read too close to
+    // "under" on a second look. Replaced with a placement that's fully visible, outside the
+    // table's footprint entirely, resting against the table's outer right edge — unambiguously
+    // beside it, not beneath it.
+    case "rightside": inner = top + legL + legR + ball(86,68); break;
+  }
+  return `<svg viewBox="0 0 100 100">${inner}</svg>`;
+}
+// two-crate world: same idea for "between" — distractors are other ball
+// placements around the SAME two crates (on one crate, off to the side, tucked behind) rather
+// than a single-crate or table scene.
+function twoboxScene(kind){
+  const crateL = `<rect x="8" y="52" width="28" height="30" rx="3" fill="#c98a4b" stroke="#a06a30" stroke-width="2"/>`;
+  const crateR = `<rect x="64" y="52" width="28" height="30" rx="3" fill="#c98a4b" stroke="#a06a30" stroke-width="2"/>`;
+  const ball = (x,y,r=9,op=1) => `<circle cx="${x}" cy="${y}" r="${r}" fill="#e63946" opacity="${op}"/><circle cx="${x-3}" cy="${y-3}" r="2.5" fill="#ff9aa2" opacity="${op}"/>`;
+  let inner;
+  switch(kind){
+    case "between": inner = crateL + crateR + ball(50,70); break; // small, plainly floating in the open gap at ground level — the ONLY ground-level-centered placement
+    case "onleft": inner = crateL + crateR + ball(22,44); break; // on top of the left crate
+    case "onright": inner = crateL + crateR + ball(78,44); break; // on top of the right crate
+    // v6 (fix 4b): the old "front" placement — ball(50,92), horizontally CENTERED like
+    // `between`, just lower — was reported as still reading "between but in front". Replaced
+    // with two unambiguous placements, neither centered at ground level:
+    case "farleft": inner = ball(6,74,8) + crateL + crateR; break; // clearly off to the side, well away from the gap
+    case "behind": inner = ball(50,60,20) + crateL + crateR; break; // BIG ball drawn BEHIND (z-order first) so both crates visually clip its left/right edges — reads as tucked behind them, peeking above, not floating between them
+  }
+  return `<svg viewBox="0 0 100 100">${inner}</svg>`;
+}
+function makePositionItem(d, pool, arity){
+  if (d.family === "table"){
+    const kinds = shuffle(["ontop","left","rightside"]).slice(0, arity - 1);
+    const options = shuffle([{ kind:"under", isTarget:true }, ...kinds.map(k => ({ kind:k, isTarget:false }))]);
+    return { label:d.name, b:d.age, c:1/arity, s:4,
+      prompt:`Ball ${d.name} the table?`, say:`Tap the picture where the ball is ${d.name} the table!`,
+      tiles: options.map(o => tableScene(o.kind)), correct: options.findIndex(o => o.isTarget) };
+  }
+  if (d.family === "twobox"){
+    const kinds = shuffle(["onleft","onright","farleft","behind"]).slice(0, arity - 1);
+    const options = shuffle([{ kind:"between", isTarget:true }, ...kinds.map(k => ({ kind:k, isTarget:false }))]);
+    return { label:d.name, b:d.age, c:1/arity, s:4,
+      prompt:`Ball ${d.name} the boxes?`, say:`Tap the picture where the ball is ${d.name} the boxes!`,
+      tiles: options.map(o => twoboxScene(o.kind)), correct: options.findIndex(o => o.isTarget) };
+  }
+  // crate family: distractors scoped to other crate-world relations only
+  const famPool = pool.filter(x => x.family === "crate");
+  const distractors = simpleDistractors(famPool, d, arity - 1);
+  const choices = shuffle([d, ...distractors]);
+  return { label:d.name, b:d.age, c:1/arity, s:4,
+    prompt:`Ball ${d.name} the box?`, say:`Tap the picture where the ball is ${d.name} the box!`,
+    tiles: choices.map(c => positionScene(c.name)), correct: choices.indexOf(d) };
+}
+
+/* opposites: two-choice contrast pairs — always 2AFC regardless of session arity */
+function oppositeTiles(def){
+  const [concept, , emoji, mode] = def;
+  const t = (html) => `<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%">${html}</div>`;
+  switch(mode){
+    case "size": {
+      const big = t(`<span style="font-size:1.3em">${emoji}</span>`), small = t(`<span style="font-size:.45em">${emoji}</span>`);
+      return concept==="big" ? {tiles:[big,small],correct:0,alt:[small,big],altCorrect:1} : {tiles:[big,small],correct:1};
+    }
+    case "updown": {
+      const up = t(`<span style="transform:translateY(-24%)">${emoji}</span>`), down = t(`<span style="transform:translateY(24%)">${emoji}</span>`);
+      return concept==="up" ? {tiles:[up,down],correct:0} : {tiles:[up,down],correct:1};
+    }
+    case "face": return concept==="happy" ? {tiles:[t("😊"),t("😢")],correct:0} : {tiles:[t("😊"),t("😢")],correct:1};
+    case "length": {
+      const long = t(`🚃🚃🚃🚂`.split("").length ? `<span style="font-size:.5em;white-space:nowrap">🚃🚃🚃🚂</span>` : ""), short = t(`<span style="font-size:.5em">🚂</span>`);
+      return concept==="long" ? {tiles:[long,short],correct:0} : {tiles:[long,short],correct:1};
+    }
+    case "hotcold": return concept==="hot" ? {tiles:[t("🔥"),t("🧊")],correct:0} : {tiles:[t("🔥"),t("🧊")],correct:1};
+    case "fullempty": {
+      const full = t(`<svg viewBox="0 0 100 100"><path d="M30 20 h40 l-5 65 h-30 Z" fill="none" stroke="#888" stroke-width="3"/><path d="M32 34 h36 l-4 51 h-28 Z" fill="#7ec8f7"/></svg>`);
+      const empty = t(`<svg viewBox="0 0 100 100"><path d="M30 20 h40 l-5 65 h-30 Z" fill="none" stroke="#888" stroke-width="3"/></svg>`);
+      return concept==="full" ? {tiles:[full,empty],correct:0} : {tiles:[full,empty],correct:1};
+    }
+    case "fastslow": return concept==="fast" ? {tiles:[t("🐇"),t("🐢")],correct:0} : {tiles:[t("🐇"),t("🐢")],correct:1};
+    case "quantity": {
+      const many = t(`<span style="font-size:.4em;line-height:1.2;display:inline-block;max-width:1.8em">🔴🔴🔴🔴🔴</span>`), few = t(`<span style="font-size:.9em">🔴</span>`);
+      return concept==="more" ? {tiles:[many,few],correct:0} : {tiles:[many,few],correct:1};
+    }
+    case "samediff": {
+      const same = t(`<span style="font-size:.55em;white-space:nowrap">🔵 🔵</span>`), different = t(`<span style="font-size:.55em;white-space:nowrap">🔵 🔺</span>`);
+      return concept==="same" ? {tiles:[same,different],correct:0} : {tiles:[same,different],correct:1};
+    }
+  }
+}
+function makeOppositeItem(d, pool, arity){
+  const o = oppositeTiles(d.def);
+  let tiles = o.tiles, correct = o.correct;
+  if (Math.random() < .5){ tiles = [tiles[1], tiles[0]]; correct = 1 - correct; }
+  const nounTxt = d.noun ? ` ${d.noun}` : " one";
+  return { label:d.name, b:d.age, c:0.5, s:4,
+    prompt:`Tap the ${d.name}${nounTxt}!`, say:`Which one is ${d.name}? Tap the ${d.name}${nounTxt}!`,
+    tiles, correct };
+}
+
+/* ---------- v4 (mod 4): mixed adjectives ("Tricky Pictures") ----------
+   Each item's near-miss distractors are built by flipping EXACTLY one attribute
+   (shape, color, size, or fill) off the target — never two at once — which is what
+   makes the item diagnostic rather than just "spot the different one". */
+function adjLabel(attrs){
+  // unique key: size/fill/color (if present) + shape, all lowercase — used for
+  // ds.used tracking and item-detail display.
+  const parts = [];
+  if (attrs.size) parts.push(attrs.size);
+  if (attrs.fill) parts.push(attrs.fill);
+  if (attrs.color) parts.push(attrs.color);
+  parts.push(attrs.shape);
+  return parts.join(" ");
+}
+function adjPromptLabel(attrs){
+  // matches the task's example casing: "Tap the SMALL GREEN square!" — stated
+  // attributes shouted, the shape noun stays lowercase.
+  const parts = [];
+  if (attrs.size) parts.push(attrs.size.toUpperCase());
+  if (attrs.fill) parts.push(attrs.fill.toUpperCase());
+  if (attrs.color) parts.push(attrs.color.toUpperCase());
+  parts.push(attrs.shape);
+  return parts.join(" ");
+}
+// v5 (mod 4): every legal VALUE a single dimension can take other than the target's own value
+// (not just "the other one" — shape/color have several alternates, size/fill are binary).
+function altValues(dim, target){
+  switch(dim){
+    case "shape": return ADJ_SHAPES.filter(s => s !== target.shape);
+    case "color": return ADJ_COLORS.map(c => c[0]).filter(c => c !== target.color);
+    case "size": return [target.size === "big" ? "small" : "big"];
+    case "fill": return [target.fill === "solid" ? "outline" : "solid"];
+  }
+}
+function withDim(base, dim, val){ return { ...base, [dim]: val }; }
+// every candidate that differs from target in EXACTLY one dimension
+function genOneOffCandidates(target, dims){
+  const out = [];
+  for (const dim of dims) for (const val of altValues(dim, target)) out.push(withDim(target, dim, val));
+  return out;
+}
+// every candidate that differs from target in EXACTLY two dimensions at once
+function genTwoOffCandidates(target, dims){
+  const out = [];
+  for (let i=0;i<dims.length;i++) for (let j=i+1;j<dims.length;j++){
+    const d1 = dims[i], d2 = dims[j];
+    for (const v1 of altValues(d1, target)) for (const v2 of altValues(d2, target))
+      out.push(withDim(withDim(target, d1, v1), d2, v2));
+  }
+  return out;
+}
+function adjSVG(attrs){
+  const colorHex = Object.fromEntries(ADJ_COLORS)[attrs.color];
+  const big = attrs.size === "big" || !attrs.size; // size not in play at level 1 -> full size
+  const outline = attrs.fill === "outline";
+  const scale = big ? 1 : 0.62;
+  const fillAttr = outline ? "none" : colorHex;
+  const strokeAttr = outline ? colorHex : "none";
+  const strokeWidth = outline ? 7 : 0;
+  const cx = 50, cy = 50;
+  let shapeMarkup;
+  switch(attrs.shape){
+    case "square": { const s=34*scale; shapeMarkup = `<rect x="${cx-s}" y="${cy-s}" width="${s*2}" height="${s*2}" rx="6" fill="${fillAttr}" stroke="${strokeAttr}" stroke-width="${strokeWidth}"/>`; break; }
+    case "circle": { const r=36*scale; shapeMarkup = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fillAttr}" stroke="${strokeAttr}" stroke-width="${strokeWidth}"/>`; break; }
+    case "triangle": { const s=40*scale; shapeMarkup = `<polygon points="${cx},${cy-s} ${cx+s},${cy+s*0.85} ${cx-s},${cy+s*0.85}" fill="${fillAttr}" stroke="${strokeAttr}" stroke-width="${strokeWidth}"/>`; break; }
+    case "star": { const R=40*scale, r=R*0.42, pts=[]; for(let i=0;i<10;i++){ const rad=i%2===0?R:r; const ang=(Math.PI/5)*i - Math.PI/2; pts.push(`${cx+rad*Math.cos(ang)},${cy+rad*Math.sin(ang)}`); } shapeMarkup = `<polygon points="${pts.join(" ")}" fill="${fillAttr}" stroke="${strokeAttr}" stroke-width="${strokeWidth}"/>`; break; }
+  }
+  return `<svg viewBox="0 0 100 100">${shapeMarkup}</svg>`;
+}
+// v5 (mod 4): "Tricky Pictures" now always shows 5-6 tiles — target + 3 near-misses that differ
+// in exactly ONE attribute + 1-2 harder distractors that differ in exactly TWO attributes at
+// once — ignoring the global `arity` entirely (same pattern as `opposites` forcing 2-choice
+// regardless of arity). c = 1/tileCount, so the guessing floor drops as low as 1/6.
+// Feasibility: even the sparsest level (level 1, dims=[shape,color]) can generate 7 distinct
+// one-off candidates (3 shape alternates + 4 color alternates) and 12 distinct two-off
+// candidates (3 shapes x 4 colors) — always comfortably more than the 3 one-off / 1-2 two-off
+// needed, verified programmatically across all 14 ADJ_DEFS (see NOTES.md v5 testing).
+function makeAdjItem(d, pool, arity){
+  const dims = ["shape", ...(d.size ? ["size"] : []), ...(d.color ? ["color"] : []), ...(d.fill ? ["fill"] : [])];
+  const numTwoOff = Math.random() < 0.5 ? 1 : 2;
+  const seen = new Set([adjLabel(d)]);
+
+  const oneOffs = [];
+  for (const c of shuffle(genOneOffCandidates(d, dims))){
+    const key = adjLabel(c);
+    if (seen.has(key)) continue;
+    seen.add(key); oneOffs.push(c);
+    if (oneOffs.length === 3) break;
+  }
+  const twoOffPool = shuffle(genTwoOffCandidates(d, dims));
+  const twoOffs = [];
+  for (const c of twoOffPool){
+    const key = adjLabel(c);
+    if (seen.has(key)) continue;
+    seen.add(key); twoOffs.push(c);
+    if (twoOffs.length === numTwoOff) break;
+  }
+  // defensive fallback only — the feasibility analysis above says this never triggers for any
+  // current ADJ_DEFS entry. Best-effort, not a hard guarantee: pulls another not-yet-used
+  // one-off candidate (the one-off pool is never fully exhausted by `oneOffs` above, since
+  // only 3 of its 7-9 members get consumed), so this makes landing on >=5 tiles more likely
+  // without crashing either way if it's ever hit for a future, more restrictive def.
+  if (!twoOffs.length){
+    for (const c of shuffle(genOneOffCandidates(d, dims))){
+      const key = adjLabel(c);
+      if (seen.has(key)) continue;
+      seen.add(key); twoOffs.push(c); break;
+    }
+  }
+
+  const choices = shuffle([d, ...oneOffs, ...twoOffs]);
+  return { label: adjLabel(d), b: d.b, c: 1/choices.length, s: 4,
+    prompt: `Tap the ${adjPromptLabel(d)}!`, say: `Can you find the ${adjLabel(d)}? Tap the ${adjPromptLabel(d)}!`,
+    tiles: choices.map(c => adjSVG(c)), correct: choices.indexOf(d) };
+}
+
+/* ---------- v4/v5 (mod 6/mod 5): categories ("What Belongs?") ----------
+   3 anchor icons from the theme are shown ("These go together!"), then the child
+   picks a same-theme icon among distractors pulled one-per-theme from OTHER themes.
+   v5: which 3 members play "anchor" and which plays "the answer" is re-shuffled on
+   EVERY draw (previously a static anchors[]/pool[] split) — anchors/answer are still
+   guaranteed disjoint THIS round (the answer is drawn from what's left after removing
+   the 3 anchors), it just isn't the same fixed split every time. */
+function makeCategoryItem(d, pool, arity){
+  const theme = CATEGORY_THEMES[d.theme];
+  const shuffled = shuffle(theme.members);
+  // defensive: every current theme has >=7 members so this is always 3, but never let the
+  // anchor count eat the last member available for the answer if a theme were ever trimmed.
+  const anchorCount = Math.max(0, Math.min(3, shuffled.length - 1));
+  const anchors = shuffled.slice(0, anchorCount);
+  const remainingPool = shuffled.slice(anchorCount);
+  const correctIcon = pick(remainingPool);
+  // v6 (fix 4a): never draw a distractor theme that's excluded for this theme (semantically
+  // contained by or overlapping it — see CATEGORY_EXCLUDE above). 16 themes total minus at most
+  // 4 excluded still leaves comfortably more than arity-1 (max 3) candidate themes.
+  const excluded = new Set(CATEGORY_EXCLUDE[d.theme] || []);
+  const otherKeys = shuffle(Object.keys(CATEGORY_THEMES).filter(k => k !== d.theme && !excluded.has(k))).slice(0, arity - 1);
+  const distractorIcons = otherKeys.map(k => pick(CATEGORY_THEMES[k].members));
+  const choiceIcons = shuffle([correctIcon, ...distractorIcons]);
+  return { label: d.label, b: d.age, c: 1/choiceIcons.length, s: 4,
+    prompt: `Which one belongs with them?`, say: `These go together! Which one belongs with them?`,
+    anchors,
+    tiles: choiceIcons.map(e => emojiTile(e)), correct: choiceIcons.indexOf(correctIcon) };
+}
+
+/* ---------- v4.1: Feelings cartoon-kid SVG art ----------
+   Replaces the emoji faces (proud/jealous/nervous in particular were reported
+   unreadable — visually near-identical at tile size, cross-platform emoji-glyph
+   rendering makes it worse) with ONE recurring flat-cartoon kid, composed from
+   shared head/torso/brow/eye/mouth/arm/leg primitives so every feeling has
+   identical proportions/colors and ONLY expression+posture+context prop varies.
+   3 flat colors (skin/shirt/shorts) + ink linework, matching shapeSVG()'s art
+   language above. Readability priority per the design spec: face+posture first,
+   a light context prop only for the harder/complex-tier feelings. */
+const KID = { skin:"#ffc98b", shirt:"#46c5bd", shorts:"#33587a", ink:"#3a3226",
+              blush:"#ff90a8", tear:"#57c3ff", steam:"#c7c0b6", gold:"#ffcd3c",
+              podium:"#c9924e", ribbon:"#e2503f" };
+const KID2 = { skin:"#ffc98b", shirt:"#c9a24a", shorts:"#9c9284" }; // jealous: 2nd kid — neutral/plain on purpose
+
+function svgWrap(inner, vb="0 0 100 120"){ return `<svg viewBox="${vb}" xmlns="http://www.w3.org/2000/svg">${inner}</svg>`; }
+function kidHead(cy=27, r=18){ return `<circle cx="50" cy="${cy}" r="${r}" fill="${KID.skin}"/>`; }
+function kidTorso(y=44, h=34){ return `<rect x="33" y="${y}" width="34" height="${h}" rx="15" fill="${KID.shirt}"/>`; }
+
+function kidLegs(pose){
+  const L = KID.shorts, F = KID.ink;
+  if (pose === "knees") // scared: legs angled in, feet pulled together
+    return `<path d="M40,78 L45,107 L52,107 L48,78 Z" fill="${L}"/><path d="M60,78 L55,107 L48,107 L52,78 Z" fill="${L}"/>
+      <ellipse cx="47" cy="109" rx="7.5" ry="4.5" fill="${F}"/><ellipse cx="53" cy="109" rx="7.5" ry="4.5" fill="${F}"/>`;
+  // v6 (feelings redraw): nervous — "wobble" was one bent knee, too subtle at tile size. Now
+  // both lower legs angle IN toward each other so the knees visibly touch/knock together, with
+  // small motion arcs at the knees reading as the knocking motion.
+  if (pose === "wobble")
+    return `<path d="M38,78 L48,101 L52,101 L46,78 Z" fill="${L}"/>
+      <path d="M62,78 L52,101 L48,101 L54,78 Z" fill="${L}"/>
+      <ellipse cx="47" cy="104" rx="7.5" ry="4.2" fill="${F}"/><ellipse cx="53" cy="104" rx="7.5" ry="4.2" fill="${F}"/>
+      <path d="M43,88 q7,-5 0,-10 M57,88 q-7,-5 0,-10" stroke="#ddd2bc" stroke-width="2.4" fill="none" stroke-linecap="round"/>`;
+  if (pose === "jump") // excited: tucked up, feet off the ground + motion lines
+    return `<path d="M35,74 Q29,86 33,95 L44,93 Q40,82 45,74 Z" fill="${L}"/>
+      <path d="M65,74 Q71,86 67,95 L56,93 Q60,82 55,74 Z" fill="${L}"/>
+      <ellipse cx="35" cy="97" rx="7.5" ry="4" fill="${F}"/><ellipse cx="65" cy="97" rx="7.5" ry="4" fill="${F}"/>
+      <path d="M26,111 q7,5 14,0 M60,111 q7,5 14,0" stroke="#ddd2bc" stroke-width="2.6" fill="none" stroke-linecap="round"/>`;
+  // v5.1: lonely — sitting on the ground, knees bent up toward the chest (vs. every other
+  // pose's straight standing/angled legs), feet tucked in close instead of planted apart.
+  if (pose === "sit")
+    return `<path d="M35,80 Q28,92 38,98 L50,98 L46,84 Z" fill="${L}"/>
+      <path d="M65,80 Q72,92 62,98 L50,98 L54,84 Z" fill="${L}"/>
+      <ellipse cx="34" cy="99" rx="8" ry="4" fill="${F}"/><ellipse cx="66" cy="99" rx="8" ry="4" fill="${F}"/>`;
+  // v5.1: impatient — one leg shorter/foot lifted mid-tap, small motion arcs under that foot
+  // (same "motion lines" language as jump's, but grounded/asymmetric rather than airborne).
+  if (pose === "tap")
+    return `<rect x="36" y="78" width="11" height="28" rx="5.5" fill="${L}"/><rect x="53" y="78" width="11" height="22" rx="5.5" fill="${L}"/>
+      <ellipse cx="41.5" cy="108" rx="8" ry="4.5" fill="${F}"/><ellipse cx="61" cy="100" rx="9" ry="4.2" fill="${F}"/>
+      <path d="M70,104 q6,-2 12,0" stroke="#ddd2bc" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+      <path d="M72,109 q5,-2 10,0" stroke="#ddd2bc" stroke-width="2.2" fill="none" stroke-linecap="round"/>`;
+  return `<rect x="36" y="78" width="11" height="28" rx="5.5" fill="${L}"/><rect x="53" y="78" width="11" height="28" rx="5.5" fill="${L}"/>
+    <ellipse cx="41.5" cy="108" rx="8" ry="4.5" fill="${F}"/><ellipse cx="58.5" cy="108" rx="8" ry="4.5" fill="${F}"/>`;
+}
+
+function kidArms(pose){
+  const s = KID.skin;
+  switch (pose){
+    case "up": return `<line x1="34" y1="53" x2="18" y2="22" stroke="${s}" stroke-width="10" stroke-linecap="round"/><circle cx="17" cy="20" r="5.6" fill="${s}"/>
+      <line x1="66" y1="53" x2="82" y2="22" stroke="${s}" stroke-width="10" stroke-linecap="round"/><circle cx="83" cy="20" r="5.6" fill="${s}"/>`;
+    case "upDiag": return `<path d="M34,53 L23,33 L12,14" stroke="${s}" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="12" r="5.6" fill="${s}"/>
+      <path d="M66,53 L77,33 L88,14" stroke="${s}" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="89" cy="12" r="5.6" fill="${s}"/>`;
+    case "fists": return `<path d="M32,55 L20,50 L24,38" stroke="${s}" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24" cy="36" r="6.8" fill="${s}"/>
+      <path d="M68,55 L80,50 L76,38" stroke="${s}" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="76" cy="36" r="6.8" fill="${s}"/>`;
+    case "cheeks": return `<path d="M34,54 L23,44 L34,36" stroke="${s}" stroke-width="9.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="34" cy="35" r="5.6" fill="${s}"/>
+      <path d="M66,54 L77,44 L66,36" stroke="${s}" stroke-width="9.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="66" cy="35" r="5.6" fill="${s}"/>`;
+    case "out": return `<line x1="33" y1="52" x2="7" y2="45" stroke="${s}" stroke-width="10" stroke-linecap="round"/><circle cx="5" cy="45" r="5.6" fill="${s}"/>
+      <line x1="67" y1="52" x2="93" y2="45" stroke="${s}" stroke-width="10" stroke-linecap="round"/><circle cx="95" cy="45" r="5.6" fill="${s}"/>`;
+    case "akimbo": return `<path d="M34,53 L24,60 L33,73" stroke="${s}" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M66,53 L76,60 L67,73" stroke="${s}" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+    case "clasped": return `<line x1="34" y1="53" x2="46" y2="67" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/>
+      <line x1="66" y1="53" x2="54" y2="67" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/><circle cx="50" cy="68" r="6.2" fill="${s}"/>`;
+    case "crossed": return `<line x1="30" y1="57" x2="64" y2="69" stroke="${s}" stroke-width="9" stroke-linecap="round"/>
+      <line x1="70" y1="57" x2="36" y2="69" stroke="${s}" stroke-width="9" stroke-linecap="round"/>`;
+    case "droop": return `<line x1="34" y1="53" x2="28" y2="78" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/><circle cx="27" cy="80" r="5.2" fill="${s}"/>
+      <line x1="66" y1="53" x2="72" y2="78" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/><circle cx="73" cy="80" r="5.2" fill="${s}"/>`;
+    case "sides": return `<line x1="34" y1="53" x2="26" y2="73" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/>
+      <line x1="66" y1="53" x2="74" y2="73" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/>`;
+    case "hugOne": return `<line x1="34" y1="53" x2="43" y2="71" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/>`; // embarrassed: only the non-covering arm; the other is drawn in front of the face separately
+    // v5.1 new poses (feelings bank expansion):
+    case "chin": return `<path d="M34,53 L39,65 L48,61" stroke="${s}" stroke-width="9.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="48" cy="60" r="5.6" fill="${s}"/>
+      <line x1="66" y1="53" x2="71" y2="75" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/><circle cx="72" cy="76" r="5.2" fill="${s}"/>`; // curious: finger to chin, other arm at side
+    case "chinRest": return `<line x1="34" y1="53" x2="29" y2="75" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/><circle cx="28" cy="76" r="5.2" fill="${s}"/>
+      <path d="M66,53 L73,49 L65,43" stroke="${s}" stroke-width="9.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="64" cy="42" r="5.6" fill="${s}"/>`; // bored: chin propped on hand
+    // v6: guilty is now "one hand behind back" (singular, per the redraw brief) — the near arm
+    // (toward the viewer/jar side) rests normally at the side, only the far arm tucks behind.
+    case "behindBack": return `<line x1="34" y1="53" x2="27" y2="73" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/><circle cx="26" cy="75" r="5.2" fill="${s}"/>
+      <path d="M64,54 Q72,62 64,71" stroke="${s}" stroke-width="9" fill="none" stroke-linecap="round"/>`; // guilty: one hand tucked behind back
+    case "chestHands": return `<path d="M34,53 L44,60" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/><circle cx="46" cy="61" r="5.4" fill="${s}"/>
+      <path d="M66,53 L56,60" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/><circle cx="54" cy="61" r="5.4" fill="${s}"/>`; // grateful: both hands meeting at chest, receiving a gift
+    // v6 (feelings redraw): curious — both hands extend out to hold a big magnifying glass
+    // (drawn by magnifyingGlassProp, a `front` prop) out over the ladybug at lower-right; one
+    // arm reaches further than the other so the glass reads as actively held out, not resting.
+    case "magnify": return `<line x1="34" y1="53" x2="27" y2="72" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/><circle cx="26" cy="74" r="5.2" fill="${s}"/>
+      <path d="M66,53 L79,60 L88,68" stroke="${s}" stroke-width="9.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="89" cy="70" r="5.6" fill="${s}"/>`;
+    // v6 (feelings redraw): lonely — arms wrap forward and down around the raised/bent knees
+    // (paired with legs:"sit"), hands meeting in a clasp in front of the shins.
+    case "hugKnees": return `<path d="M34,53 Q29,74 41,88" stroke="${s}" stroke-width="9.5" fill="none" stroke-linecap="round"/>
+      <path d="M66,53 Q71,74 59,88" stroke="${s}" stroke-width="9.5" fill="none" stroke-linecap="round"/><circle cx="50" cy="90" r="6" fill="${s}"/>`;
+    default: return "";
+  }
+}
+
+function kidBrows(type){
+  const c = KID.ink;
+  switch (type){
+    case "raised": return `<path d="M35,16 Q41,9 47,15" stroke="${c}" stroke-width="3" fill="none" stroke-linecap="round"/><path d="M53,15 Q59,9 65,16" stroke="${c}" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+    case "v": return `<path d="M35,13 L47,20" stroke="${c}" stroke-width="3.4" fill="none" stroke-linecap="round"/><path d="M65,13 L53,20" stroke="${c}" stroke-width="3.4" fill="none" stroke-linecap="round"/>`;
+    case "innerUp": return `<path d="M36,22 Q41,13 48,17" stroke="${c}" stroke-width="3" fill="none" stroke-linecap="round"/><path d="M64,22 Q59,13 52,17" stroke="${c}" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+    // v6 (feelings redraw): nervous's "worried high-inner brows" — raised the peak and steepened
+    // the inner-corner lift (was a flat, easy-to-miss arc) so it reads as worried at tile size.
+    case "worried": return `<path d="M36,20 Q40,10 47,16" stroke="${c}" stroke-width="3" fill="none" stroke-linecap="round"/><path d="M64,20 Q60,10 53,16" stroke="${c}" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+    case "flat": return `<line x1="36" y1="17" x2="47" y2="17" stroke="${c}" stroke-width="2.6" stroke-linecap="round"/><line x1="53" y1="17" x2="64" y2="17" stroke="${c}" stroke-width="2.6" stroke-linecap="round"/>`;
+    // v5.1: frustrated — steeper/closer-together than "v" (angry), plus a small vertical
+    // crease between the brows so it doesn't read as a re-skinned angry face at tile size.
+    case "furrow": return `<path d="M38,12 L46,20" stroke="${c}" stroke-width="3.2" fill="none" stroke-linecap="round"/><path d="M62,12 L54,20" stroke="${c}" stroke-width="3.2" fill="none" stroke-linecap="round"/><line x1="50" y1="14" x2="50" y2="19" stroke="${c}" stroke-width="2" stroke-linecap="round"/>`;
+    // v5.1: confused — one brow arched up, the other flat/level, for a lopsided "huh?" look.
+    case "asym": return `<path d="M35,10 Q41,5 48,12" stroke="${c}" stroke-width="3" fill="none" stroke-linecap="round"/><path d="M53,18 L65,17" stroke="${c}" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+    default: return `<line x1="37" y1="17" x2="46" y2="16" stroke="${c}" stroke-width="2.6" stroke-linecap="round"/><line x1="54" y1="16" x2="63" y2="17" stroke="${c}" stroke-width="2.6" stroke-linecap="round"/>`;
+  }
+}
+
+function kidEyes(type){
+  const c = KID.ink;
+  switch (type){
+    case "wide": return `<circle cx="42" cy="27" r="7.4" fill="#fff" stroke="${c}" stroke-width="1.6"/><circle cx="43.6" cy="28.2" r="3" fill="${c}"/>
+      <circle cx="58" cy="27" r="7.4" fill="#fff" stroke="${c}" stroke-width="1.6"/><circle cx="59.6" cy="28.2" r="3" fill="${c}"/>`;
+    case "heavy": return `<path d="M37,27 Q42,31 47,27" stroke="${c}" stroke-width="3" fill="none" stroke-linecap="round"/><path d="M53,27 Q58,31 63,27" stroke="${c}" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+    case "wink": return `<path d="M37,27 Q42,30.5 47,27" stroke="${c}" stroke-width="3.2" fill="none" stroke-linecap="round"/><circle cx="58" cy="26.5" r="3.6" fill="${c}"/>`;
+    case "side": return `<ellipse cx="43" cy="27" rx="4.4" ry="3.8" fill="#fff" stroke="${c}" stroke-width="1.4"/><circle cx="45.6" cy="27.4" r="2.7" fill="${c}"/>
+      <ellipse cx="59" cy="27" rx="4.4" ry="3.8" fill="#fff" stroke="${c}" stroke-width="1.4"/><circle cx="61.6" cy="27.4" r="2.7" fill="${c}"/>`;
+    // v5.1: bored — flattened, half-open lens shape with a visible pupil, distinct from both
+    // "heavy" (a fully closed lidded curve, no pupil) and "wide"/"dot" (fully open).
+    case "half": return `<path d="M36,26 Q42,22.5 48,26 L48,28.5 Q42,30.5 36,28.5 Z" fill="#fff" stroke="${c}" stroke-width="1.4"/><circle cx="42" cy="27.3" r="2.6" fill="${c}"/>
+      <path d="M52,26 Q58,22.5 64,26 L64,28.5 Q58,30.5 52,28.5 Z" fill="#fff" stroke="${c}" stroke-width="1.4"/><circle cx="58" cy="27.3" r="2.6" fill="${c}"/>`;
+    default: return `<circle cx="42" cy="27" r="3.5" fill="${c}"/><circle cx="58" cy="27" r="3.5" fill="${c}"/>`;
+  }
+}
+
+function kidMouth(type){
+  const c = KID.ink;
+  switch (type){
+    case "bigSmile": return `<path d="M36,34 Q50,47 64,34 Q50,41 36,34 Z" fill="${c}"/>`;
+    case "smallSmile": return `<path d="M41,37 Q50,44 59,37" stroke="${c}" stroke-width="3.2" fill="none" stroke-linecap="round"/>`;
+    case "frown": return `<path d="M40,43 Q50,33 60,43" stroke="${c}" stroke-width="3.6" fill="none" stroke-linecap="round"/>`;
+    case "downTurn": return `<path d="M40,41 Q50,33 60,41" stroke="${c}" stroke-width="3.2" fill="none" stroke-linecap="round"/>`;
+    case "o": return `<ellipse cx="50" cy="38" rx="5" ry="6.6" fill="${c}"/>`;
+    case "wavy": return `<path d="M38,37 Q42,33 46,37 Q50,41 54,37 Q58,33 62,37" stroke="${c}" stroke-width="2.6" fill="none" stroke-linecap="round"/>`;
+    case "yawn": return `<ellipse cx="50" cy="38" rx="7" ry="7.6" fill="${c}"/>`;
+    case "tongue": return `<path d="M36,34 Q50,47 64,34 Q50,41 36,34 Z" fill="${c}"/><path d="M45,42 Q50,50 55,42 Q50,45 45,42 Z" fill="#ff90a8"/>`;
+    case "pouty": return `<path d="M44,39 Q50,43.5 56,39 Q50,36 44,39 Z" fill="${c}"/>`;
+    // v5.1 new mouths (feelings bank expansion):
+    case "gritted": return `<rect x="39" y="35" width="22" height="6" rx="1" fill="#fff" stroke="${c}" stroke-width="2"/><line x1="45" y1="35" x2="45" y2="41" stroke="${c}" stroke-width="1.3"/><line x1="50" y1="35" x2="50" y2="41" stroke="${c}" stroke-width="1.3"/><line x1="55" y1="35" x2="55" y2="41" stroke="${c}" stroke-width="1.3"/>`; // frustrated: clenched teeth
+    case "zigzag": return `<path d="M40,37 L45,33 L50,37 L55,33 L60,37" stroke="${c}" stroke-width="2.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`; // confused: sharp jagged zigzag (vs. "wavy"'s smooth curves)
+    case "flat": return `<line x1="42" y1="38" x2="58" y2="38" stroke="${c}" stroke-width="2.6" stroke-linecap="round"/>`; // bored/guilty: a plain closed line, no curve either way
+    case "mildFrown": return `<path d="M42,40 Q50,35.5 58,40" stroke="${c}" stroke-width="3" fill="none" stroke-linecap="round"/>`; // disappointed: a shallower downturn than sad's "downTurn"
+    default: return `<path d="M41,37 Q50,44 59,37" stroke="${c}" stroke-width="3.2" fill="none" stroke-linecap="round"/>`;
+  }
+}
+
+function kidBase({brows, eyes, mouth, arms, legs, tilt=0, front=""}){
+  const tf = tilt ? ` transform="rotate(${tilt} 50 60)"` : "";
+  return `<g${tf}>
+    ${kidLegs(legs)}
+    ${kidTorso()}
+    ${kidArms(arms)}
+    ${kidHead()}
+    ${kidBrows(brows)}
+    ${kidEyes(eyes)}
+    ${kidMouth(mouth)}
+    ${front}
+  </g>`;
+}
+
+/* ---- context props (complex-tier feelings only get one; a couple of simple-tier
+   feelings get a tiny integrated mark — tear/steam/zzz/!/sparkle — that reads as
+   part of the face rather than a separate object) ---- */
+function tearProp(){ return `<ellipse cx="42" cy="34" rx="2.2" ry="4.2" fill="${KID.tear}"/>`; }
+function steamProp(){ return `<g stroke="${KID.steam}" stroke-width="2.4" stroke-linecap="round" fill="none">
+  <path d="M31,9 q-2,-5 0,-9"/><path d="M50,5 q-2,-5 0,-9"/><path d="M69,9 q-2,-5 0,-9"/></g>`; }
+function zzzProp(){ return `<text x="70" y="17" font-size="13" font-weight="800" fill="${KID.ink}" font-family="sans-serif">z</text><text x="79" y="9" font-size="9" font-weight="800" fill="${KID.ink}" font-family="sans-serif">z</text>`; }
+function exclaimProp(){ return `<text x="77" y="19" font-size="20" font-weight="900" fill="${KID.ink}" font-family="sans-serif">!</text>`; }
+function sparkleProp(){
+  const star = (x,y,s) => `<path transform="translate(${x},${y}) scale(${s})" d="M0,-6 L1.6,-1.6 L6,0 L1.6,1.6 L0,6 L-1.6,1.6 L-6,0 L-1.6,-1.6 Z" fill="${KID.gold}"/>`;
+  return star(12,22,1) + star(88,26,.85) + star(80,6,.6);
+}
+// v6 (feelings redraw): nervous's sweat was a single small drop — easy to miss at tile size.
+// Now 3 clearly-blue drops of varying size scattered around the upper-right of the head, big
+// enough to read as "sweating" on sight rather than needing a close look.
+function sweatProp(){
+  const drop = (x,y,s=1) => `<path transform="translate(${x},${y}) scale(${s})" d="M0,-8 Q6,0 0,7 Q-6,3 -6,-1 Q-6,-6 0,-8 Z" fill="${KID.tear}"/>`;
+  return drop(70,12,1.35) + drop(80,26,1.05) + drop(64,26,0.85);
+}
+function medalProp(){ return `<circle cx="50" cy="60" r="6.6" fill="${KID.gold}" stroke="${KID.ink}" stroke-width="1.2"/><path d="M46,55 L44,45 L50,49 L56,45 L54,55" fill="none" stroke="${KID.ribbon}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`; }
+function podiumProp(){ return `<rect x="28" y="100" width="44" height="16" rx="2" fill="${KID.podium}"/>`; }
+function blushProp(){ return `<ellipse cx="37" cy="32" rx="5.2" ry="3.4" fill="${KID.blush}" opacity=".8"/><ellipse cx="63" cy="32" rx="5.2" ry="3.4" fill="${KID.blush}" opacity=".8"/>`; }
+function coverHandProp(){ // drawn AFTER the head so the hand sits in front of the face, covering one eye
+  return `<path d="M66,53 L59,38 L51,25" stroke="${KID.skin}" stroke-width="9.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="50" cy="23" r="6.2" fill="${KID.skin}"/>`;
+}
+function iceCreamProp(cx,cy,scale){
+  return `<g transform="translate(${cx},${cy}) scale(${scale})">
+    <path d="M-5,0 L5,0 L0,14 Z" fill="#e8c39e"/>
+    <circle cx="0" cy="-5" r="7" fill="#ffb6c8"/><circle cx="-4" cy="-9" r="4.5" fill="#fff3c4"/>
+  </g>`;
+}
+function secondKidProp(cx, cy, scale){
+  // the jealous target's rival: same body plan, deliberately neutral/plain
+  // (flat mouth, plain dot eyes, no brow expression) so only the main kid's
+  // face carries the emotion — this kid is just "who they're jealous of."
+  const s = KID2.skin, c = KID.ink;
+  return `<g transform="translate(${cx},${cy}) scale(${scale})">
+    <rect x="36" y="78" width="11" height="26" rx="5.5" fill="${KID2.shorts}"/><rect x="53" y="78" width="11" height="26" rx="5.5" fill="${KID2.shorts}"/>
+    <ellipse cx="41.5" cy="106" rx="8" ry="4.5" fill="${c}"/><ellipse cx="58.5" cy="106" rx="8" ry="4.5" fill="${c}"/>
+    <rect x="33" y="44" width="34" height="34" rx="15" fill="${KID2.shirt}"/>
+    <line x1="34" y1="53" x2="27" y2="70" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/>
+    <line x1="66" y1="53" x2="79" y2="47" stroke="${s}" stroke-width="9.5" stroke-linecap="round"/>
+    <circle cx="50" cy="27" r="18" fill="${s}"/>
+    <circle cx="42" cy="27" r="3.2" fill="${c}"/><circle cx="58" cy="27" r="3.2" fill="${c}"/>
+    <path d="M42,37 Q50,40 58,37" stroke="${c}" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+    ${iceCreamProp(80,44,1)}
+  </g>`;
+}
+
+/* ---- v5.1 new context props (feelings bank expansion, b 54-95) ---- */
+function peekBothHandsProp(){
+  // shy: BOTH hands raised to cover the lower face (mouth/cheeks) while the eyes stay
+  // visible above — drawn as a `front` prop (like coverHandProp) rather than via kidArms,
+  // since both arms are needed for the covering gesture and neither should render "at rest".
+  return `<path d="M34,53 L40,42 L48,40" stroke="${KID.skin}" stroke-width="9" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="48" cy="39" r="5.6" fill="${KID.skin}"/>
+    <path d="M66,53 L60,42 L52,40" stroke="${KID.skin}" stroke-width="9" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="52" cy="39" r="5.6" fill="${KID.skin}"/>`;
+}
+function blocksToppledProp(){ // frustrated: toppled toy blocks at the feet
+  return `<rect x="8" y="98" width="14" height="14" rx="2" fill="#e63946" transform="rotate(-18 15 105)"/>
+    <rect x="20" y="102" width="13" height="13" rx="2" fill="#4ecdc4" transform="rotate(12 26 108)"/>
+    <rect x="4" y="106" width="12" height="12" rx="2" fill="#f4c614" transform="rotate(-8 10 112)"/>`;
+}
+// v6 (feelings redraw): curious — the old version was a tiny ladybug tucked in a corner, easy to
+// miss. Now a BIG ladybug (magnified by the glass, so it's drawn oversized) with a large
+// magnifying-glass ring held out over it by the "magnify" arm pose (see kidArms) — the
+// investigation is now unmistakable rather than needing a close look to even notice the bug.
+function magnifyingGlassProp(){
+  return `<g>
+    <ellipse cx="86" cy="97" rx="12" ry="9.5" fill="#e63946" stroke="${KID.ink}" stroke-width="1.4"/>
+    <path d="M86,88 L86,106" stroke="${KID.ink}" stroke-width="1.3"/>
+    <circle cx="80.5" cy="93" r="3.6" fill="${KID.ink}"/>
+    <circle cx="80.5" cy="99" r="1.6" fill="${KID.ink}"/><circle cx="91.5" cy="99" r="1.6" fill="${KID.ink}"/><circle cx="86" cy="105" r="1.6" fill="${KID.ink}"/>
+    <line x1="89" y1="71" x2="87" y2="82" stroke="#a06a30" stroke-width="4.5" stroke-linecap="round"/>
+    <circle cx="86" cy="93" r="17" fill="rgba(210,235,255,.3)" stroke="${KID.ink}" stroke-width="3.2"/>
+    <circle cx="80" cy="87" r="2.5" fill="#fff" opacity=".7"/>
+  </g>`;
+}
+function questionMarkProp(){ return `<text x="74" y="18" font-size="20" font-weight="900" fill="${KID.ink}" font-family="sans-serif">?</text>`; } // confused
+function iceCreamDropProp(){ // disappointed: the dropped scoop, tipped over on the ground
+  return `<g transform="translate(74,104)"><ellipse cx="0" cy="4" rx="10" ry="4" fill="#dcd3bd"/><circle cx="-2" cy="-3" r="8" fill="#ffb6c8"/></g>`;
+}
+// v6 (feelings redraw): lonely — the old pair was two faraway dots, read as visual noise rather
+// than "other kids playing". Now two full mini kid figures (head/torso/legs/an arm each) with a
+// ball between them, at ~40% scale, in the upper-right corner — clearly readable as "a pair
+// playing together" that the sitting kid is left out of.
+function twoKidsBgProp(){
+  const mkKid = (cx, faceIn) => { // faceIn: true = arm/gaze toward center (toward the ball)
+    const d = faceIn ? 1 : -1;
+    return `<g transform="translate(${cx},0)">
+      <rect x="-9" y="15" width="18" height="17" rx="8" fill="${KID2.shirt}"/>
+      <rect x="-8" y="30" width="6.5" height="13" rx="3" fill="${KID2.shorts}"/><rect x="1.5" y="30" width="6.5" height="13" rx="3" fill="${KID2.shorts}"/>
+      <line x1="${9*d}" y1="20" x2="${18*d}" y2="27" stroke="${KID2.skin}" stroke-width="4.6" stroke-linecap="round"/>
+      <circle cx="0" cy="6" r="11" fill="${KID2.skin}"/>
+      <circle cx="${2*d}" cy="5" r="1.5" fill="${KID.ink}"/>
+      <path d="M-3,10 Q0,12 3,10" stroke="${KID.ink}" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+    </g>`;
+  };
+  return `<g transform="translate(64,1) scale(.4)">
+    ${mkKid(0, true)}
+    <circle cx="27" cy="34" r="7.5" fill="#f4c614" stroke="${KID.ink}" stroke-width="1.6"/><path d="M27,27 v14 M20,34 h14" stroke="${KID.ink}" stroke-width="1" opacity=".6"/>
+    ${mkKid(54, false)}
+  </g>`;
+}
+// v6 (feelings redraw): guilty — the old jar was an abstract outline + squiggle, read as noise.
+// Now an unmistakably TIPPED jar (rotated onto its side) with a jagged crack across it and 3
+// spilled cookies (chocolate-chip dots) scattered on the ground beside it.
+function cookieJarBrokenProp(){
+  // v6 iteration: the first draft rotated the jar to a shallow diagonal with 3 cookies lined up
+  // in a row below it — at tile size that read as a 4-wheeled cart/wagon, not a broken jar
+  // (caught in screenshot review). Redrawn lying flat on its side (long axis horizontal, mouth
+  // facing the kid) with the cookies clustered close to the mouth at staggered heights instead
+  // of one aligned row, so nothing suggests wheels.
+  return `<g>
+    <path d="M76,90 L98,90 Q104,90 104,96 L104,102 Q104,108 98,108 L80,108 Q74,108 74,102 Z" fill="#fff" fill-opacity=".5" stroke="${KID.ink}" stroke-width="2.6"/>
+    <ellipse cx="76" cy="99" rx="4" ry="9" fill="none" stroke="${KID.ink}" stroke-width="2.2"/>
+    <path d="M88,90 L93,98 L87,102 L95,108" stroke="${KID.ink}" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="58" cy="106" r="6.2" fill="#c98a4b" stroke="${KID.ink}" stroke-width="1.4"/><circle cx="56" cy="104" r="1" fill="#6b3d17"/><circle cx="60.5" cy="108" r="1" fill="#6b3d17"/>
+    <circle cx="65" cy="93" r="5.6" fill="#c98a4b" stroke="${KID.ink}" stroke-width="1.4"/><circle cx="63" cy="91.5" r="1" fill="#6b3d17"/>
+    <circle cx="53" cy="90" r="5" fill="#c98a4b" stroke="${KID.ink}" stroke-width="1.4"/><circle cx="51.5" cy="88.5" r="1" fill="#6b3d17"/>
+  </g>`;
+}
+function giftBoxProp(){ // grateful: the gift, positioned right where chestHands meet
+  return `<g transform="translate(50,66)">
+    <rect x="-11" y="-9" width="22" height="18" rx="2" fill="#8e5bd1"/>
+    <rect x="-11" y="-2" width="22" height="4" fill="#ffcd3c"/><rect x="-2" y="-9" width="4" height="18" fill="#ffcd3c"/>
+    <path d="M-4,-9 Q-8,-16 -1,-13 Q2,-16 4,-9 Z" fill="#ffcd3c"/>
+  </g>`;
+}
+function clockProp(){ // impatient: a small clock (pairs with "tap" legs' motion lines)
+  return `<g transform="translate(78,16)">
+    <circle cx="0" cy="0" r="10" fill="#fff" stroke="${KID.ink}" stroke-width="2"/>
+    <line x1="0" y1="0" x2="0" y2="-6" stroke="${KID.ink}" stroke-width="1.6" stroke-linecap="round"/>
+    <line x1="0" y1="0" x2="5" y2="2" stroke="${KID.ink}" stroke-width="1.6" stroke-linecap="round"/>
+  </g>`;
+}
+
+const FEELING_SVG = {
+  happy:  () => svgWrap(kidBase({ brows:"raised", eyes:"dot",  mouth:"bigSmile",  arms:"up",     legs:"stand" })),
+  sad:    () => svgWrap(kidBase({ brows:"innerUp", eyes:"dot", mouth:"downTurn",  arms:"droop",  legs:"stand", tilt:-5, front: tearProp() })),
+  angry:  () => svgWrap(kidBase({ brows:"v",       eyes:"dot", mouth:"frown",     arms:"fists",  legs:"stand" }) + steamProp()),
+  sleepy: () => svgWrap(kidBase({ brows:"flat",    eyes:"heavy", mouth:"yawn",    arms:"droop",  legs:"stand" }) + zzzProp()),
+  scared: () => svgWrap(kidBase({ brows:"raised",  eyes:"wide", mouth:"o",        arms:"cheeks", legs:"knees" })),
+  surprised: () => svgWrap(kidBase({ brows:"raised", eyes:"dot", mouth:"o",       arms:"out",    legs:"stand" }) + exclaimProp()),
+  excited: () => svgWrap(kidBase({ brows:"raised", eyes:"dot", mouth:"bigSmile", arms:"upDiag", legs:"jump" }) + sparkleProp()),
+  silly:  () => svgWrap(kidBase({ brows:"default", eyes:"wink", mouth:"tongue",  arms:"akimbo", legs:"stand" })),
+  nervous: () => svgWrap(kidBase({ brows:"worried", eyes:"dot", mouth:"wavy",    arms:"clasped", legs:"wobble" }) + sweatProp()),
+  proud:  () => svgWrap(podiumProp() + kidBase({ brows:"raised", eyes:"dot", mouth:"smallSmile", arms:"sides", legs:"stand" }) + medalProp()),
+  embarrassed: () => svgWrap(kidBase({ brows:"innerUp", eyes:"dot", mouth:"smallSmile", arms:"hugOne", legs:"stand", tilt:6, front: coverHandProp() }) + blushProp()),
+  jealous: () => svgWrap(`<g transform="translate(-13,3) scale(.92)">${kidBase({ brows:"default", eyes:"side", mouth:"pouty", arms:"crossed", legs:"stand" })}</g>${secondKidProp(54,24,.54)}`),
+  // v5.1: 10 new expressions (b 54-95) — each combo double-checked against every existing
+  // entry above (and against each other) for tile-size distinctness; see the adjacent
+  // FEELING_DEFS comment for the full "who's most confused with whom" reasoning.
+  frustrated:  () => svgWrap(kidBase({ brows:"furrow", eyes:"dot",  mouth:"gritted",   arms:"fists",     legs:"stand" }) + blocksToppledProp()),
+  // v6: redrawn — bent forward toward a BIG ladybug held under a large magnifying glass
+  // (magnifyingGlassProp, "magnify" arms), high raised brows, mouth "o" (investigating), instead
+  // of the old tiny-chin-touch pose that read as nothing in particular.
+  curious:     () => svgWrap(kidBase({ brows:"raised", eyes:"dot",  mouth:"o", arms:"magnify",     legs:"stand", tilt:14 }) + magnifyingGlassProp()),
+  confused:    () => svgWrap(kidBase({ brows:"asym",   eyes:"dot",  mouth:"zigzag",    arms:"sides",     legs:"stand" }) + questionMarkProp()),
+  shy:         () => svgWrap(kidBase({ brows:"raised", eyes:"dot",  mouth:"smallSmile", legs:"knees",    front: peekBothHandsProp() })),
+  bored:       () => svgWrap(kidBase({ brows:"flat",   eyes:"half", mouth:"flat",      arms:"chinRest",  legs:"stand", tilt:7 })),
+  disappointed:() => svgWrap(kidBase({ brows:"flat",   eyes:"dot",  mouth:"mildFrown", arms:"droop",     legs:"stand" }) + iceCreamDropProp()),
+  // v6: redrawn — sitting HUGGING knees (legs:"sit" + arms:"hugKnees", was just droopy arms),
+  // head tilted down, and a clearly-readable pair of kids playing with a ball at ~40% scale in
+  // the upper corner (twoKidsBgProp, full mini-figures now, not two faraway dots). The sitting
+  // kid's own colors are muted to ~85% opacity to signal isolation from the pair.
+  lonely:      () => svgWrap(`<g transform="translate(-10,5) scale(.88)" opacity=".85">${kidBase({ brows:"innerUp", eyes:"dot", mouth:"mildFrown", arms:"hugKnees", legs:"sit", tilt:14 })}</g>` + twoKidsBgProp()),
+  // v6: redrawn — an obvious TIPPED cookie jar with spilled cookies + a jagged crack (was an
+  // abstract outline+squiggle read as noise). Kid tilts AWAY from the jar (hunched away, -tilt)
+  // with a side-glance (eyes:"side", which looks toward positive x, i.e. back toward the jar)
+  // and one hand tucked behind the back (see the reworked "behindBack" arm pose above).
+  guilty:      () => svgWrap(kidBase({ brows:"innerUp", eyes:"side", mouth:"flat",     arms:"behindBack", legs:"stand", tilt:-9 }) + cookieJarBrokenProp()),
+  grateful:    () => svgWrap(kidBase({ brows:"raised",  eyes:"dot",  mouth:"bigSmile", arms:"chestHands", legs:"stand" }) + giftBoxProp()),
+  impatient:   () => svgWrap(kidBase({ brows:"flat",    eyes:"dot",  mouth:"flat",     arms:"crossed",    legs:"tap" }) + clockProp()),
+};
+function feelingSVG(name){ return (FEELING_SVG[name] || FEELING_SVG.happy)(); }
+
+/* ---------- v4 (mod 7): feelings ("Who feels X?") ---------- */
+// v4.1: complex-tier feelings (nervous/proud/embarrassed/jealous, b66-83) each carry
+// one context prop (sweat/medal+podium/blush/second-kid+ice-cream) that the simple-tier
+// feelings (happy...silly) mostly don't. The plain ±12mo age window let a complex target
+// occasionally draw simple-tier, prop-less distractors — verified empirically (500 draws/
+// target): nervous and proud each pulled a simple-tier item ~25% of the time, and jealous
+// (whose ±12mo window only catches 2 other complex feelings, short of the 3 needed at
+// arity 4) fell back to the full 11-item pool and drew simple/prop-less faces ~72% of the
+// time — exactly the "one prop-bearing tile is an automatic giveaway" leak the design
+// spec warned about. Fix: a complex-tier target now prefers distractors from the other
+// 3 complex feelings first (always enough for arity <=4); only falls through to the old
+// age-window/any-other logic if that ever comes up short.
+// v5.1: expanded from the original 4-item hardcoded set to cover the new bank. With 10 new
+// (mostly prop-bearing) items added, roughly half the 22-item bank now carries a distinguishing
+// added element (a standalone object/second-figure/background scene, not just a small
+// integrated face mark like a tear or steam curl) — so the same leak the v4.1 comment below
+// describes is no longer a narrow "4 hardest items" problem, it's structural. Membership:
+// nervous/proud/embarrassed/jealous (original) + frustrated/curious/disappointed/lonely/
+// guilty/grateful/impatient (new: blocks, ladybug, dropped ice cream, background kids, broken
+// jar, gift box, clock respectively). confused/shy/bored are deliberately left OUT — their
+// question-mark/peeking-hands/chin-rest devices are small and face-adjacent, closer in kind to
+// sad's tear or surprised's exclaim mark than to a standalone prop.
+const FEELING_COMPLEX = new Set([
+  "nervous","proud","embarrassed","jealous",
+  "frustrated","curious","disappointed","lonely","guilty","grateful","impatient",
+]);
+function feelingDistractors(pool, target, n){
+  // v5.1: generalized to prefer same-tier distractors in BOTH directions (propped target ->
+  // propped distractors, plain target -> plain distractors), not just "propped target ->
+  // propped distractors" as before. With the denser bank a plain-tier target (e.g. confused,
+  // b62) can easily fall within the ±12mo fallback window of a propped item (e.g. disappointed,
+  // b74) — the same "presence of a decoration is itself the giveaway" leak the original v4.1
+  // fix targeted, just now also possible in reverse. Each tier has 11 members, comfortably
+  // above the largest n needed (arity 4 -> n=3), so this branch always has enough to satisfy n
+  // without ever reaching the age-window fallback below.
+  const targetPropped = FEELING_COMPLEX.has(target.name);
+  const sameTier = pool.filter(x => x.name !== target.name && FEELING_COMPLEX.has(x.name) === targetPropped);
+  if (sameTier.length >= n) return shuffle(sameTier).slice(0, n);
+  let near = pool.filter(x => x.label !== target.label && Math.abs(x.age - target.age) <= 12);
+  if (near.length < n) near = pool.filter(x => x.label !== target.label);
+  return shuffle(near).slice(0, n);
+}
+function makeFeelingItem(d, pool, arity){
+  const distractors = feelingDistractors(pool, d, arity - 1);
+  const choices = shuffle([d, ...distractors]);
+  return { label: d.name, b: d.age, c: 1/choices.length, s: 4,
+    prompt: `Who feels ${d.name}?`, say: `Who feels ${d.name}? Tap the ${d.name} face!`,
+    tiles: choices.map(c => feelingSVG(c.name)), correct: choices.indexOf(d) };
+}
+
+
+/* ---------- audio ---------- */
+let audioCtx = null;
+function tone(freq, dur, delay=0, type="sine", vol=.25){
+  if (state.muted) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, audioCtx.currentTime + delay);
+    g.gain.exponentialRampToValueAtTime(.001, audioCtx.currentTime + delay + dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(audioCtx.currentTime + delay); o.stop(audioCtx.currentTime + delay + dur);
+  } catch(e){}
+}
+function chimeGood(){ tone(523,.15); tone(659,.15,.12); tone(784,.3,.24); }
+function chimeTry(){ tone(330,.25,0,"sine",.15); }
+function fanfare(){ [523,587,659,784,880,1047].forEach((f,i)=>tone(f,.22,i*.09,"triangle",.2)); }
+
+let voice = null;
+function pickVoice(){
+  const vs = speechSynthesis.getVoices().filter(v => v.lang.startsWith("en"));
+  const local = vs.filter(v => v.localService === true);
+  // prefer LOCAL voices: Chrome's network voices (e.g. "Google US English")
+  // fail silently when offline/flaky, which reads as "chimes play, no speech".
+  voice = local.find(v => /Samantha/i.test(v.name))
+    || local.find(v => /Samantha|Karen|Ava|Alex|Daniel/i.test(v.name))
+    || local[0]
+    || vs.find(v => /Samantha|Karen|Ava|Alex|Daniel/i.test(v.name))
+    || vs[0]
+    || null;
+}
+if ("speechSynthesis" in window){ pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+function setSpeakPulse(on){
+  const btn = $("speakBtn");
+  if (btn) btn.classList.toggle("pulse", on);
+}
+function speak(text, cb){
+  if (!("speechSynthesis" in window)) { cb && cb(); return; }
+  if (state.muted){
+    // muted: skip actual TTS, but the item-flow still advances strictly on
+    // this callback, so run the same fallback timer speak() would use anyway.
+    if (cb) setTimeout(cb, Math.max(1200, text.length * 90));
+    return;
+  }
+  // NEVER cancel() in the normal flow. The v5-era backlog-drop branch here
+  // interacted fatally with the hang guard: on a slow engine start the guard
+  // advanced to the next prompt, whose cancel() killed the still-pending
+  // previous utterance and then spoke inside Chrome's ~250ms cancel-then-speak
+  // swallow window — every question died silently while chimes kept working.
+  // Policy now: cb-bearing prompts always queue; filler praise (no cb) is
+  // dropped pre-speak if the engine already has a backlog. Explicit interrupts
+  // (repeatPrompt/backToMap/skip/doesn't-know/mute) may cancel, but must speak
+  // again only via speakAfterCancelDelay().
+  if (!cb && speechSynthesis.pending) return; // don't pile filler onto a backlog
+  const doSpeak = () => {
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = .92; u.pitch = 1.15; if (voice) u.voice = voice;
+    let done = false, started = false;
+    const finish = () => { setSpeakPulse(false); if (done) return; done = true; cb && cb(); };
+    u.onstart = () => { started = true; setSpeakPulse(true); };
+    u.onend = finish; u.onerror = finish;
+    // hang guards: advance the game flow if speech never starts, but do NOT
+    // touch the engine queue — a late-starting utterance still gets heard.
+    setTimeout(() => {
+      if (!started){
+        // Chrome can wedge in a paused state after a cancel; resume() is a
+        // harmless no-op otherwise. Nudge, but let the utterance keep its slot.
+        try { speechSynthesis.resume(); } catch(e){}
+        setTimeout(() => { if (!started) finish(); }, 1000);
+      }
+    }, 4000);
+    setTimeout(finish, 6000 + text.length * 120);
+    try { speechSynthesis.resume(); } catch(e){}
+    speechSynthesis.speak(u);
+  };
+  const sinceCancel = Date.now() - (window.__lastTTSCancel || 0);
+  if (sinceCancel < 400) setTimeout(doSpeak, 400 - sinceCancel); // stay out of the swallow window
+  else doSpeak();
+}
+function ttsCancel(){
+  // the ONLY sanctioned way to cancel: records the time so the next speak()
+  // waits out Chrome's cancel-then-speak swallow window.
+  if (!("speechSynthesis" in window)) return;
+  window.__lastTTSCancel = Date.now();
+  speechSynthesis.cancel();
+}
+
+/* ---------- TTS diagnostic (start-screen "Test voice" button) ----------
+   Speaks a RAW utterance from directly inside the tap handler (guaranteed
+   user activation), bypassing the game's speak() plumbing, and reports every
+   engine event on screen — separates "browser TTS is broken" from "game
+   audio flow is broken". */
+function testVoice(){
+  const box = $("voiceDiag");
+  box.style.display = "block";
+  const t0 = Date.now();
+  const line = (msg) => { box.textContent += `[${((Date.now()-t0)/1000).toFixed(1)}s] ${msg}\n`; };
+  box.textContent = "";
+  if (!("speechSynthesis" in window)){ line("❌ speechSynthesis not available in this browser"); return; }
+  const vs = speechSynthesis.getVoices();
+  line(`voices loaded: ${vs.length} | picked: ${voice ? voice.name + (voice.localService ? " (local)" : " (NETWORK)") : "none"} | muted flag: ${state.muted}`);
+  line(`engine before: speaking=${speechSynthesis.speaking} pending=${speechSynthesis.pending} paused=${speechSynthesis.paused}`);
+  try { speechSynthesis.cancel(); } catch(e){}
+  try { speechSynthesis.resume(); } catch(e){}
+  const u = new SpeechSynthesisUtterance("Hi! If you can hear this, the voice engine works.");
+  if (voice) u.voice = voice;
+  u.onstart = () => line("✅ RAW utterance STARTED (engine works — if silent, check system volume/output device)");
+  u.onend = () => {
+    line("✅ RAW utterance ENDED normally");
+    line("now testing the game's speak() path…");
+    speak("And this is the game's own voice path.", () => line("✅ game speak() completed — audio flow OK"));
+  };
+  u.onerror = (e) => line(`❌ RAW utterance ERROR: ${e.error}`);
+  setTimeout(() => {
+    if (!speechSynthesis.speaking && !speechSynthesis.pending)
+      line("❌ nothing speaking or queued after 2s — engine dropped the utterance silently");
+    else if (speechSynthesis.paused)
+      line("⚠️ engine reports PAUSED — stuck-pause state");
+  }, 2000);
+  setTimeout(() => { try { speechSynthesis.speak(u); } catch(e){ line("❌ speak() threw: " + e); } }, 300);
+}
+
+/* ---------- confetti ---------- */
+function confetti(n=18){
+  const emo = ["🎉","⭐","✨","🎈","🌟"];
+  for (let i=0;i<n;i++){
+    const el = document.createElement("div");
+    el.className = "confetti";
+    el.textContent = emo[Math.floor(Math.random()*emo.length)];
+    el.style.left = Math.random()*100 + "vw";
+    el.style.animationDuration = (1.2 + Math.random()*1.4) + "s";
+    el.style.fontSize = (14 + Math.random()*22) + "px";
+    document.body.appendChild(el);
+    setTimeout(()=>el.remove(), 3000);
+  }
+}
+
+/* ---------- mute ---------- */
+function updateMuteBtn(){
+  const btn = $("muteBtn");
+  btn.textContent = state.muted ? "🔇" : "🔊";
+  btn.setAttribute("aria-label", state.muted ? "Unmute" : "Mute");
+}
+function toggleMute(){
+  state.muted = !state.muted;
+  localStorage.setItem("tg_muted", state.muted ? "1" : "0");
+  updateMuteBtn();
+  if (state.muted) ttsCancel();
+}
+
+/* ---------- flow ---------- */
+function show(id){
+  document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
+  $(id).classList.add("active");
+}
+function monthsFromBday(iso){
+  if (!iso) return null;
+  const b = new Date(iso), now = new Date();
+  return (now.getFullYear()-b.getFullYear())*12 + (now.getMonth()-b.getMonth()) - (now.getDate()<b.getDate()?1:0);
+}
+
+function startGame(){
+  const bdayM = monthsFromBday($("childBday").value);
+  const age = parseInt($("childAge").value) || bdayM;
+  if (!age || age < 12 || age > 72){ alert("Enter an age between 12 and 72 months (or a birthday)."); return; }
+  state.age = age;
+  state.name = $("childName").value.trim() || "friend";
+  state.arity = age < 30 ? 2 : (age <= 41 ? 3 : 4); // 2AFC <30mo, 3AFC 30-41, 4AFC 42+
+  state.finalDomains = {};
+  state.stars = 0; state.domainIdx = -1; state.domain = null; state.sessionMode = null;
+  localStorage.setItem("tg_profile", JSON.stringify({name: state.name, age, bday: $("childBday").value}));
+  $("quitBtn").style.display = "block";
+  speak(`Hi ${state.name}! Let's play!`);
+  showPicker();
+}
+
+/* ---------- picker (Feature 1) ---------- */
+function showPicker(){
+  state.domain = null; // stale-reference guard, same pattern as endGame()
+  $("progressWrap").style.display = "none";
+  $("mapBtn").style.display = "none"; // v4 (mod 2): only shown while inside a module
+  renderPicker();
+  show("pickerScreen");
+}
+// v7: 17 domains no longer fit as one flat grid without feeling like a wall of tiles, so
+// they're grouped into labeled sections (each domain carries a `section` tag on its
+// DOMAINS[] entry — see there). Grouping is purely a picker-display concern: it doesn't
+// touch DOMAINS[] iteration order anywhere else (Play-everything sequencing, session
+// history, results bars all still walk DOMAINS[] in its original append order).
+function renderPicker(){
+  const grid = $("pickerGrid");
+  grid.innerHTML = "";
+  const all = document.createElement("div");
+  all.className = "picker-tile picker-tile-all";
+  all.innerHTML = `<div class="picker-emoji">🎉</div><div class="picker-label">Play everything!</div>`;
+  all.onclick = () => playEverything();
+  grid.appendChild(all);
+  const sections = [];
+  for (const dom of DOMAINS){
+    let sec = sections.find(s => s.name === dom.section);
+    if (!sec){ sec = { name: dom.section || "More", doms: [] }; sections.push(sec); }
+    sec.doms.push(dom);
+  }
+  for (const sec of sections){
+    const head = document.createElement("div");
+    head.className = "picker-section-head";
+    head.textContent = sec.name;
+    grid.appendChild(head);
+    for (const dom of sec.doms){
+      const played = !!state.finalDomains[dom.key];
+      const tile = document.createElement("div");
+      tile.className = "picker-tile";
+      tile.innerHTML = `${played ? '<div class="picker-badge">⭐</div>' : ""}<div class="picker-emoji">${dom.emoji}</div><div class="picker-label">${dom.label}</div>`;
+      tile.onclick = () => playDomain(dom.key);
+      grid.appendChild(tile);
+    }
+  }
+}
+function playDomain(key){
+  const idx = DOMAINS.findIndex(d => d.key === key);
+  if (idx < 0) return;
+  state.sessionMode = "single";
+  beginDomain(idx);
+}
+function playEverything(){
+  state.sessionMode = "all";
+  beginDomain(0);
+}
+
+// v5.1 adversarial-review fix: v5 fixed the SCORING half of the cross-domain stale-item bug
+// (nulling state.currentItem/state.locked below stops a tap from being recorded against the
+// wrong domain) but left the VISUAL half untouched — #board/#seekBoard/#promptText/
+// #categoryAnchors kept showing the PREVIOUS domain's last tiles/scene/prompt for the entire
+// "Now let's play with X!" narration window, since nothing cleared them until the new domain's
+// renderItem() actually ran. Reported as a user-visible flash/flicker. Fix: synchronously wipe
+// every piece of game-board DOM (and hide the skip/doesn't-know controls, which have nothing
+// live to act on yet) up front, before the screen is even shown — so there is no stale frame to
+// paint. renderItem() restores board/seekBoard visibility and the two controls once it actually
+// has a new item to show.
+function clearBoardUI(){
+  $("board").innerHTML = ""; $("board").style.display = "none"; $("board").classList.remove("compact");
+  $("seekBoard").innerHTML = ""; $("seekBoard").style.display = "none";
+  $("promptText").textContent = "";
+  $("categoryAnchors").innerHTML = ""; $("categoryAnchors").style.display = "none";
+  $("skipBtn").style.display = "none"; $("dkBtn").style.display = "none";
+  $("domainTransition").style.display = "none"; $("domainTransition").innerHTML = ""; // v6: see showDomainTransition/renderItem
+}
+
+// v6 (fix 1): the "Now let's play with X!" narration left the board area totally blank after
+// clearBoardUI() wiped it (v5.1) — just the speaker icon, which reads as broken rather than
+// "loading". Fills the same flex:1 footprint #board/#seekBoard use with a friendly bouncing-fox
+// + domain-emoji + "Get ready!" placeholder. renderItem() (the one shared entry point every
+// board type funnels through, tile-grid AND seekfind) hides this again right before it builds
+// the first item's tiles — see the comment there for why that call site is load-bearing.
+function showDomainTransition(dom){
+  const el = $("domainTransition");
+  el.innerHTML = `<div class="dt-fox">🦊</div><div class="dt-emoji">${dom.emoji}</div><div class="dt-text">Get ready!</div>`;
+  el.style.display = "flex";
+}
+
+function beginDomain(idx){
+  state.domainIdx = idx;
+  const dom = DOMAINS[idx];
+  const { mu, sigma } = priorFor(dom.key, state.age);
+  state.domain = { key: dom.key, grid: THETA_GRID, post: normalPostFor(THETA_GRID, mu, sigma), n: 0, presented: 0, used: new Set(), log: [],
+    streak: 0, floorB: undefined, missAboveFloor: 0 }; // v5 (Issue 1 fix): see pickNextItem
+  // v5 adversarial-review fix (pre-existing since v2/v3, unrelated to any v5 mod, caught
+  // during v5's mixed-playthrough testing): the PREVIOUS domain's tiles stay in #board
+  // (still visible AND clickable — #board itself doesn't get cleared until the new domain's
+  // renderItem() runs) for as long as this "Now let's play with X!" narration takes, and
+  // state.currentItem/state.locked used to be left pointing at the OLD domain's last item
+  // through that whole window. A tap during it would call tapTile/skipItem/dontKnowItem with
+  // the STALE item but the NEW state.domain — silently scoring a mislabeled item (wrong b,
+  // wrong label) into the wrong domain's log. Nulling currentItem and locking here makes every
+  // one of those handlers' existing `!state.currentItem`/`state.locked` guards no-op any tap
+  // that lands in this window, instead of leaving it exploitable.
+  state.currentItem = null; state.locked = true;
+  clearBoardUI(); // v5.1: see comment above — wipes the visual half of the same bug
+  showDomainTransition(dom); // v6 (fix 1): friendly loader instead of a blank board during the narration
+  $("progressWrap").style.display = "block";
+  // v4 (mod 2): 🗺 is visible whenever inside a module entered from the picker, and
+  // during "Play everything!" too (tapping it there converts the run to picker-mode).
+  $("mapBtn").style.display = "inline-block";
+  show("gameScreen");
+  speak(`Now let's play with ${dom.label}!`, renderItem);
+}
+
+function nextDomain(){
+  // sequential continuation used only by "Play everything!" (state.sessionMode === "all")
+  const idx = state.domainIdx + 1;
+  if (idx >= DOMAINS.length) return endGame();
+  beginDomain(idx);
+}
+
+function backToMap(){
+  // v4 (mod 2): one-tap, no confirmation. Finalizes whatever's in-flight (same path
+  // Finish uses for partials — finalizeDomain no-ops on nothing answered), then
+  // returns to the picker. Setting sessionMode to "single" converts a "Play
+  // everything!" run into picker-mode going forward, per the spec. Works safely
+  // mid-interlude and mid-seek&find scene too: finalizeDomain only touches
+  // ds.grid/post/log (ignores ds.sf entirely), and any stale in-flight speak()
+  // callback that fires renderItem() afterward is already guarded by the existing
+  // `if (!ds) return` check (showPicker nulls state.domain).
+  if (state.domain) finalizeDomain(state.domain);
+  state.sessionMode = "single";
+  ttsCancel();
+  showPicker();
+}
+
+function finalizeDomain(ds){
+  // Intentionally overwrites any prior result for ds.key: replaying a domain
+  // from the picker should reflect the latest completed attempt, not the
+  // first (see NOTES.md v3 — "re-entering a completed domain" decision).
+  // Recomputing from the same ds is otherwise idempotent (deterministic given
+  // ds's grid/post/log), so re-finalizing an unchanged ds is harmless too.
+  // v4 (mod 1): gate on ds.n (answered items), not ds.log.length — a domain that
+  // was entered and then only skipped (log has skip entries but n===0) never
+  // updated ds.post away from the prior, so "finalizing" it would report a fake
+  // age-equivalent derived purely from the prior/chrono-age seed. No answered
+  // items = no result, same as the pre-existing "never touched this domain" case.
+  if (!ds || ds.n === 0) return;
+  const thetaHat = eap(ds.grid, ds.post);
+  const sd = sdOf(ds.grid, ds.post, thetaHat);
+  state.finalDomains[ds.key] = {
+    // round to whole months at the source so every downstream display (bars,
+    // overall median, item detail, session history, progress charts) is
+    // already whole-month — no leftover decimal like "≈ 35.2 months".
+    theta: Math.round(thetaHat),
+    sd: Math.round(sd),
+    n: ds.n,
+    items: ds.log.slice(),
+  };
+}
+
+function domainDone(){
+  finalizeDomain(state.domain);
+  const dom = DOMAINS[state.domainIdx];
+  if (state.sessionMode === "single"){
+    // picker flow: celebrate this one domain, then return to the picker
+    // instead of advancing to the next DOMAINS[] entry.
+    $("interludeEmoji").textContent = "🎉";
+    $("interludeText").textContent = `Yay ${state.name}! Great job with ${dom.label}!`;
+    $("interludeBtn").textContent = "Back to the map! →";
+    $("interludeBtn").onclick = () => showPicker();
+    show("interlude");
+    fanfare(); confetti(24);
+    speak(`Hooray! Great job with ${dom.label}!`);
+    return;
+  }
+  // "Play everything!" — original sequential behavior, unchanged
+  if (state.domainIdx >= DOMAINS.length - 1) return endGame();
+  const next = DOMAINS[state.domainIdx+1];
+  $("interludeEmoji").textContent = next.emoji;
+  $("interludeText").textContent = `Yay ${state.name}! Next: ${next.label}!`;
+  $("interludeBtn").textContent = "Keep going! →";
+  $("interludeBtn").onclick = () => nextDomain();
+  show("interlude");
+  fanfare(); confetti(24);
+  speak(`Hooray! Great job with ${dom.label}!`);
+}
+
+function progressPct(ds){
+  // single-domain picker mode: show progress through THIS domain only
+  // (a DOMAINS[]-index-based fraction would look near-full/near-empty
+  // depending on which domain got picked, which is confusing outside the
+  // sequential "Play everything!" flow).
+  if (state.sessionMode === "single") return Math.min(1, ds.n / 6) * 100;
+  return ((state.domainIdx + Math.min(1, ds.n / 6)) / DOMAINS.length) * 100;
+}
+
+function renderItem(){
+  const dom = DOMAINS[state.domainIdx];
+  const ds = state.domain;
+  if (!ds) return; // a stale speak() callback fired after endGame() already tore down the session
+  // v6 (fix 1): clear the domain-transition loader here, unconditionally and before anything
+  // else — this is the ONE call site every board type (tile-grid AND seekfind, via the branch
+  // below) funnels through on its way to showing an item, so it's the only place that can
+  // guarantee the loader never leaks into the first item's render.
+  $("domainTransition").style.display = "none";
+  $("categoryAnchors").style.display = "none"; // reset — re-shown below only for category items
+  if (domainShouldStop(ds)){ domainDone(); return; }
+  // v5.1: restore the controls clearBoardUI() hid on domain entry — safe to call on every
+  // render (mid-domain re-renders just no-op back to their already-visible state).
+  $("skipBtn").style.display = ""; $("dkBtn").style.display = "";
+  if (dom.key === "seekfind"){
+    $("board").style.display = "none";
+    $("seekBoard").style.display = "block";
+    renderSeekfindRound(dom, ds);
+    return;
+  }
+  if (dom.key === "mybody"){
+    // v7: persistent tap-on-figure board — same #seekBoard container as seek&find
+    // (reuses its relative-positioning/overflow-hidden CSS), own render path.
+    $("board").style.display = "none";
+    $("seekBoard").style.display = "block";
+    renderBodyRound(dom, ds);
+    return;
+  }
+  $("board").style.display = "grid";
+  $("seekBoard").style.display = "none";
+  const raw = pickNextItem(dom);
+  if (!raw){ domainDone(); return; } // pool exhausted before stop criteria met
+  ds.used.add(raw.label);
+  ds.presented = (ds.presented || 0) + 1; // v4 (mod 1): counts toward the 12-presentation cap
+  // v7: "time" (Day & Night) forces 2AFC like opposites — its items are binary
+  // concept pairs (day/night, first/last, ...), not open picture-pointing.
+  const arity = (dom.key === "opposites" || dom.key === "time") ? 2 : state.arity;
+  const it = dom.make(raw, dom.defs, arity);
+  state.currentItem = it; state.locked = false; state.firstTry = true;
+  $("promptText").textContent = it.prompt;
+  if (it.anchors){
+    // v4 (mod 6): categories — show the 3 theme anchors above the tile grid
+    $("categoryAnchors").innerHTML = `<div class="anchor-label">These go together!</div><div class="anchor-row">${it.anchors.map(e => `<span>${e}</span>`).join("")}</div>`;
+    $("categoryAnchors").style.display = "block";
+  } else if (it.patternStrip){
+    // v7: patterns — show the sequence strip above the tile grid, same anchors-area
+    // reuse as categories. Never simultaneous with `it.anchors` — only one domain is
+    // active at a time and renderItem() resets this area to hidden every render
+    // before either branch re-shows it, so there's no stale-content leak.
+    $("categoryAnchors").innerHTML = `<div class="anchor-label">What comes next?</div><div class="anchor-row">${it.patternStrip}<span style="opacity:.4">❓</span></div>`;
+    $("categoryAnchors").style.display = "block";
+  }
+  const board = $("board");
+  const nTiles = it.tiles.length;
+  // v5 (mod 4): 5-6 tile items (Tricky Pictures) get the same 3-column layout as the
+  // existing 3-tile case, just with more rows, plus the "compact" min-height/font-size.
+  board.style.gridTemplateColumns = (nTiles === 3 || nTiles >= 5) ? "1fr 1fr 1fr" : "1fr 1fr";
+  board.classList.toggle("compact", nTiles >= 5);
+  board.innerHTML = "";
+  it.tiles.forEach((html, i) => {
+    const tile = document.createElement("div");
+    tile.className = "tile";
+    tile.innerHTML = html;
+    tile.onclick = () => tapTile(i, tile);
+    board.appendChild(tile);
+  });
+  $("progressBar").style.width = progressPct(ds) + "%";
+  speak(it.say);
+}
+
+function skipItem(){
+  // v4 (mod 1): parent-facing skip. Excluded from the EAP estimate entirely (no
+  // updatePosterior call), does not touch ds.n (min/max item count), only ds.presented
+  // (the separate 12-presentation cap). The item is already in ds.used by the time
+  // this can be tapped (added at selection time in renderItem/renderSeekfindRound
+  // for both the tile-grid and seek&find paths), so it won't be re-offered. No penalty
+  // sound, no shake/dim styling, mascot untouched — stays cheerful.
+  if (state.locked || !state.currentItem || !state.domain) return;
+  state.locked = true;
+  const it = state.currentItem;
+  if (it.seekfind){
+    // v5 adversarial-review fix (pre-existing since v4, only surfaced now by comparison
+    // against dontKnowItem's handling of the identical situation): without retiring the
+    // on-screen object, a SKIPPED seek&find object stayed live/clickable for the rest of
+    // the scene — the exact stale-clickable-object bug .seek-obj.found's pointer-events:none
+    // was originally added to prevent (see that CSS comment), just re-opened via the one
+    // code path that predated it.
+    const el = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
+    if (el) el.classList.add("found");
+    if (state.domain.sf && state.domain.sf.scene) state.domain.sf.scene.resolved++;
+  }
+  state.domain.log.push({ label: it.label, b: it.b, skipped: true });
+  ttsCancel();
+  setTimeout(() => { renderItem(); }, 150);
+}
+
+function dontKnowItem(){
+  // v5 (mod 3): parent-facing "doesn't know" — unlike Skip (excluded entirely from the
+  // estimate), this SCORES as incorrect: reuses recordResult's normal miss path (ds.n++,
+  // updatePosterior(correct=false), streak reset, floor bookkeeping) via the same `extra`
+  // param used to tag the log entry, so no scoring logic is duplicated here. No penalty sound,
+  // no tile shake/dim, no reveal (revealing would teach an answer the parent already said the
+  // child doesn't know — the point is measurement, not instruction) — just a brief neutral
+  // spoken transition and on to the next item, at Skip's pace.
+  if (state.locked || !state.currentItem || !state.domain) return;
+  state.locked = true;
+  const it = state.currentItem;
+  if (it.seekfind){
+    // retire the on-screen object WITHOUT revealing it: add only "found" (fades, stops
+    // bobbing, pointer-events:none) — never "reveal"/"correct" (green outline + pop, which
+    // would tell the child which one it was). Without this the un-resolved object stays
+    // live and clickable for the rest of the scene — a free/misleading "correct" tap trap for
+    // a LATER item's target, the same class of bug v3 fixed for found/revealed objects.
+    const el = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
+    if (el) el.classList.add("found");
+    if (state.domain.sf && state.domain.sf.scene) state.domain.sf.scene.resolved++;
+  }
+  recordResult(it, false, { dontKnow: true });
+  // adversarial-review fix: a bare cancel()-then-speak() here would get silently swallowed
+  // in Chrome (see speak()'s own doc comment on this exact anti-pattern) — repeatPrompt()
+  // works around it with a delay after cancel(); do the same here instead of firing speak()
+  // synchronously on the next line.
+  ttsCancel();
+  setTimeout(() => { speak("On to the next one!"); }, 150);
+  setTimeout(() => { renderItem(); }, 1000);
+}
+
+/* ---------- seek & find (Feature 3) ---------- */
+function seekfindSlots(n){
+  // 4x4 grid of cells (16 max) — each object is centered in its own cell
+  // (with jitter, capped well under half the cell so it can't creep into a
+  // neighbor) so nothing can overlap and hide another target.
+  const cols = 4, rows = 4;
+  const cells = [];
+  for (let r=0;r<rows;r++) for (let c=0;c<cols;c++) cells.push({r,c});
+  return shuffle(cells).slice(0, n).map(({r,c}) => {
+    const cellW = 100/cols, cellH = 100/rows;
+    const jitterX = (Math.random()-0.5) * cellW * 0.4;
+    const jitterY = (Math.random()-0.5) * cellH * 0.4;
+    return {
+      left: c*cellW + cellW/2 + jitterX,
+      top: r*cellH + cellH/2 + jitterY,
+      size: 34 + Math.random()*28,
+    };
+  });
+}
+function renderSeekfindScene(scene){
+  const wrap = $("seekBoard");
+  wrap.innerHTML = "";
+  scene.def.words.forEach((w, i) => {
+    const info = VOCAB_BY_WORD[w];
+    const slot = scene.slots[i];
+    const el = document.createElement("div");
+    el.className = "seek-obj";
+    el.dataset.word = w;
+    el.style.left = slot.left + "%";
+    el.style.top = slot.top + "%";
+    el.style.fontSize = slot.size + "px";
+    el.style.animationDelay = (Math.random()*2).toFixed(2) + "s";
+    el.textContent = info ? info.emoji : "❓";
+    el.onclick = () => tapSeekObj(w, el);
+    wrap.appendChild(el);
+  });
+}
+function renderSeekfindRound(dom, ds){
+  if (!ds.sf) ds.sf = { sceneIdx: -1, scene: null, roundInScene: 0 };
+  while (!ds.sf.scene || ds.sf.roundInScene >= ROUNDS_PER_SCENE || !ds.sf.scene.remaining.length){
+    ds.sf.sceneIdx++;
+    if (ds.sf.sceneIdx >= SEEKFIND_SCENES.length){ domainDone(); return; } // all scenes done
+    const sceneDef = SEEKFIND_SCENES[ds.sf.sceneIdx];
+    const available = shuffle(sceneDef.words.filter(w => !ds.used.has(w)));
+    ds.sf.scene = { def: sceneDef, slots: seekfindSlots(sceneDef.words.length), remaining: available, resolved: 0 };
+    ds.sf.roundInScene = 0;
+    if (available.length){ renderSeekfindScene(ds.sf.scene); break; }
+    // this scene had nothing new to offer (shouldn't happen — scene word
+    // pools are disjoint — but loop to the next scene defensively)
+  }
+  // v5 (Issue 1 fix): same streak/floor/randomized-top-3 selection as pickNextItem, scoped to
+  // this scene's remaining words (seek&find doesn't go through dom.make/pickNextItem, so the
+  // rule has to be reapplied locally rather than shared through one call site).
+  const target = computeTarget(ds);
+  // IMPORTANT: filter a COPY for candidate selection, then remove `word` from the real
+  // (unfiltered) ds.sf.scene.remaining — floor-excluded words must stay in the scene's
+  // remaining pool for later rounds, not get silently dropped just because they lost this
+  // one draw to the floor filter.
+  const candidates = applyFloorRule(ds, ds.sf.scene.remaining, w => VOCAB_BY_WORD[w].age);
+  // v6 (fix 5b): same cross-session rotation as pickNextItem, reapplied locally since seek&find
+  // doesn't go through it — words ARE their own "label" here (ds.used tracks the bare word
+  // string, same as the vocabulary domain's item.label), so getLabel is the identity function.
+  const avoid = recentCorrectLabels(dom.key);
+  const word = pickAmongTopN(candidates, target, w => VOCAB_BY_WORD[w].age, 3, { avoid, getLabel: w => w });
+  ds.sf.scene.remaining = ds.sf.scene.remaining.filter(w => w !== word);
+  ds.used.add(word);
+  ds.presented = (ds.presented || 0) + 1; // v4 (mod 1): counts toward the 12/14-presentation cap
+  ds.sf.roundInScene++;
+  const info = VOCAB_BY_WORD[word];
+  // c = 1/(objects still tappable in the scene) — objects found/revealed in
+  // earlier rounds this scene are now pointer-events:none (see .seek-obj.found
+  // CSS), so they're no longer real distractors; shrink c to match as the
+  // scene empties out instead of leaving it pinned to the full scene size.
+  const liveCount = Math.max(1, ds.sf.scene.def.words.length - ds.sf.scene.resolved);
+  const it = { label: word, b: info.age, c: 1/liveCount, s: 4,
+    prompt: `Find the ${word}!`, say: `Can you find the ${word}? Tap the ${word}!`,
+    seekfind: true };
+  state.currentItem = it; state.locked = false; state.firstTry = true;
+  $("promptText").textContent = it.prompt;
+  $("progressBar").style.width = progressPct(ds) + "%";
+  speak(it.say);
+}
+function tapSeekObj(word, el){
+  // v6 adversarial-review fix: mirrors skipItem/dontKnowItem's guard (they already check
+  // !state.domain) — without it, a click that lands after backToMap()/endGame() has nulled
+  // state.domain (the tile itself can outlive that: switching screens only toggles a CSS class,
+  // it doesn't clear #board/#seekBoard, so a click dispatched programmatically or via a
+  // late-arriving event on an old, now-hidden element was still reaching recordResult() and
+  // crashing on `ds.log.push` with ds===null.
+  if (state.locked || !state.domain) return;
+  const it = state.currentItem;
+  if (!it || !it.seekfind) return;
+  if (word === it.label){
+    state.locked = true;
+    el.classList.add("correct","found");
+    if (state.domain && state.domain.sf && state.domain.sf.scene) state.domain.sf.scene.resolved++;
+    chimeGood();
+    if (state.firstTry){ addStar(); confetti(8); }
+    recordResult(it, state.firstTry);
+    $("mascot").classList.remove("bounce"); void $("mascot").offsetWidth; $("mascot").classList.add("bounce");
+    speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]));
+    setTimeout(()=>{ renderItem(); }, 1300);
+  } else {
+    chimeTry();
+    el.classList.add("wrong");
+    setTimeout(()=>el.classList.remove("wrong"), 500);
+    if (state.firstTry){
+      state.firstTry = false;
+      speak(pick(["Good try! Look again!","Hmm, try again!"]));
+    } else {
+      state.locked = true;
+      recordResult(it, false);
+      const targetEl = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
+      if (targetEl) targetEl.classList.add("reveal","found");
+      if (state.domain && state.domain.sf && state.domain.sf.scene) state.domain.sf.scene.resolved++;
+      speak(`This one is the ${it.label}!`);
+      setTimeout(()=>{ renderItem(); }, 1600);
+    }
+  }
+}
+
+function repeatPrompt(){
+  if (!state.currentItem) return;
+  // interrupt anything in-flight, then wait a beat: Chrome swallows a speak()
+  // issued synchronously after cancel().
+  ttsCancel();
+  const it = state.currentItem;
+  setTimeout(() => { if (state.currentItem === it) speak(it.say); }, 150);
+}
+
+function tapTile(i, tileEl){
+  // v6 adversarial-review fix: same stale-click guard as tapSeekObj above — tapTile previously
+  // checked ONLY state.locked, unlike its skipItem/dontKnowItem siblings which also check
+  // !state.currentItem/!state.domain. A click reaching this handler after navigation nulled
+  // state.domain (or state.currentItem) crashed inside recordResult's `ds.log.push`.
+  if (state.locked || !state.currentItem || !state.domain) return;
+  const it = state.currentItem;
+  const tiles = [...$("board").children];
+  if (i === it.correct){
+    state.locked = true;
+    tileEl.classList.add("correct");
+    tiles.forEach((t,j)=>{ if(j!==i) t.classList.add("dim"); });
+    chimeGood();
+    if (state.firstTry){ addStar(); confetti(8); }
+    recordResult(it, state.firstTry);
+    $("mascot").classList.remove("bounce"); void $("mascot").offsetWidth; $("mascot").classList.add("bounce");
+    speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]));
+    setTimeout(()=>{ renderItem(); }, 1300);
+  } else {
+    chimeTry();
+    tileEl.classList.add("wrong");
+    setTimeout(()=>tileEl.classList.remove("wrong"), 500);
+    if (state.firstTry){
+      // remediation tap — not scored; child gets another try
+      state.firstTry = false;
+      speak(pick(["Good try! Look again!","Hmm, try again!"]));
+    } else {
+      // second miss: reveal, record the (first-attempt) result as incorrect, move on
+      state.locked = true;
+      recordResult(it, false);
+      tiles[it.correct].classList.add("reveal");
+      tiles.forEach((t,j)=>{ if(j!==it.correct) t.classList.add("dim"); });
+      speak(`This one is the ${it.label}!`);
+      setTimeout(()=>{ renderItem(); }, 1600);
+    }
+  }
+}
+
+function recordResult(it, firstTry, extra){
+  const ds = state.domain;
+  ds.log.push({ label: it.label, b: it.b, correct: firstTry, ...(extra || {}) });
+  ds.n++;
+  updatePosterior(ds, it, firstTry);
+  // v5 (Issue 1 fix): streak/floor bookkeeping that pickNextItem's computeTarget/applyFloorRule
+  // read. dontKnowItem (mod 3) reuses this same path with firstTry=false, so a "doesn't know"
+  // reset the streak and counts toward the floor exactly like any other miss, with no
+  // special-casing needed here.
+  if (firstTry){
+    ds.streak = (ds.streak || 0) + 1;
+    if (ds.floorB === undefined || it.b > ds.floorB){ ds.floorB = it.b; ds.missAboveFloor = 0; }
+  } else {
+    ds.streak = 0;
+    if (ds.floorB !== undefined && it.b > ds.floorB) ds.missAboveFloor = (ds.missAboveFloor || 0) + 1;
+  }
+}
+
+function addStar(){
+  state.stars++;
+  const s = document.createElement("span"); s.textContent = "⭐";
+  $("stars").appendChild(s);
+}
+
+function pick(a){ return a[Math.floor(Math.random()*a.length)]; }
+
+/* ---------- checklist ---------- */
+function showChecklist(){
+  const saved = JSON.parse(localStorage.getItem("tg_checklist") || "[]");
+  state.checklist = new Set(saved);
+  const grid = $("checklistGrid");
+  grid.innerHTML = "";
+  for (const [cat, words] of Object.entries(CHECKLIST)){
+    const h = document.createElement("div"); h.className = "cat-head"; h.textContent = cat;
+    grid.appendChild(h);
+    for (const w of words){
+      const chip = document.createElement("div");
+      chip.className = "word-chip" + (state.checklist.has(w) ? " on" : "");
+      chip.textContent = w;
+      chip.onclick = () => {
+        state.checklist.has(w) ? state.checklist.delete(w) : state.checklist.add(w);
+        chip.classList.toggle("on");
+        updateCheckCount();
+      };
+      grid.appendChild(chip);
+    }
+  }
+  updateCheckCount();
+  show("checklistScreen");
+}
+function updateCheckCount(){ $("checkCount").textContent = state.checklist.size; }
+function checklistTotal(){ return Object.values(CHECKLIST).reduce((s,w)=>s+w.length,0); }
+function finishChecklist(){
+  localStorage.setItem("tg_checklist", JSON.stringify([...state.checklist]));
+  show("startScreen");
+}
+
+/* ---------- scoring & results ---------- */
+function interp(pairs, x, xi=0, yi=1){
+  // linear interpolation over sorted pairs
+  if (x <= pairs[0][xi]) return pairs[0][yi];
+  for (let i=1;i<pairs.length;i++){
+    if (x <= pairs[i][xi]){
+      const [x0,y0] = [pairs[i-1][xi], pairs[i-1][yi]], [x1,y1] = [pairs[i][xi], pairs[i][yi]];
+      return y0 + (y1-y0) * (x-x0)/(x1-x0);
+    }
+  }
+  return pairs[pairs.length-1][yi];
+}
+function vocabSizeToAge(words){
+  const inv = VOCAB_NORMS.map(([m,w]) => [w,m]);
+  return Math.round(interp(inv, words));
+}
+
+/* standard normal CDF (Abramowitz-Stegun erf approximation) — used for
+   percentile-band display: normalCdf((thetaHat - chronoAge) / 8) */
+function erf(x){
+  const sign = x < 0 ? -1 : 1; x = Math.abs(x);
+  const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
+  const t = 1/(1+p*x);
+  const y = 1-(((((a5*t+a4)*t)+a3)*t+a2)*t+a1)*t*Math.exp(-x*x);
+  return sign*y;
+}
+function normalCdf(z){ return 0.5*(1+erf(z/Math.SQRT2)); }
+function clampPct(p){ return Math.min(99, Math.max(1, Math.round(p))); }
+
+function endGame(){
+  // if the parent hit "Finish" mid-domain, still capture partial progress.
+  // Unconditional (no "already finalized?" guard): finalizeDomain no-ops on
+  // an empty log by itself, and recomputing from an unchanged ds is a no-op
+  // in effect too — so this also correctly captures the case where the
+  // parent replayed an already-completed domain from the picker and hit
+  // Finish mid-replay, consistent with finalizeDomain's "latest attempt
+  // wins" overwrite behavior (previously this silently discarded an
+  // interrupted replay and kept the stale first result — see NOTES.md v3
+  // adversarial-review fix).
+  if (state.domain) finalizeDomain(state.domain);
+  state.domain = null; // guard against a stale nextDomain()->speak() callback firing renderItem() late
+  ttsCancel();
+  $("quitBtn").style.display = "none";
+  $("progressWrap").style.display = "none";
+  $("mapBtn").style.display = "none"; // v4 (mod 2)
+  fanfare(); confetti(40);
+
+  const profile = JSON.parse(localStorage.getItem("tg_profile") || "{}");
+  const age = state.age || profile.age || 30;
+  const name = state.name || profile.name || "Kiddo";
+  $("resultsTitle").textContent = `${name}'s results (age ${age} mo)`;
+
+  // vocabulary estimate from checklist
+  const saved = JSON.parse(localStorage.getItem("tg_checklist") || "[]");
+  let vocabEstimate = null;
+  if (saved.length){
+    const total = checklistTotal();
+    vocabEstimate = Math.round(saved.length / total * 680 / 10) * 10;
+    const ageEq = vocabSizeToAge(vocabEstimate);
+    const vocabPct = clampPct(normalCdf((ageEq - age) / 8) * 100);
+    $("vocabCard").style.display = "block";
+    $("vocabEstimate").textContent = `~${vocabEstimate} words`;
+    $("vocabAgeEq").textContent = `${saved.length}/${total} checklist words → roughly the median for a ${ageEq}-month-old (median at ${age} mo ≈ ${Math.round(interp(VOCAB_NORMS, age))} words) — around the ${vocabPct}th percentile band for his age. Half of kids are above and half below the median — a wide range is normal.`;
+  }
+
+  // domain bars
+  const bars = $("domainBars"); bars.innerHTML = "";
+  const ageEqs = [];
+  const maxScale = Math.max(age + 18, 54);
+  for (const dom of DOMAINS){
+    const fd = state.finalDomains[dom.key];
+    if (!fd) continue;
+    ageEqs.push(fd.theta);
+    const pct = Math.min(100, Math.max(0, fd.theta / maxScale * 100));
+    const chronoPct = Math.min(100, age / maxScale * 100);
+    const pctBand = clampPct(normalCdf((fd.theta - age) / 8) * 100);
+    const row = document.createElement("div");
+    row.className = "bar-row";
+    row.innerHTML = `<div class="lbl">${dom.emoji} ${dom.label}</div>
+      <div class="bar-track"><div class="bar-fill${fd.theta < age-6 ? " low" : ""}" style="width:${pct}%"></div>
+      <div class="chrono-mark" style="left:${chronoPct}%"></div></div>
+      <div class="bar-val">${fd.theta} mo</div>`;
+    bars.appendChild(row);
+    const note = document.createElement("div");
+    note.style.cssText = "font-size:11px;color:#a99;margin:-4px 0 8px 118px";
+    note.textContent = `around the ${pctBand}th percentile band for his age (±${fd.sd}mo, ${fd.n} items)`;
+    bars.appendChild(note);
+  }
+
+  // overall
+  if (ageEqs.length){
+    ageEqs.sort((a,b)=>a-b);
+    const mid = Math.floor(ageEqs.length/2);
+    const median = ageEqs.length % 2 ? ageEqs[mid] : Math.round((ageEqs[mid-1]+ageEqs[mid])/2);
+    $("overallAge").textContent = `≈ ${median} months`;
+    const diff = median - age;
+    $("overallNote").textContent =
+      diff >= 4 ? `Playing about ${diff} months ahead of chronological age in these areas. 🎉` :
+      diff <= -4 ? `Some areas came in below chronological age today — totally normal for one playful session, and attention/mood matter a lot at this age.` :
+      `Right around chronological age — nice and on track.`;
+  } else {
+    $("overallAge").textContent = "—";
+    $("overallNote").textContent = "Play a few rounds to get an estimate!";
+  }
+
+  // detail
+  const det = $("itemDetail");
+  det.innerHTML = "";
+  const fmtItem = r => `${r.skipped ? "⏭" : (r.dontKnow ? "❌ᴰᴷ" : (r.correct ? "✅" : "❌"))} ${r.label} <span style="color:#bbb">(${r.b}mo)</span>`;
+  for (const dom of DOMAINS){
+    const fd = state.finalDomains[dom.key];
+    if (!fd) continue;
+    if (dom.key === "vocabulary"){
+      // v7 (Part B): group by theme — Results/Progress stay unchanged (still ONE Words
+      // bar/chart, theming only affects item selection and this detail breakdown).
+      const byTheme = {};
+      fd.items.forEach(r => {
+        const theme = (VOCAB_BY_WORD[r.label] && VOCAB_BY_WORD[r.label].theme) || "other";
+        (byTheme[theme] = byTheme[theme] || []).push(r);
+      });
+      det.innerHTML += `<p><b>${dom.label}:</b></p>` + Object.keys(byTheme).sort().map(t =>
+        `<p style="margin:2px 0 2px 14px;font-size:13px"><i>${t}:</i> ${byTheme[t].map(fmtItem).join(" · ")}</p>`).join("");
+    } else {
+      det.innerHTML += `<p><b>${dom.label}:</b> ` + fd.items.map(fmtItem).join(" · ") + `</p>`;
+    }
+  }
+
+  saveSession(age, name, vocabEstimate, saved.length);
+  refreshProgressBtn();
+  show("resultsScreen");
+}
+
+/* ---------- session history (localStorage "tg_sessions") ---------- */
+function loadSessions(){
+  try {
+    const arr = JSON.parse(localStorage.getItem("tg_sessions") || "[]");
+    return Array.isArray(arr) ? arr : [];
+  } catch(e){ return []; }
+}
+function saveSession(ageMonths, name, vocabEstimate, vocabChecked){
+  const domains = {};
+  for (const dom of DOMAINS){
+    const fd = state.finalDomains[dom.key];
+    if (fd) domains[dom.key] = { theta: fd.theta, sd: fd.sd, n: fd.n, items: fd.items };
+  }
+  if (!Object.keys(domains).length && vocabEstimate === null) return; // nothing scored this session
+  const sessions = loadSessions();
+  sessions.push({ v: 1, date: new Date().toISOString(), ageMonths, name, domains, vocabChecked, vocabEstimate });
+  localStorage.setItem("tg_sessions", JSON.stringify(sessions));
+}
+function refreshProgressBtn(){
+  const has = loadSessions().length > 0;
+  $("progressBtn").style.display = has ? "inline-block" : "none";
+  $("resultsProgressBtn").style.display = has ? "inline-block" : "none";
+}
+
+/* ---------- progress screen ---------- */
+function showProgress(){
+  renderDomainCharts();
+  renderVocabChart();
+  renderSessionList();
+  show("progressScreen");
+}
+function domainChartSVG(pts){
+  const W = 240, H = 150, pad = 26;
+  const xs = pts.map(p=>p.x), ys = pts.map(p=>p.y);
+  let lo = Math.min(...xs, ...ys) - 6, hi = Math.max(...xs, ...ys) + 6;
+  if (hi - lo < 12){ lo -= 6; hi += 6; }
+  const sx = x => pad + (x - lo) / (hi - lo) * (W - 2*pad);
+  const sy = y => H - pad - (y - lo) / (hi - lo) * (H - 2*pad);
+  const band = `${sx(lo)},${sy(lo-8)} ${sx(hi)},${sy(hi-8)} ${sx(hi)},${sy(hi+8)} ${sx(lo)},${sy(lo+8)}`;
+  const line = pts.map(p => `${sx(p.x)},${sy(p.y)}`).join(" ");
+  const dots = pts.map(p => `<circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="4" fill="#ff8a3d"/>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;background:#fffdf8;border-radius:12px;border:1px solid var(--tile-border)">
+    <polygon points="${band}" fill="#4ecdc4" opacity=".15"/>
+    <line x1="${sx(lo)}" y1="${sy(lo)}" x2="${sx(hi)}" y2="${sy(hi)}" stroke="#bbb" stroke-dasharray="4 3"/>
+    <polyline points="${line}" fill="none" stroke="#ff8a3d" stroke-width="2"/>
+    ${dots}
+  </svg>`;
+}
+function renderDomainCharts(){
+  const sessions = loadSessions();
+  const wrap = $("domainCharts");
+  wrap.innerHTML = "";
+  for (const dom of DOMAINS){
+    const pts = sessions.filter(s => s.domains && s.domains[dom.key])
+      .map(s => ({ x: s.ageMonths, y: s.domains[dom.key].theta }));
+    if (!pts.length) continue;
+    const card = document.createElement("div");
+    card.innerHTML = `<div style="font-weight:700;font-size:13px;margin-bottom:4px">${dom.emoji} ${dom.label}</div>` + domainChartSVG(pts);
+    wrap.appendChild(card);
+  }
+  if (!wrap.children.length) wrap.innerHTML = `<p class="subtitle">Play a session to start tracking progress!</p>`;
+}
+function renderVocabChart(){
+  const sessions = loadSessions().filter(s => s.vocabEstimate != null);
+  const wrap = $("vocabChart");
+  if (!sessions.length){ wrap.innerHTML = `<p class="subtitle">Complete the parent word checklist to track vocabulary growth.</p>`; return; }
+  const W = 600, H = 200, pad = 34;
+  const maxAge = Math.max(...VOCAB_NORMS.map(p=>p[0]), ...sessions.map(s=>s.ageMonths)) + 2;
+  const maxW = Math.max(...VOCAB_NORMS.map(p=>p[1]), ...sessions.map(s=>s.vocabEstimate)) * 1.1;
+  const sx = x => pad + x / maxAge * (W - 2*pad);
+  const sy = y => H - pad - y / maxW * (H - 2*pad);
+  const curve = VOCAB_NORMS.map(p => `${sx(p[0])},${sy(p[1])}`).join(" ");
+  const dots = sessions.map(s => `<circle cx="${sx(s.ageMonths)}" cy="${sy(s.vocabEstimate)}" r="4" fill="#ff8a3d"/>`).join("");
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;background:#fffdf8;border-radius:12px;border:1px solid var(--tile-border)">
+    <polyline points="${curve}" fill="none" stroke="#4ecdc4" stroke-width="2" stroke-dasharray="5 3"/>
+    ${dots}
+    <text x="${pad}" y="16" font-size="11" fill="#8a7d66">dashed = CDI median · dots = your estimates</text>
+  </svg>`;
+}
+function renderSessionList(){
+  const sessions = loadSessions().slice().sort((a,b) => new Date(b.date) - new Date(a.date));
+  const wrap = $("sessionList");
+  if (!sessions.length){ wrap.innerHTML = `<p class="subtitle">No sessions yet.</p>`; return; }
+  wrap.innerHTML = sessions.map(s => {
+    const domSummary = Object.entries(s.domains || {}).map(([k,d]) => {
+      const dom = DOMAINS.find(x => x.key === k);
+      return `${dom ? dom.emoji : ""} ${dom ? dom.label : k}: ${d.theta}mo`;
+    }).join(" · ");
+    const detail = Object.entries(s.domains || {}).map(([k,d]) => {
+      const dom = DOMAINS.find(x => x.key === k);
+      const items = (d.items || []).map(r => `${r.skipped ? "⏭" : (r.dontKnow ? "❌ᴰᴷ" : (r.correct ? "✅" : "❌"))} ${r.label} (${r.b}mo)`).join(" · ");
+      return `<p><b>${dom ? dom.label : k}:</b> ${items}</p>`;
+    }).join("");
+    const dateStr = new Date(s.date).toLocaleDateString();
+    return `<details style="margin-bottom:8px">
+      <summary><b>${dateStr}</b> — age ${s.ageMonths}mo${s.vocabEstimate != null ? `, ~${s.vocabEstimate} words` : ""}</summary>
+      <div style="font-size:13px;color:#8a7d66;margin:4px 0">${domSummary || "no domains played"}</div>
+      ${detail}
+    </details>`;
+  }).join("");
+}
+
+/* ---------- export / import ---------- */
+function exportData(){
+  const payload = { exportedAt: new Date().toISOString(), tg_sessions: loadSessions(), tg_checklist: JSON.parse(localStorage.getItem("tg_checklist") || "[]") };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `milo-progress-${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+function importData(evt){
+  const file = evt.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let data;
+    try { data = JSON.parse(reader.result); } catch(e){ alert("That file isn't valid JSON."); evt.target.value = ""; return; }
+    const incoming = Array.isArray(data.tg_sessions) ? data.tg_sessions : null;
+    const validSession = s => {
+      if (!s || s.v !== 1 || !s.date || !isFinite(new Date(s.date).getTime())) return false;
+      if (!(typeof s.ageMonths === "number" && isFinite(s.ageMonths))) return false;
+      if (!(s.vocabEstimate === null || (typeof s.vocabEstimate === "number" && isFinite(s.vocabEstimate)))) return false;
+      if (typeof s.domains !== "object" || s.domains === null) return false;
+      return Object.values(s.domains).every(d => d && typeof d.theta === "number" && isFinite(d.theta)
+        && typeof d.sd === "number" && isFinite(d.sd) && typeof d.n === "number" && Array.isArray(d.items));
+    };
+    if (!incoming || !incoming.every(validSession)){
+      alert("That file doesn't look like a Milo progress backup.");
+      evt.target.value = ""; return;
+    }
+    const existing = loadSessions();
+    const byDate = new Map(existing.map(s => [s.date, s]));
+    let added = 0;
+    for (const s of incoming){ if (!byDate.has(s.date)){ byDate.set(s.date, s); added++; } }
+    if (!confirm(`Import ${incoming.length} session(s) from backup — ${added} new (by date), ${incoming.length-added} already present. Overwrite/merge now?`)){
+      evt.target.value = ""; return;
+    }
+    const merged = [...byDate.values()].sort((a,b) => new Date(a.date) - new Date(b.date));
+    localStorage.setItem("tg_sessions", JSON.stringify(merged));
+    if (Array.isArray(data.tg_checklist) && data.tg_checklist.length){
+      const cur = new Set(JSON.parse(localStorage.getItem("tg_checklist") || "[]"));
+      data.tg_checklist.forEach(w => cur.add(w));
+      localStorage.setItem("tg_checklist", JSON.stringify([...cur]));
+    }
+    refreshProgressBtn();
+    showProgress();
+    evt.target.value = "";
+  };
+  reader.readAsText(file);
+}
+
+/* ---------- init ---------- */
+(function init(){
+  const profile = JSON.parse(localStorage.getItem("tg_profile") || "{}");
+  if (profile.name) $("childName").value = profile.name;
+  if (profile.bday) $("childBday").value = profile.bday;
+  else if (profile.age) $("childAge").value = profile.age;
+  state.muted = localStorage.getItem("tg_muted") === "1";
+  updateMuteBtn();
+  refreshProgressBtn();
+  $("importFile").addEventListener("change", importData);
+  runCategorySelfTest(); // v6 (fix 4a): dev-time assertion sweep, see its own comment above
+  runVocabRungSelfTest(); // v6 (fix 5a): see its own comment above
+  runVocabThemeSelfTest(); // v7 (Part B): see its own comment above
+})();
+</script>
+</body>
+</html>
