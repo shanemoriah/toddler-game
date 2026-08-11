@@ -35,7 +35,7 @@
   /* ---------- categories (Feature 6): anchor strip above the tile grid ---------- */
   #categoryAnchors { display: none; text-align: center; padding: 4px 0 2px; }
   #categoryAnchors .anchor-label { font-size: 14px; color: #8a7d66; margin-bottom: 4px; }
-  #categoryAnchors .anchor-row { font-size: 38px; display: flex; gap: 14px; justify-content: center; }
+  #categoryAnchors .anchor-row { font-size: 58px; display: flex; gap: 18px; justify-content: center; }
 
   /* ---------- screens ---------- */
   /* v6: "safe center" (not plain "center") — with overflow-y:auto + justify-content:center, a
@@ -956,7 +956,26 @@ function renderBodyFigure(){
   wrap.innerHTML = `<div style="position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center">
     <div style="position:relative;height:100%;aspect-ratio:${BODY_VB.w}/${BODY_VB.h};max-width:100%">${bodyFigureSVG()}${hits}</div>
   </div>`;
-  wrap.querySelectorAll(".body-hit").forEach(el => { el.onclick = () => tapBodyPart(el.dataset.part, el); });
+  // v9.1: forgiving taps — instead of requiring a hit inside each small
+  // region circle, any tap on the figure resolves to the NEAREST region
+  // center within a generous tolerance (region radius + 9 viewBox units).
+  // The .body-hit divs stay for highlight/reveal styling only.
+  wrap.querySelectorAll(".body-hit").forEach(el => { el.style.pointerEvents = "none"; });
+  const fig = wrap.querySelector("div[style*='aspect-ratio']");
+  fig.onclick = (ev) => {
+    const rect = fig.getBoundingClientRect();
+    const x = (ev.clientX - rect.left) / rect.width * BODY_VB.w + BODY_VB.minX;
+    const y = (ev.clientY - rect.top) / rect.height * BODY_VB.h;
+    let best = null;
+    for (const [key, r] of Object.entries(BODY_REGIONS))
+      for (const cx of r.cx){
+        const dist = Math.hypot(x - cx, y - r.cy);
+        if (dist <= r.r + 9 && (!best || dist < best.dist)) best = { key, dist };
+      }
+    if (!best) return; // empty background tap: no penalty, no reaction
+    const el = wrap.querySelector(`.body-hit[data-part="${best.key}"]`);
+    tapBodyPart(best.key, el);
+  };
 }
 function renderBodyRound(dom, ds){
   const available = dom.defs.filter(d => !ds.used.has(d.label));
@@ -978,7 +997,7 @@ function renderBodyRound(dom, ds){
   state.currentItem = it; state.locked = false; state.firstTry = true;
   $("promptText").textContent = it.prompt;
   $("progressBar").style.width = progressPct(ds) + "%";
-  sayCue(it.cueKey, it.say); // v8: no-op fallback to speak() — mybody items never set cueKey
+  sayItem(it); // v8: no-op fallback to speak() — mybody items never set cueKey
 }
 function tapBodyPart(part, el){
   if (state.locked || !state.domain) return;
@@ -1005,7 +1024,7 @@ function tapBodyPart(part, el){
       state.locked = true;
       recordResult(it, false);
       highlightAll("reveal");
-      speak(`This one is the ${it.label}!`);
+      speak(it.revealText || `This one is the ${it.label}!`);
       setTimeout(() => { renderItem(); }, 1600);
     }
   }
@@ -1082,12 +1101,15 @@ function makeRhymeItem(d, arity){
   return { label: d.label, b: d.b, c: 1/choices.length, s: 4,
     prompt: `Which one rhymes with "${d.word}"?`,
     say: `Which one rhymes with ${d.word}? Choices are ${words.join(", ")}.`,
-    // v8: recording-booth playback cue — a parent-recorded clip of just the
-    // stimulus word (e.g. "cat") plays INSTEAD of this whole compound
-    // sentence when one exists (see sayCue()). Deliberate whole-item
-    // substitution, not word-splicing — matches the task's own worked
-    // example ("word:cat") for what this domain's cue should be.
-    cueKey: `word:${d.word}`,
+    // v9.1: segmented prompt — a stable bundleable question clip, then each
+    // choice word spoken in tile order (parent-recorded word clips slot into
+    // the word segments via their word: cues). Replaces the v8 whole-item
+    // cue substitution that played only "cat" for the entire question.
+    saySegments: [
+      { text: `Which one rhymes with ${d.word}?` }, // no cueKey: always the full question
+      ...choices.map(c => ({ text: c.w, cueKey: `word:${c.w}` })),
+    ],
+    revealText: `${d.correct.w} rhymes with ${d.word}!`,
     tiles: choices.map(c => emojiTile(c.e)), correct: choices.findIndex(c => c.correct) };
 }
 function makeLetterSoundItem(d, pool, arity){
@@ -1256,14 +1278,10 @@ function collectAllSayStrings(){
   // which random distractors got chosen or their shuffled tile order
   // (verified when this function was written — arity/distractor-choice only
   // changes WHICH tiles render, not the wording), with exactly one
-  // exception: PHONO_DEFS rhyme items (d.kind==="rhyme") build `say` as
-  // "...Choices are X, Y, Z." from a RANDOMLY shuffled+sliced distractor
-  // set, so no single fixed string exists to bundle for them — deliberately
-  // skipped here. This isn't a coverage gap in practice: makeRhymeItem sets
-  // `cueKey: word:${d.word}`, and every recordable cue (below) IS bundled,
-  // so sayCue() substitutes that bundled single-word clip for the entire
-  // rhyme question before it would ever fall through to this un-bundleable
-  // compound sentence — see sayCue()'s bundled-tier lookup.
+  // exception: PHONO_DEFS rhyme items (d.kind==="rhyme") build a randomly
+  // ordered compound `say`, so v9.1 speaks them as saySegments instead — a
+  // stable question clip enumerated here, then per-word clips (each choice
+  // word is bundled via the recordable-cue inventory below).
   const ARITY = 4;
   for (const dom of DOMAINS){
     if (dom.key === "seekfind"){
@@ -1288,7 +1306,13 @@ function collectAllSayStrings(){
     }
     if (!dom.make) continue;
     for (const d of dom.defs){
-      if (d.kind === "rhyme") continue; // see doc comment above
+      if (d.kind === "rhyme"){
+        // v9.1: the stable question segment (choice-word segments are covered
+        // by the recordable-cue inventory below)
+        add(`Which one rhymes with ${d.word}?`);
+        add(`${d.correct.w} rhymes with ${d.word}!`); // rhyme items' revealText
+        continue;
+      }
       let it;
       try { it = dom.make(d, dom.defs, ARITY); } catch(e){ continue; } // defensive only — every real def succeeds
       add(it.say);
@@ -1530,14 +1554,31 @@ function playBundledText(text, cb, onMiss){
   playAudioClip(audio, cb, false).then(started => { if (!started) onMiss(); });
 }
 
+function sayItem(it, cb){
+  // v9.1: items may carry saySegments (rhymes: stable question + choice words)
+  // — play them in order, each through the normal recorded→bundled→TTS chain.
+  if (it.saySegments && it.saySegments.length){
+    const segs = it.saySegments;
+    const step = (i) => {
+      if (i >= segs.length || state.currentItem !== it){ cb && cb(); return; }
+      sayCue(segs[i].cueKey || null, segs[i].text, () => step(i + 1));
+    };
+    step(0);
+    return;
+  }
+  sayCue(it.cueKey, it.say, cb);
+}
 function sayCue(cueKey, fallbackText, cb){
   // muted: skip the IndexedDB round-trip entirely and go straight to speak(),
   // which already no-ops audio but still fires cb on its own timer — same
   // "flow keeps moving even with no sound" contract sayCue callers rely on.
   if (!cueKey || state.muted){ speak(fallbackText, cb); return; }
-  // v9: recorded clip -> bundled clip (keyed by the cue's own natural text,
-  // e.g. "cat" for word:cat) -> live TTS, in that order.
-  const tryBundledThenTTS = () => playBundledText(cueNaturalText(cueKey), cb, () => speak(fallbackText, cb));
+  // v9.1: recorded clip -> bundled clip of the FULL fallback text -> live TTS.
+  // (Previously the bundled tier played the cue's bare word — a rhyme question
+  // came out as just "cat", which the user reported as confusing. Bare-word
+  // playback now only happens for a cue the parent explicitly recorded, or as
+  // a segment in sayItem()'s segmented prompts.)
+  const tryBundledThenTTS = () => playBundledText(fallbackText, cb, () => speak(fallbackText, cb));
   dbGetClip(cueKey).then(blob => {
     if (!blob){ tryBundledThenTTS(); return; } // no parent recording for this cue
     let url;
@@ -3140,7 +3181,7 @@ function renderItem(){
     board.appendChild(tile);
   });
   $("progressBar").style.width = progressPct(ds) + "%";
-  sayCue(it.cueKey, it.say); // v8: it.cueKey is set by makeRhymeItem/makeLetterSoundItem (phono); every other domain's item has no cueKey, so this is a no-op fallback to the previous speak(it.say) call
+  sayItem(it); // v8: it.cueKey is set by makeRhymeItem/makeLetterSoundItem (phono); every other domain's item has no cueKey, so this is a no-op fallback to the previous speak(it.say) call
 }
 
 function skipItem(){
@@ -3280,7 +3321,7 @@ function renderSeekfindRound(dom, ds){
   state.currentItem = it; state.locked = false; state.firstTry = true;
   $("promptText").textContent = it.prompt;
   $("progressBar").style.width = progressPct(ds) + "%";
-  sayCue(it.cueKey, it.say); // v8: no-op fallback to speak() — seekfind items never set cueKey
+  sayItem(it); // v8: no-op fallback to speak() — seekfind items never set cueKey
 }
 function tapSeekObj(word, el){
   // v6 adversarial-review fix: mirrors skipItem/dontKnowItem's guard (they already check
@@ -3315,7 +3356,7 @@ function tapSeekObj(word, el){
       const targetEl = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
       if (targetEl) targetEl.classList.add("reveal","found");
       if (state.domain && state.domain.sf && state.domain.sf.scene) state.domain.sf.scene.resolved++;
-      speak(`This one is the ${it.label}!`);
+      speak(it.revealText || `This one is the ${it.label}!`);
       setTimeout(()=>{ renderItem(); }, 1600);
     }
   }
@@ -3329,7 +3370,7 @@ function repeatPrompt(){
   // repeatPrompt is one of the sanctioned interrupt paths.
   ttsCancel(); stopClip();
   const it = state.currentItem;
-  setTimeout(() => { if (state.currentItem === it) sayCue(it.cueKey, it.say); }, 150);
+  setTimeout(() => { if (state.currentItem === it) sayItem(it); }, 150);
 }
 
 function tapTile(i, tileEl){
@@ -3364,7 +3405,7 @@ function tapTile(i, tileEl){
       recordResult(it, false);
       tiles[it.correct].classList.add("reveal");
       tiles.forEach((t,j)=>{ if(j!==it.correct) t.classList.add("dim"); });
-      speak(`This one is the ${it.label}!`);
+      speak(it.revealText || `This one is the ${it.label}!`);
       setTimeout(()=>{ renderItem(); }, 1600);
     }
   }
