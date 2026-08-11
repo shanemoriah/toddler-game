@@ -897,25 +897,29 @@ function makeTimeItem(d, pool, arity){
    NOTES.md v7) so a tap can never land ambiguously between two body parts.
 */
 const BODY_VB = { minX:-5, w:110, h:215 };
+// v9.2: coordinates matched to the redrawn art in bodyFigureSVG() below — legs now
+// bend at a visible knee, arms end in a tapered wrist + palm + 4-5 stubby fingers,
+// feet are side-profile shoes with a distinct heel bump at the back vs. toe/instep
+// at the front. See NOTES.md v9.2 for the pairwise + dead-center-tap probe results.
 const BODY_REGIONS = {
-  hair:      { cy:8,   r:8, cx:[50] },
+  hair:      { cy:6,   r:6, cx:[50] },
   eyebrow:   { cy:18,  r:4, cx:[37,63] },
   eyes:      { cy:30,  r:6, cx:[38,62] },
-  ears:      { cy:32,  r:8, cx:[18,82] },
+  ears:      { cy:32,  r:8, cx:[15,85] },
   nose:      { cy:44,  r:6, cx:[50] },
-  mouth:     { cy:57,  r:6, cx:[50] },
-  chin:      { cy:68,  r:5, cx:[50] },
+  mouth:     { cy:57,  r:5, cx:[50] },
+  chin:      { cy:68,  r:4, cx:[50] },
   neck:      { cy:80,  r:6, cx:[50] },
-  shoulders: { cy:95,  r:7, cx:[24,76] },
-  elbow:     { cy:108, r:8, cx:[10,90] },
-  tummy:     { cy:122, r:15,cx:[50] },
-  wrist:     { cy:132, r:6, cx:[4,96] },
-  hands:     { cy:148, r:7, cx:[2,98] },
-  fingers:   { cy:162, r:5, cx:[0,100] },
-  knees:     { cy:155, r:8, cx:[34,66] },
-  ankle:     { cy:183, r:6, cx:[34,66] },
-  feet:      { cy:197, r:7, cx:[34,66] },
-  heel:      { cy:203, r:5, cx:[20,80] },
+  shoulders: { cy:93,  r:7, cx:[27,73] },
+  elbow:     { cy:107, r:8, cx:[10,90] },
+  tummy:     { cy:118, r:14,cx:[50] },
+  wrist:     { cy:130, r:6, cx:[4,96] },
+  hands:     { cy:147, r:7, cx:[3,97] },
+  fingers:   { cy:161, r:5, cx:[3,97] },
+  knees:     { cy:167, r:7, cx:[31,69] },
+  ankle:     { cy:185, r:5, cx:[37,63] },
+  feet:      { cy:197, r:8, cx:[18,82] },
+  heel:      { cy:202, r:6, cx:[43,57] },
 };
 // ladder per the task: nose/eyes/mouth/ears/hair/hands/feet/tummy 20-30 (kept low
 // for younger-sibling use), knees/fingers/neck 34-42, elbow/ankle/wrist/shoulders
@@ -927,24 +931,54 @@ const BODY_DEFS = [
   ["eyebrow",62], ["chin",66], ["heel",70],
 ];
 function bodyFigureSVG(){
-  const skin=KID.skin, shirt=KID.shirt, shorts=KID.shorts, ink=KID.ink;
+  const skin=KID.skin, shirt=KID.shirt, shorts=KID.shorts, ink=KID.ink, brow="#2b2118";
   return `<svg viewBox="${BODY_VB.minX} 0 ${BODY_VB.w} ${BODY_VB.h}" style="width:100%;height:100%;display:block">
-    <rect x="30" y="130" width="16" height="65" rx="8" fill="${shorts}"/>
-    <rect x="54" y="130" width="16" height="65" rx="8" fill="${shorts}"/>
-    <ellipse cx="38" cy="197" rx="10" ry="7" fill="${ink}"/>
-    <ellipse cx="62" cy="197" rx="10" ry="7" fill="${ink}"/>
+    <rect x="30" y="124" width="16" height="28" rx="8" fill="${shorts}"/>
+    <rect x="54" y="124" width="16" height="28" rx="8" fill="${shorts}"/>
+    <path d="M38,150 L31,167 L38,177" stroke="${skin}" stroke-width="13" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M62,150 L69,167 L62,177" stroke="${skin}" stroke-width="13" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M38,177 L37,192" stroke="${skin}" stroke-width="6.5" fill="none" stroke-linecap="round"/>
+    <path d="M62,177 L63,192" stroke="${skin}" stroke-width="6.5" fill="none" stroke-linecap="round"/>
+    <ellipse cx="31" cy="167" rx="4.5" ry="5.5" fill="${skin}" stroke="${ink}" stroke-width="1" stroke-opacity="0.3"/>
+    <ellipse cx="69" cy="167" rx="4.5" ry="5.5" fill="${skin}" stroke="${ink}" stroke-width="1" stroke-opacity="0.3"/>
+    <path d="M26,165 Q31,171 36,165" stroke="${ink}" stroke-width="1.6" fill="none" stroke-linecap="round" opacity="0.45"/>
+    <path d="M64,165 Q69,171 74,165" stroke="${ink}" stroke-width="1.6" fill="none" stroke-linecap="round" opacity="0.45"/>
+    <path d="M36,193 L14,200" stroke="${ink}" stroke-width="13" fill="none" stroke-linecap="round"/>
+    <path d="M64,193 L86,200" stroke="${ink}" stroke-width="13" fill="none" stroke-linecap="round"/>
+    <ellipse cx="43" cy="202" rx="6.5" ry="6" fill="${ink}"/>
+    <ellipse cx="57" cy="202" rx="6.5" ry="6" fill="${ink}"/>
     <rect x="43" y="62" width="14" height="28" rx="5" fill="${skin}"/>
     <rect x="27" y="86" width="46" height="48" rx="16" fill="${shirt}"/>
-    <path d="M30,95 L10,108 L4,132 L2,148" stroke="${skin}" stroke-width="11" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M70,95 L90,108 L96,132 L98,148" stroke="${skin}" stroke-width="11" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-    <ellipse cx="18" cy="32" rx="6" ry="9" fill="${skin}"/><ellipse cx="82" cy="32" rx="6" ry="9" fill="${skin}"/>
+    <circle cx="50" cy="117" r="2.1" fill="${ink}" opacity="0.5"/>
+    <ellipse cx="27" cy="93" rx="8" ry="7" fill="${skin}"/>
+    <ellipse cx="73" cy="93" rx="8" ry="7" fill="${skin}"/>
+    <path d="M28,94 L10,107 L4,126" stroke="${skin}" stroke-width="11" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M72,94 L90,107 L96,126" stroke="${skin}" stroke-width="11" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M6,104 Q10,109 14,104" stroke="${ink}" stroke-width="1.3" fill="none" stroke-linecap="round" opacity="0.4"/>
+    <path d="M86,104 Q90,109 94,104" stroke="${ink}" stroke-width="1.3" fill="none" stroke-linecap="round" opacity="0.4"/>
+    <path d="M4,127 L4,138" stroke="${skin}" stroke-width="7" fill="none" stroke-linecap="round"/>
+    <path d="M96,127 L96,138" stroke="${skin}" stroke-width="7" fill="none" stroke-linecap="round"/>
+    <ellipse cx="3" cy="147" rx="8" ry="7" fill="${skin}"/>
+    <ellipse cx="97" cy="147" rx="8" ry="7" fill="${skin}"/>
+    <ellipse cx="-1.5" cy="142" rx="3" ry="4.2" fill="${skin}"/>
+    <ellipse cx="101.5" cy="142" rx="3" ry="4.2" fill="${skin}"/>
+    <ellipse cx="-2" cy="158" rx="2.2" ry="4.5" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="1.7" cy="161" rx="2.2" ry="4.8" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="5.3" cy="161" rx="2.2" ry="4.8" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="8.7" cy="158" rx="2.2" ry="4.3" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="102" cy="158" rx="2.2" ry="4.5" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="98.3" cy="161" rx="2.2" ry="4.8" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="94.7" cy="161" rx="2.2" ry="4.8" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="91.3" cy="158" rx="2.2" ry="4.3" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="15" cy="32" rx="6.5" ry="9" fill="${skin}" stroke="${ink}" stroke-width="1" stroke-opacity="0.35"/><ellipse cx="85" cy="32" rx="6.5" ry="9" fill="${skin}" stroke="${ink}" stroke-width="1" stroke-opacity="0.35"/>
     <circle cx="50" cy="38" r="32" fill="${skin}"/>
-    <path d="M18,20 Q50,-8 82,20 Q82,2 50,0 Q18,2 18,20 Z" fill="#6b4a2b"/>
-    <path d="M32,17 Q37,13 42,17" stroke="${ink}" stroke-width="2.4" fill="none" stroke-linecap="round"/>
-    <path d="M58,17 Q63,13 68,17" stroke="${ink}" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+    <path d="M18,20 Q50,-8 82,20 Q82,3 50,1 Q18,3 18,20 Z" fill="#6b4a2b"/>
+    <path d="M32,18 Q37,13 42,18" stroke="${brow}" stroke-width="2.8" fill="none" stroke-linecap="round"/>
+    <path d="M58,18 Q63,13 68,18" stroke="${brow}" stroke-width="2.8" fill="none" stroke-linecap="round"/>
     <circle cx="38" cy="30" r="3.4" fill="${ink}"/><circle cx="62" cy="30" r="3.4" fill="${ink}"/>
     <path d="M47,44 Q50,48 53,44" stroke="${ink}" stroke-width="2" fill="none" stroke-linecap="round"/>
     <path d="M41,57 Q50,63 59,57" stroke="${ink}" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <path d="M46,67 Q50,70 54,67" stroke="${ink}" stroke-width="1.4" fill="none" stroke-linecap="round" opacity="0.4"/>
   </svg>`;
 }
 function renderBodyFigure(){
