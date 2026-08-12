@@ -22,18 +22,34 @@
 
   /* ---------- header ---------- */
   #hud { display: flex; align-items: center; gap: 12px; padding: 6px 4px; min-height: 52px; }
-  #mascot { font-size: 42px; transition: transform .3s; cursor: default; }
+  /* v9.3: mascot + 🗺 grouped on the LEFT (map = primary "switch games" control, moved away
+     from Finish so a parent reaching for it mid-session can't miss-tap Finish instead — see
+     NOTES.md v9.3). #stars (flex:1) keeps this group separated from muteBtn/quitBtn on the right. */
+  #hudLeft { display: flex; align-items: center; gap: 2px; }
+  #mascot { font-size: 42px; transition: transform .3s; cursor: pointer; }
   #mascot.bounce { animation: bounce .6s; }
   @keyframes bounce { 0%,100%{transform:translateY(0)} 40%{transform:translateY(-16px) rotate(-8deg)} 70%{transform:translateY(0)} 85%{transform:translateY(-6px)} }
   #stars { flex: 1; display: flex; flex-wrap: wrap; gap: 2px; font-size: 20px; min-height: 24px; }
   #muteBtn { background: none; border: none; font-size: 24px; cursor: pointer; padding: 4px 6px; line-height: 1; }
-  #mapBtn { background: none; border: none; font-size: 24px; cursor: pointer; padding: 4px 6px; line-height: 1; }
+  /* v9.3: bumped to a real ~44px tap target (was a cramped 24px-font/4-6px-padding box) —
+     this is the primary "switch games" control for a parent mid-session, per the task. */
+  #mapBtn { background: none; border: none; font-size: 32px; cursor: pointer; padding: 6px; line-height: 1; min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
   #quitBtn { background: none; border: 2px solid var(--tile-border); border-radius: 12px; padding: 6px 12px; font-size: 14px; color: #999; cursor: pointer; }
   /* ---------- skip (parent-facing, deliberately unobtrusive — not a kid-attractor) ---------- */
   .skip-btn { background: none; border: none; font-size: 12px; color: #b8ab90; cursor: pointer; padding: 4px 10px; opacity: .7; touch-action: manipulation; }
   .skip-btn:active { opacity: 1; }
   /* ---------- categories (Feature 6): anchor strip above the tile grid ---------- */
-  #categoryAnchors { display: none; text-align: center; padding: 4px 0 2px; }
+  /* v9.3 fix: #categoryAnchors is a flex ITEM of .screen (align-items:center), so without an
+     explicit width it shrink-to-fits to its own CONTENT'S natural size instead of the true
+     available cross-axis width — which silently broke shrinkToFit()'s own overflow check (it
+     measured the overflowing .anchor-row against a categoryAnchors box that had already grown
+     to match it, so scrollWidth===clientWidth even while genuinely overflowing #gameScreen).
+     align-self:stretch makes this fill the real available width like #board effectively does,
+     so .anchor-row (a plain block child, width:auto) — and shrinkToFit()'s measurement of it —
+     both become trustworthy. Purely a sizing fix: text-align:center still centers the (now
+     correctly width-constrained) content inside it, so categories' small 3-icon row looks
+     identical to before. */
+  #categoryAnchors { display: none; text-align: center; padding: 4px 0 2px; align-self: stretch; }
   #categoryAnchors .anchor-label { font-size: 14px; color: #8a7d66; margin-bottom: 4px; }
   #categoryAnchors .anchor-row { font-size: 58px; display: flex; gap: 18px; justify-content: center; }
 
@@ -208,10 +224,12 @@
 <body>
 <div id="app">
   <div id="hud">
-    <div id="mascot">🦊</div>
+    <div id="hudLeft">
+      <div id="mascot" onclick="tapMascot()">🦊</div>
+      <button id="mapBtn" onclick="backToMap()" style="display:none" aria-label="Back to map" title="Back to the map">🗺</button>
+    </div>
     <div id="stars"></div>
     <button id="muteBtn" onclick="toggleMute()" aria-label="Mute">🔊</button>
-    <button id="mapBtn" onclick="backToMap()" style="display:none" aria-label="Back to map" title="Back to the map">🗺</button>
     <button id="quitBtn" onclick="endGame()" style="display:none">Finish</button>
   </div>
   <div id="progressWrap" style="display:none"><div id="progressBar"></div></div>
@@ -240,6 +258,7 @@
     <button class="smallbtn" onclick="testVoice()">🔊 Test voice</button>
     <div id="voiceDiag" style="display:none;font-size:12px;color:#8a7d66;max-width:520px;text-align:left;background:#fff;border:1px solid #f0e0c0;border-radius:10px;padding:8px 12px;white-space:pre-wrap"></div>
     <button class="smallbtn" onclick="showBooth()">🎙 Grown-up recording booth</button>
+    <p id="storageDiagFooter" class="subtitle" style="display:none;font-size:12px"></p>
   </div>
 
   <!-- PICKER -->
@@ -312,6 +331,7 @@
   <!-- PROGRESS -->
   <div id="progressScreen" class="screen">
     <h2>📈 Progress over time</h2>
+    <div id="storageDiag" style="font-size:12px;color:#8a7d66"></div>
     <div class="res-card" style="max-width:760px">
       <h3>🧠 Concept domains — age-equivalent vs chronological age</h3>
       <div id="domainCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px"></div>
@@ -771,6 +791,8 @@ const state = {
   finalDomains: {}, stars: 0, locked: false, checklist: new Set(),
   currentItem: null, firstTry: true, muted: false,
   sessionMode: null, // "single" (picker: one domain, return to picker) | "all" (Play everything!)
+  mascotSpeaking: false, // v9.3: tapMascot() debounce — see its own comment
+  visits: null, // v9.3: {first, count} — see stampVisit()/renderStorageDiagnostic()
 };
 
 const THETA_MIN = 8, THETA_MAX = 100; // v4: extended from 75 -> 100 (numbers/feelings ladders reach b~85)
@@ -1297,6 +1319,7 @@ function collectAllSayStrings(){
   // never be pre-bundled, so startGame() now speaks this fixed line instead
   // (the on-screen flow is unaffected; only the SPOKEN greeting changed).
   add("Hi friend! Let's play!");
+  MASCOT_LINES.forEach(add); // v9.3: tapMascot() encouragement lines — see its own comment
 
   // ---- domain intro / celebration, one per DOMAINS[] entry (beginDomain/domainDone) ----
   for (const dom of DOMAINS){
@@ -1373,22 +1396,71 @@ function collectAllSayStrings(){
 // throwing into game code — see sayCue()'s "IndexedDB unavailable -> TTS
 // fallback" and dbGetAllKeys()'s use in the booth's availability banner.
 const AUDIO_DB_NAME = "tg_audio", AUDIO_STORE = "clips";
+// v9.3: bumped 1 -> 2 to add a "kv" store (dual-write persistence layer, see persistSet()/
+// reconcileStorage() near init() below) alongside the existing "clips" store the recording
+// booth already used. This is an IndexedDB SCHEMA version, NOT the game's own vX.Y release
+// number — bumped only when an object store is added/changed, so a future deploy that
+// doesn't touch storage shape never bumps it again (see NOTES.md v9.3 "deploys must not
+// affect storage"). onupgradeneeded below only CREATES whichever store is missing
+// (objectStoreNames.contains guard), so an existing "clips" store — and its recordings —
+// from a v8/v9 session is left untouched by this upgrade.
+const AUDIO_DB_VERSION = 2, KV_STORE = "kv";
 let _audioDBPromise = null;
 function openAudioDB(){
   if (_audioDBPromise) return _audioDBPromise;
   _audioDBPromise = new Promise((resolve, reject) => {
     if (!("indexedDB" in window)){ reject(new Error("indexedDB unavailable")); return; }
-    let req;
-    try { req = indexedDB.open(AUDIO_DB_NAME, 1); } catch(e){ reject(e); return; }
-    req.onupgradeneeded = () => { try { req.result.createObjectStore(AUDIO_STORE); } catch(e){} };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error || new Error("indexedDB open failed"));
-    req.onblocked = () => reject(new Error("indexedDB open blocked"));
+    let req, settled = false;
+    const settle = (fn, val) => { if (settled) return; settled = true; clearTimeout(hangGuard); fn(val); };
+    // v9.3 adversarial-review fix: some browsers (a documented old-WebKit private-browsing bug)
+    // can leave indexedDB.open() never firing ANY of onsuccess/onerror/onblocked — every other
+    // async audio path in this file already has a hang-guard timer (see speak()/speakTTS()'s
+    // own); this one didn't, so a hung open() could permanently block reconcileStorage() (and
+    // therefore stampVisit() — see its own comment on why that must always eventually run) with
+    // no fallback. Bounded timeout rejects instead — the existing .catch() below still un-caches
+    // _audioDBPromise so a later retry (e.g. a subsequent recording-booth open) isn't stuck too.
+    const hangGuard = setTimeout(() => settle(reject, new Error("indexedDB open timed out")), 4000);
+    try { req = indexedDB.open(AUDIO_DB_NAME, AUDIO_DB_VERSION); } catch(e){ settle(reject, e); return; }
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      try { if (!db.objectStoreNames.contains(AUDIO_STORE)) db.createObjectStore(AUDIO_STORE); } catch(e){}
+      try { if (!db.objectStoreNames.contains(KV_STORE)) db.createObjectStore(KV_STORE); } catch(e){}
+    };
+    req.onsuccess = () => settle(resolve, req.result);
+    req.onerror = () => settle(reject, req.error || new Error("indexedDB open failed"));
+    req.onblocked = () => settle(reject, new Error("indexedDB open blocked"));
   }).catch(err => { _audioDBPromise = null; throw err; }); // don't cache a dead promise — allow a later retry
   return _audioDBPromise;
 }
 async function audioDBAvailable(){
   try { await openAudioDB(); return true; } catch(e){ return false; }
+}
+// ---- v9.3: kv store get/set — same shape as dbGetClip/dbSetClip below, but for the plain
+// STRING values (JSON-serialized, same as localStorage) persistSet()/reconcileStorage() use
+// for tg_sessions/tg_profile/tg_checklist/tg_muted/tg_visits.
+async function kvGet(key){
+  try {
+    const db = await openAudioDB();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(KV_STORE, "readonly");
+      const req = tx.objectStore(KV_STORE).get(key);
+      req.onsuccess = () => resolve(req.result !== undefined ? req.result : null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch(e){ return null; }
+}
+function kvSet(key, value){
+  // Fire-and-forget mirror write: localStorage (via persistSet's synchronous call) stays the
+  // source of truth every existing call site reads; this just keeps IndexedDB caught up so it
+  // can serve as a recovery fallback if localStorage gets wiped between launches. Never
+  // awaited/thrown by callers — a failure here (private browsing, quota, disabled storage)
+  // is silently swallowed, matching every other IndexedDB helper's degrade-gracefully contract.
+  openAudioDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(KV_STORE, "readwrite");
+    tx.objectStore(KV_STORE).put(value, key);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  })).catch(() => {});
 }
 async function dbGetClip(cueKey){
   try {
@@ -2921,9 +2993,48 @@ function updateMuteBtn(){
 }
 function toggleMute(){
   state.muted = !state.muted;
-  localStorage.setItem("tg_muted", state.muted ? "1" : "0");
+  persistSet("tg_muted", state.muted ? "1" : "0"); // v9.3: dual-write — see persistSet()'s own comment
   updateMuteBtn();
   if (state.muted){ ttsCancel(); stopClip(); } // v8: muting is a sanctioned interrupt path too
+}
+
+/* ---------- v9.3: mascot tap — cute encouragement lines ----------
+   Ten charming, kid-safe lines, spoken through the normal speak() chain (recorded clip ->
+   bundled clip -> live TTS, same as every other prompt) so they work on the Fire tablet's
+   TTS-less browser too, once bundled — see collectAllSayStrings() below, which pulls this
+   SAME array in so tools/gen_audio.sh bakes a clip for each one. */
+const MASCOT_LINES = [
+  "You're doing great, friend!",
+  "I love playing with you!",
+  "High five!",
+  "You make my tail wiggle!",
+  "You're my favorite playmate!",
+  "Let's keep having fun!",
+  "You're so smart!",
+  "I'm having such a good time!",
+  "You make me so happy!",
+  "Woohoo, you're amazing!",
+];
+// Whether the shared TTS engine OR the shared clip-audio element (bundled/recorded clips
+// both play through playAudioClip()/_currentClipAudio — see its own comment above) is
+// currently mid-playback. Used by tapMascot() below to detect an in-flight GAME prompt
+// (as opposed to a mascot line, tracked separately via state.mascotSpeaking) so a tap on
+// the fox never competes with it for audio.
+function isAnyAudioPlaying(){
+  return !!_currentClipAudio || ("speechSynthesis" in window && (speechSynthesis.speaking || speechSynthesis.pending));
+}
+function tapMascot(){
+  // Debounce: a mascot line is ALREADY playing — ignore this tap completely (no re-bounce,
+  // no queued-up second line) rather than letting a mash-happy toddler pile up overlapping
+  // speech.
+  if (state.mascotSpeaking) return;
+  $("mascot").classList.remove("bounce"); void $("mascot").offsetWidth; $("mascot").classList.add("bounce");
+  // Never interrupt an in-flight QUESTION PROMPT: if something else is speaking right now
+  // (game flow got here first), still bounce for immediate visual feedback, but stay silent
+  // rather than talking over it.
+  if (isAnyAudioPlaying()) return;
+  state.mascotSpeaking = true;
+  speak(pick(MASCOT_LINES), () => { state.mascotSpeaking = false; });
 }
 
 /* ---------- flow ---------- */
@@ -2946,7 +3057,7 @@ function startGame(){
   state.arity = age < 30 ? 2 : (age <= 41 ? 3 : 4); // 2AFC <30mo, 3AFC 30-41, 4AFC 42+
   state.finalDomains = {};
   state.stars = 0; state.domainIdx = -1; state.domain = null; state.sessionMode = null;
-  localStorage.setItem("tg_profile", JSON.stringify({name: state.name, age, bday: $("childBday").value}));
+  persistSet("tg_profile", JSON.stringify({name: state.name, age, bday: $("childBday").value})); // v9.3: dual-write
   $("quitBtn").style.display = "block";
   // v9: name-free greeting so it's cacheable as one bundled clip regardless
   // of which child is playing — see collectAllSayStrings()'s doc comment.
@@ -3148,6 +3259,43 @@ function progressPct(ds){
   return ((state.domainIdx + Math.min(1, ds.n / 6)) / DOMAINS.length) * 100;
 }
 
+/* v9.3: shrink an element's (or a set of sibling elements') own font-size until its content
+   fits its own layout box, instead of visually overflowing/getting clipped. Font-size-based
+   (not transform:scale) because patDot()/patGrow() (see PATTERN_DEFS above) size their nested
+   dot spans in `em`, relative to whichever element they're injected into — shrinking THIS
+   element's own font-size proportionally reflows every nested dot/cluster together, which is
+   exactly what's needed to fix long "What Comes Next?" strips (5-7+ icon defs) and multi-dot
+   growing-pattern choice tiles overflowing on narrow viewports (regression from v9.1's
+   #categoryAnchors .anchor-row bump to a fixed 58px — see NOTES.md v9.3). Takes an ARRAY so a
+   set of sibling choice tiles can be shrunk by the SAME amount (the worst-case tile drives it)
+   instead of each tile picking its own independent scale, which would make the choices in one
+   round visually inconsistent in size. Iterative measure-and-shrink (not a one-shot ratio)
+   because flex children partially shrink on their own first (default flex-shrink:1) before
+   truly overflowing, so a single ratio computed from `scrollWidth` wouldn't reliably predict
+   the fitted size in one step. Scoped to ONLY the patterns domain's own render branches below
+   — #categoryAnchors' other user (categories' 3-icon anchor row) never calls this, so it's
+   completely unaffected, still rendering at the CSS class's plain 58px. */
+function shrinkToFit(els, maxFont, minFont){
+  els = els.filter(Boolean);
+  if (!els.length) return;
+  let fontSize = maxFont;
+  els.forEach(el => el.style.fontSize = fontSize + "px");
+  const avail = els.map(el => el.clientWidth);
+  if (avail.some(w => !(w > 0))) return; // not laid out yet (e.g. hidden ancestor) — bail safely at maxFont
+  let guard = 0;
+  // v9.3 adversarial-review fix: the guard bound must cover the FULL maxFont->minFont range at
+  // this loop's own 2px step size, or it can exit early — genuinely still overflowing — well
+  // short of minFont on a call site with a wide range (e.g. the patterns tile call site's up to
+  // ~110px maxFont down to a 26px minFont needs up to 42 steps; a fixed 40 was one short of that).
+  const maxGuard = Math.ceil((maxFont - minFont) / 2) + 2;
+  const anyOverflow = () => els.some(el => el.scrollWidth > el.clientWidth);
+  while (anyOverflow() && fontSize > minFont && guard < maxGuard){
+    fontSize -= 2;
+    els.forEach(el => el.style.fontSize = fontSize + "px");
+    guard++;
+  }
+}
+
 function renderItem(){
   const dom = DOMAINS[state.domainIdx];
   const ds = state.domain;
@@ -3199,6 +3347,10 @@ function renderItem(){
     // before either branch re-shows it, so there's no stale-content leak.
     $("categoryAnchors").innerHTML = `<div class="anchor-label">What comes next?</div><div class="anchor-row">${it.patternStrip}<span style="opacity:.4">❓</span></div>`;
     $("categoryAnchors").style.display = "block";
+    // v9.3: shrink-to-fit — see shrinkToFit()'s own comment. Scoped to this branch only, so
+    // categories' `it.anchors` branch above (always exactly 3 icons, needs to stay big) is
+    // completely untouched.
+    shrinkToFit([$("categoryAnchors").querySelector(".anchor-row")], 58, 26);
   }
   const board = $("board");
   const nTiles = it.tiles.length;
@@ -3214,6 +3366,16 @@ function renderItem(){
     tile.onclick = () => tapTile(i, tile);
     board.appendChild(tile);
   });
+  if (dom.key === "patterns"){
+    // v9.3: growing-pattern choice tiles (multi-dot clusters, e.g. patGrow(6,...)) can exceed
+    // a tile's own clamp(56px,14vw,110px) font-size on narrow/3-column layouts, getting
+    // clipped by .tile's overflow:hidden — see shrinkToFit()'s own comment. Shrinks ALL of
+    // this round's tiles by the same amount (uniform scale across the choice set) so choices
+    // stay visually consistent; every other domain's tile sizing is untouched.
+    const tileEls = [...board.children];
+    const base = tileEls.length ? (parseFloat(getComputedStyle(tileEls[0]).fontSize) || 90) : 90;
+    shrinkToFit(tileEls, base, 26);
+  }
   $("progressBar").style.width = progressPct(ds) + "%";
   sayItem(it); // v8: it.cueKey is set by makeRhymeItem/makeLetterSoundItem (phono); every other domain's item has no cueKey, so this is a no-op fallback to the previous speak(it.say) call
 }
@@ -3498,7 +3660,7 @@ function showChecklist(){
 function updateCheckCount(){ $("checkCount").textContent = state.checklist.size; }
 function checklistTotal(){ return Object.values(CHECKLIST).reduce((s,w)=>s+w.length,0); }
 function finishChecklist(){
-  localStorage.setItem("tg_checklist", JSON.stringify([...state.checklist]));
+  persistSet("tg_checklist", JSON.stringify([...state.checklist])); // v9.3: dual-write
   show("startScreen");
 }
 
@@ -3650,7 +3812,8 @@ function saveSession(ageMonths, name, vocabEstimate, vocabChecked){
   if (!Object.keys(domains).length && vocabEstimate === null) return; // nothing scored this session
   const sessions = loadSessions();
   sessions.push({ v: 1, date: new Date().toISOString(), ageMonths, name, domains, vocabChecked, vocabEstimate });
-  localStorage.setItem("tg_sessions", JSON.stringify(sessions));
+  persistSet("tg_sessions", JSON.stringify(sessions)); // v9.3: dual-write
+  renderStorageDiagnostic(); // keep the "n sessions saved" readout current if it's on screen
 }
 function refreshProgressBtn(){
   const has = loadSessions().length > 0;
@@ -3663,6 +3826,7 @@ function showProgress(){
   renderDomainCharts();
   renderVocabChart();
   renderSessionList();
+  renderStorageDiagnostic();
   show("progressScreen");
 }
 function domainChartSVG(pts){
@@ -3814,11 +3978,11 @@ function importData(evt){
       evt.target.value = ""; return;
     }
     const merged = [...byDate.values()].sort((a,b) => new Date(a.date) - new Date(b.date));
-    localStorage.setItem("tg_sessions", JSON.stringify(merged));
+    persistSet("tg_sessions", JSON.stringify(merged)); // v9.3: dual-write
     if (Array.isArray(data.tg_checklist) && data.tg_checklist.length){
       const cur = new Set(JSON.parse(localStorage.getItem("tg_checklist") || "[]"));
       data.tg_checklist.forEach(w => cur.add(w));
-      localStorage.setItem("tg_checklist", JSON.stringify([...cur]));
+      persistSet("tg_checklist", JSON.stringify([...cur])); // v9.3: dual-write
     }
     if (audioCount){
       let imported = 0, failed = 0;
@@ -3836,8 +4000,126 @@ function importData(evt){
   reader.readAsText(file);
 }
 
+/* =====================================================================
+   v9.3: DUAL-WRITE PERSISTENCE — localStorage + IndexedDB "kv" store.
+   Motivation: a parent reported session history "not saving" on the Fire tablet's Amazon
+   Kids browser — possibly storage getting wiped between app launches, possibly just normal
+   deploys (see the diagnostic below, which is meant to tell the two apart). localStorage
+   stays the SYNCHRONOUS source of truth every existing call site reads/writes exactly as
+   before; persistSet() is a drop-in replacement for `localStorage.setItem` that ALSO mirrors
+   the write into IndexedDB (fire-and-forget, via kvSet() above), so a relaunch that finds
+   ONE of the two tiers wiped can recover from the other. reconcileStorage(), called once
+   from init() before any game code reads these keys, is the "on load, prefer whichever has
+   data" half — see its own comment for exactly how each key is reconciled. Not keyed by the
+   game's own version anywhere (AUDIO_DB_NAME/AUDIO_DB_VERSION above are a fixed name / an
+   IndexedDB schema version, never the game's vX.Y) — a deploy alone never touches or
+   invalidates any of this.
+   ===================================================================== */
+function persistSet(key, valueStr){
+  try { localStorage.setItem(key, valueStr); } catch(e){} // quota/private-mode — the kv mirror below is the fallback tier
+  kvSet(key, valueStr);
+}
+function mergeSessionsArr(a, b){
+  // Union by `date` (already a unique-enough key — see importData()'s identical dedup logic
+  // above) — a session present on EITHER side is never lost.
+  const byDate = new Map();
+  for (const s of (a || [])) if (s && s.date) byDate.set(s.date, s);
+  for (const s of (b || [])) if (s && s.date) byDate.set(s.date, s);
+  return [...byDate.values()].sort((x,y) => new Date(x.date) - new Date(y.date));
+}
+function mergeChecklistArr(a, b){
+  return [...new Set([...(a || []), ...(b || [])])];
+}
+function mergeVisits(a, b){
+  // Not a union (a single counter, not a list): take the HIGHER count (whichever side wasn't
+  // wiped has the true, larger count) and the EARLIER `first` (the more historically
+  // accurate one). stampVisit() (called right after reconcileStorage resolves) increments
+  // on TOP of this merged baseline.
+  a = a || {}; b = b || {};
+  const firsts = [a.first, b.first].filter(Boolean).sort();
+  return { first: firsts.length ? firsts[0] : new Date().toISOString(), count: Math.max(a.count || 0, b.count || 0) };
+}
+async function reconcileStorage(){
+  const idbOk = await audioDBAvailable();
+
+  // tg_sessions: merge (union by date). IndexedDB is read FIRST (the slow/async part) and
+  // localStorage is read fresh right before the merge/write decision below with no further
+  // await in between — narrows the window for a concurrent saveSession() write (same tab) to
+  // get clobbered down to zero, since nothing else can run between that read and this write
+  // in single-threaded JS.
+  const idbSessionsRaw = idbOk ? await kvGet("tg_sessions") : null;
+  let idbSessions = []; if (idbSessionsRaw){ try { idbSessions = JSON.parse(idbSessionsRaw) || []; } catch(e){} }
+  let lsSessions = []; try { lsSessions = JSON.parse(localStorage.getItem("tg_sessions") || "[]"); } catch(e){}
+  const mergedSessions = mergeSessionsArr(lsSessions, idbSessions);
+  const sessionsChanged = mergedSessions.length !== lsSessions.length;
+  if (sessionsChanged) persistSet("tg_sessions", JSON.stringify(mergedSessions));
+  else if (idbOk) kvSet("tg_sessions", JSON.stringify(lsSessions)); // nothing to merge — still keep IDB caught up
+
+  // tg_checklist: merge (union of words) — same read-order/race-window discipline as sessions.
+  const idbChecklistRaw = idbOk ? await kvGet("tg_checklist") : null;
+  let idbChecklist = []; if (idbChecklistRaw){ try { idbChecklist = JSON.parse(idbChecklistRaw) || []; } catch(e){} }
+  let lsChecklist = []; try { lsChecklist = JSON.parse(localStorage.getItem("tg_checklist") || "[]"); } catch(e){}
+  const mergedChecklist = mergeChecklistArr(lsChecklist, idbChecklist);
+  const checklistChanged = mergedChecklist.length !== lsChecklist.length;
+  if (checklistChanged) persistSet("tg_checklist", JSON.stringify(mergedChecklist));
+  else if (idbOk) kvSet("tg_checklist", JSON.stringify(lsChecklist));
+
+  // tg_profile / tg_muted: no meaningful "merge" for a single profile object / one boolean —
+  // just backfill whichever side is empty from the other, else keep IDB in sync.
+  for (const key of ["tg_profile","tg_muted"]){
+    const idbVal = idbOk ? await kvGet(key) : null;
+    const lsVal = localStorage.getItem(key); // fresh read, right before acting
+    if (!lsVal && idbVal){ try { localStorage.setItem(key, idbVal); } catch(e){} }
+    else if (lsVal && idbOk){ kvSet(key, lsVal); }
+  }
+
+  // tg_visits: merged via mergeVisits (max count / min first) — see its own comment.
+  const idbVisitsRaw = idbOk ? await kvGet("tg_visits") : null;
+  let idbVisits = null; if (idbVisitsRaw){ try { idbVisits = JSON.parse(idbVisitsRaw); } catch(e){} }
+  let lsVisits = null; try { const r = localStorage.getItem("tg_visits"); lsVisits = r ? JSON.parse(r) : null; } catch(e){}
+  persistSet("tg_visits", JSON.stringify(mergeVisits(lsVisits, idbVisits)));
+
+  return { sessionsChanged, checklistChanged };
+}
+// Stamped once per page load, AFTER reconcileStorage() has restored localStorage's tg_visits
+// from IndexedDB if it was missing/behind — reading the RECONCILED value here (not the raw,
+// possibly-just-wiped localStorage one) is load-bearing: stamping first would overwrite an
+// empty-because-wiped localStorage with a fresh {count:1} BEFORE reconciliation ever saw the
+// true prior count, permanently losing it instead of recovering it.
+function stampVisit(){
+  let v = { first: null, count: 0 };
+  try { const raw = localStorage.getItem("tg_visits"); if (raw) v = JSON.parse(raw) || v; } catch(e){}
+  if (!v.first) v.first = new Date().toISOString();
+  v.count = (v.count || 0) + 1;
+  persistSet("tg_visits", JSON.stringify(v));
+  state.visits = v;
+  return v;
+}
+// Parent-facing "does storage actually survive relaunch" readout — see the task's own framing:
+// if `visits` keeps resetting to 1 on the Fire tablet, that's a definitive answer ("the kids
+// browser wipes storage") rather than a guess. Shown on the Progress screen always, and on the
+// start-screen footer ONLY while there's no session history yet (so a parent who hasn't found
+// the Progress screen yet still sees it).
+function renderStorageDiagnostic(){
+  const v = state.visits;
+  const sessions = loadSessions();
+  const text = (v && v.first)
+    ? `Storage check: first seen ${new Date(v.first).toLocaleDateString()}, ${v.count} visit${v.count === 1 ? "" : "s"}, ${sessions.length} session${sessions.length === 1 ? "" : "s"} saved`
+    : "Storage check: still checking…";
+  const prog = $("storageDiag");
+  if (prog) prog.textContent = text;
+  const footer = $("storageDiagFooter");
+  if (footer){
+    footer.textContent = text;
+    footer.style.display = sessions.length ? "none" : "block";
+  }
+}
+
 /* ---------- init ---------- */
 (function init(){
+  // ---- synchronous baseline (unchanged from pre-v9.3 behavior) — fast first paint that
+  // doesn't wait on IndexedDB; reconcileStorage() below patches this up shortly after if it
+  // finds localStorage was missing something IndexedDB still had.
   const profile = JSON.parse(localStorage.getItem("tg_profile") || "{}");
   if (profile.name) $("childName").value = profile.name;
   if (profile.bday) $("childBday").value = profile.bday;
@@ -3850,6 +4132,27 @@ function importData(evt){
   runVocabRungSelfTest(); // v6 (fix 5a): see its own comment above
   runVocabThemeSelfTest(); // v7 (Part B): see its own comment above
   loadAudioManifest(); // v9: fire-and-forget fetch of audio/manifest.json — see its own comment above
+
+  // ---- v9.3: reconcile localStorage/IndexedDB, THEN stamp this visit — see
+  // reconcileStorage()/stampVisit()'s own comments for why the order matters. Fire-and-forget
+  // (never blocks first paint); re-applies to the UI whatever it recovers/changes.
+  reconcileStorage().then(({ sessionsChanged }) => {
+    stampVisit();
+    if (sessionsChanged) refreshProgressBtn();
+    if (!profile.name && !profile.bday && !profile.age){
+      const p2 = JSON.parse(localStorage.getItem("tg_profile") || "{}");
+      // v9.3 adversarial-review fix: only backfill a field that's STILL empty right now — a
+      // parent who started typing the child's name during the reconcile window (this can take
+      // a couple of IndexedDB round-trips) must never have their in-progress keystrokes
+      // silently overwritten by a recovered OLD value once reconcile finally resolves.
+      if (p2.name && !$("childName").value) $("childName").value = p2.name;
+      if (p2.bday && !$("childBday").value) $("childBday").value = p2.bday;
+      else if (p2.age && !$("childAge").value) $("childAge").value = p2.age;
+    }
+    const m2 = localStorage.getItem("tg_muted");
+    if (m2 !== null && (m2 === "1") !== state.muted){ state.muted = m2 === "1"; updateMuteBtn(); }
+    renderStorageDiagnostic();
+  }).catch(() => { stampVisit(); renderStorageDiagnostic(); });
 })();
 </script>
 </body>
