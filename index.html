@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <title>Milo's Learning Adventure</title>
+<!-- v9.4: app icon — was a blank tile when added to Amazon Fire kids-profile "My Stuff"
+     (no icon/manifest to source from at all). icon.svg -> icon-512/192.png + apple-touch-icon.png
+     via qlmanage/sips (see NOTES.md v9.4). -->
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#fdf6e3">
 <style>
   :root {
     --bg: #fdf6e3; --card: #ffffff; --ink: #3a3226;
@@ -26,7 +33,7 @@
      from Finish so a parent reaching for it mid-session can't miss-tap Finish instead — see
      NOTES.md v9.3). #stars (flex:1) keeps this group separated from muteBtn/quitBtn on the right. */
   #hudLeft { display: flex; align-items: center; gap: 2px; }
-  #mascot { font-size: 42px; transition: transform .3s; cursor: pointer; }
+  #mascot { font-size: 42px; transition: transform .3s; cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
   #mascot.bounce { animation: bounce .6s; }
   @keyframes bounce { 0%,100%{transform:translateY(0)} 40%{transform:translateY(-16px) rotate(-8deg)} 70%{transform:translateY(0)} 85%{transform:translateY(-6px)} }
   #stars { flex: 1; display: flex; flex-wrap: wrap; gap: 2px; font-size: 20px; min-height: 24px; }
@@ -113,7 +120,8 @@
   }
   .seek-obj {
     position: absolute; transform: translate(-50%,-50%); line-height: 1; cursor: pointer;
-    user-select: none; touch-action: manipulation; animation: seekbob 2.2s ease-in-out infinite;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    touch-action: manipulation; animation: seekbob 2.2s ease-in-out infinite;
     filter: drop-shadow(0 2px 2px rgba(0,0,0,.12));
   }
   .seek-obj.correct { animation: none; transform: translate(-50%,-50%) scale(1.35); transition: transform .4s; }
@@ -136,6 +144,7 @@
     background: var(--tile); border: 4px solid var(--tile-border); border-radius: 24px;
     padding: 18px 8px; display: flex; flex-direction: column; align-items: center; gap: 6px;
     cursor: pointer; position: relative; transition: transform .12s; touch-action: manipulation;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
   }
   .picker-tile:active { transform: scale(.95); }
   .picker-tile-all { background: var(--accent); border-color: #d96f26; color: #fff; }
@@ -149,12 +158,15 @@
   .body-hit.correct { background: rgba(107,203,119,.35); box-shadow: 0 0 0 4px var(--good); animation: pop .5s; }
   .body-hit.wrong { animation: seekshake .45s; }
   .body-hit.reveal { background: rgba(107,203,119,.35); box-shadow: 0 0 0 4px var(--good); }
+  /* v9.4: the tappable figure wrapper itself (see renderBodyFigure/attachTap) — same long-press
+     suppression as every other child-tap surface. */
+  .body-fig { touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
   .tile {
     background: var(--tile); border: 4px solid var(--tile-border); border-radius: 28px;
     display: flex; align-items: center; justify-content: center; cursor: pointer;
     font-size: clamp(56px, 14vw, 110px); min-height: 120px; height: 100%;
     transition: transform .12s, border-color .2s, background .2s; position: relative; overflow: hidden;
-    touch-action: manipulation;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
   }
   .tile:active { transform: scale(.95); }
   /* ---------- v5 (mod 4): 5-6 tile "Tricky Pictures" items get a 3-column grid + a
@@ -225,7 +237,7 @@
 <div id="app">
   <div id="hud">
     <div id="hudLeft">
-      <div id="mascot" onclick="tapMascot()">🦊</div>
+      <div id="mascot">🦊</div>
       <button id="mapBtn" onclick="backToMap()" style="display:none" aria-label="Back to map" title="Back to the map">🗺</button>
     </div>
     <div id="stars"></div>
@@ -786,6 +798,93 @@ const VOCAB_NORMS = [ [12,6],[14,20],[16,45],[18,90],[20,170],[22,260],[24,310],
    thetaHat IS the age-equivalent in months, no back-conversion needed.
    ===================================================================== */
 const $ = id => document.getElementById(id);
+
+/* =====================================================================
+   v9.4: attachTap(el, handler) — generic tap wiring for anything the CHILD
+   taps (choice tiles, seek&find objects, the body figure, picker tiles, the
+   mascot). Replaces plain `onclick` on those surfaces because `click` alone
+   was unreliable on the Fire tablet: long-presses sometimes got eaten by the
+   browser's native long-press gesture (magnifier/selection/context-menu)
+   before a `click` ever fired, two simultaneous fingers could cancel or
+   re-aim the tap, and there was no scroll-vs-tap disambiguation (a finger
+   that landed on a tile while scrolling past it could register as a tap).
+   Parent-facing chrome (Finish/skip/dk/booth/etc, see NOTES.md v9.4) is left
+   on plain onclick — it's not what this task is about, and changing it would
+   only add risk.
+
+   Design, per the task:
+   - pointerdown records the FIRST active pointer's id + client coords only;
+     a second pointer touching down while one is already active is ignored
+     outright (no cancel, no re-aim) — it neither starts a new candidate tap
+     nor interferes with the one in flight.
+   - pointerup fires the handler with the POINTERDOWN coordinates (not the
+     pointerup coordinates — the tap "is" where the finger landed) if total
+     down-to-up movement is <12px (scroll-intent guard), but ONLY if the
+     event's pointerId matches the one pointerdown recorded — a second
+     finger lifting first (or at all) can never fire or clear the tracked
+     sequence. pointercancel for the tracked pointer just clears state, no
+     fire (native gesture take-over, e.g. a stray long-press despite the
+     suppressions below, must not misfire as a tap).
+   - Deliberately NO duration limit/timer anywhere in this function — a
+     multi-second hold is exactly as valid a tap as an instant one, per the
+     task ("long-presses don't register" was the original bug).
+   - setPointerCapture on pointerdown, released on pointerup/cancel: without
+     it, a finger resting on an ANIMATING target (seek&find objects bob via
+     the `seekbob` CSS keyframe, see .seek-obj) can end up with the browser
+     routing pointerup to whatever element is now physically under the
+     pointer once the animation has moved the original element away, instead
+     of back to this element — silently dropping the tap. Capture pins every
+     event for this pointerId to `el` regardless of what moves underneath.
+   - contextmenu is preventDefault'd on `el` itself — belt-and-suspenders
+     with the CSS suppressions below, since a long-press contextmenu on some
+     browsers can appear even with pointer capture held.
+   `handler` is called as handler(x, y, pointerType, ev) — x/y are pointerdown
+   CLIENT coords (viewport pixels), for callers (the body figure) that need
+   to convert a tap location into their own coordinate space; every other
+   caller ignores the arguments and just treats the call as "a tap landed".
+   Kept as a THIN wrapper around the same testable handler functions
+   (tapTile/tapSeekObj/tapBodyPart/tapMascot/playDomain) — nothing here is
+   itself the thing under test elsewhere in the file, so calling those
+   handlers directly (bypassing attachTap) remains a valid, unchanged way to
+   exercise game logic without simulating real pointer events.
+   ===================================================================== */
+function attachTap(el, handler){
+  let active = null; // { id, x, y, type } of the one pointer currently tracked, or null
+  el.addEventListener("pointerdown", (ev) => {
+    if (active) return; // a pointer is already down — ignore every additional simultaneous one
+    active = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, type: ev.pointerType };
+    try { el.setPointerCapture(ev.pointerId); } catch(e){} // best-effort — see comment above
+  });
+  el.addEventListener("pointerup", (ev) => {
+    if (!active || ev.pointerId !== active.id) return; // not the tracked pointer: never fires, never clears
+    const a = active; active = null;
+    try { el.releasePointerCapture(ev.pointerId); } catch(e){}
+    const moved = Math.hypot(ev.clientX - a.x, ev.clientY - a.y);
+    if (moved < 12) handler(a.x, a.y, a.type, ev);
+  });
+  el.addEventListener("pointercancel", (ev) => {
+    if (!active || ev.pointerId !== active.id) return;
+    try { el.releasePointerCapture(ev.pointerId); } catch(e){}
+    active = null; // no fire — native gesture took over, or the browser cancelled the sequence
+  });
+  // v9.4 adversarial-review fix: for elements created fresh every render (tiles/seek-objs/
+  // picker-tiles/the body figure — all rebuilt via innerHTML="" each round), a stuck `active`
+  // from a dropped pointerup/pointercancel is harmless — the whole element and its closure get
+  // discarded on the next render. #mascot is the one exception: it's wired ONCE in init() and
+  // never recreated, so if the OS ever interrupts a press before either terminal event reaches
+  // it (app-switch, notification-shade pull mid-press, or a dropped event on some WebView), the
+  // very first pointerdown's `if (active) return` guard would silently swallow every mascot tap
+  // for the rest of the session with no recovery. `lostpointercapture` is guaranteed by spec to
+  // fire whenever capture ends for ANY reason — including cases pointerup/pointercancel miss —
+  // so it's a safety net that clears `active` (never fires the handler; there's no trustworthy
+  // up-coordinate for this case) whenever the normal two handlers didn't already do it first.
+  el.addEventListener("lostpointercapture", (ev) => {
+    if (!active || ev.pointerId !== active.id) return;
+    active = null;
+  });
+  el.addEventListener("contextmenu", (ev) => ev.preventDefault());
+}
+
 const state = {
   name: "", age: 30, arity: 4, domainIdx: -1, domain: null,
   finalDomains: {}, stars: 0, locked: false, checklist: new Set(),
@@ -1003,6 +1102,27 @@ function bodyFigureSVG(){
     <path d="M46,67 Q50,70 54,67" stroke="${ink}" stroke-width="1.4" fill="none" stroke-linecap="round" opacity="0.4"/>
   </svg>`;
 }
+// v9.4: touch-only bias correction — user report (Fire tablet): the registered region lands
+// BELOW-RIGHT of the intended tap. Shifts the sample point UP-LEFT (negative x, negative y —
+// the figure's viewBox is SVG-style y-down, so "up" is -y) to compensate. Only ever applied for
+// pointerType "touch" (see resolveBodyTap below) — a mouse tap on a desktop browser has no such
+// systematic offset, and biasing it too would just make dead-center desktop taps miss.
+const TOUCH_BIAS = { x: -2, y: -3.5 };
+// v9.4: nearest-region lookup factored out of the tap handler so it can be exercised directly —
+// a probe loop over every region's own center, WITH bias applied, is the adversarial-review
+// check that the widened tolerance/bias never make two DIFFERENT regions' centers resolve to
+// each other (see NOTES.md v9.4) — without a real pointer event, per this pane's synthetic-
+// dispatchEvent limitation (see attachTap's own comment).
+function resolveBodyTap(viewX, viewY){
+  let best = null;
+  for (const [key, r] of Object.entries(BODY_REGIONS))
+    for (const cx of r.cx){
+      const dist = Math.hypot(viewX - cx, viewY - r.cy);
+      // v9.4: widened 9 -> 13 viewBox units per the task (Fire-tablet tolerance report).
+      if (dist <= r.r + 13 && (!best || dist < best.dist)) best = { key, dist };
+    }
+  return best;
+}
 function renderBodyFigure(){
   const wrap = $("seekBoard");
   const hits = Object.entries(BODY_REGIONS).map(([key,r]) => r.cx.map(cx => {
@@ -1010,28 +1130,27 @@ function renderBodyFigure(){
     return `<div class="body-hit" data-part="${key}" style="position:absolute;left:${left}%;top:${top}%;width:${wpct}%;aspect-ratio:1/1;transform:translate(-50%,-50%);border-radius:50%;cursor:pointer"></div>`;
   }).join("")).join("");
   wrap.innerHTML = `<div style="position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center">
-    <div style="position:relative;height:100%;aspect-ratio:${BODY_VB.w}/${BODY_VB.h};max-width:100%">${bodyFigureSVG()}${hits}</div>
+    <div class="body-fig" style="position:relative;height:100%;aspect-ratio:${BODY_VB.w}/${BODY_VB.h};max-width:100%">${bodyFigureSVG()}${hits}</div>
   </div>`;
   // v9.1: forgiving taps — instead of requiring a hit inside each small
   // region circle, any tap on the figure resolves to the NEAREST region
-  // center within a generous tolerance (region radius + 9 viewBox units).
+  // center within a generous tolerance (region radius + 13 viewBox units, v9.4).
   // The .body-hit divs stay for highlight/reveal styling only.
   wrap.querySelectorAll(".body-hit").forEach(el => { el.style.pointerEvents = "none"; });
-  const fig = wrap.querySelector("div[style*='aspect-ratio']");
-  fig.onclick = (ev) => {
+  const fig = wrap.querySelector(".body-fig");
+  // v9.4: child-tappable — attachTap (not plain click) so long-presses/scroll-drift are handled
+  // the same way as every other child-facing surface. See attachTap's own comment.
+  attachTap(fig, (clientX, clientY, pointerType) => {
     const rect = fig.getBoundingClientRect();
-    const x = (ev.clientX - rect.left) / rect.width * BODY_VB.w + BODY_VB.minX;
-    const y = (ev.clientY - rect.top) / rect.height * BODY_VB.h;
-    let best = null;
-    for (const [key, r] of Object.entries(BODY_REGIONS))
-      for (const cx of r.cx){
-        const dist = Math.hypot(x - cx, y - r.cy);
-        if (dist <= r.r + 9 && (!best || dist < best.dist)) best = { key, dist };
-      }
+    const bx = pointerType === "touch" ? TOUCH_BIAS.x : 0;
+    const by = pointerType === "touch" ? TOUCH_BIAS.y : 0;
+    const x = (clientX - rect.left) / rect.width * BODY_VB.w + BODY_VB.minX + bx;
+    const y = (clientY - rect.top) / rect.height * BODY_VB.h + by;
+    const best = resolveBodyTap(x, y);
     if (!best) return; // empty background tap: no penalty, no reaction
     const el = wrap.querySelector(`.body-hit[data-part="${best.key}"]`);
     tapBodyPart(best.key, el);
-  };
+  });
 }
 function renderBodyRound(dom, ds){
   const available = dom.defs.filter(d => !ds.used.has(d.label));
@@ -3084,7 +3203,7 @@ function renderPicker(){
   const all = document.createElement("div");
   all.className = "picker-tile picker-tile-all";
   all.innerHTML = `<div class="picker-emoji">🎉</div><div class="picker-label">Play everything!</div>`;
-  all.onclick = () => playEverything();
+  attachTap(all, () => playEverything()); // v9.4: child-tappable
   grid.appendChild(all);
   const sections = [];
   for (const dom of DOMAINS){
@@ -3102,7 +3221,7 @@ function renderPicker(){
       const tile = document.createElement("div");
       tile.className = "picker-tile";
       tile.innerHTML = `${played ? '<div class="picker-badge">⭐</div>' : ""}<div class="picker-emoji">${dom.emoji}</div><div class="picker-label">${dom.label}</div>`;
-      tile.onclick = () => playDomain(dom.key);
+      attachTap(tile, () => playDomain(dom.key)); // v9.4: child-tappable
       grid.appendChild(tile);
     }
   }
@@ -3363,7 +3482,7 @@ function renderItem(){
     const tile = document.createElement("div");
     tile.className = "tile";
     tile.innerHTML = html;
-    tile.onclick = () => tapTile(i, tile);
+    attachTap(tile, () => tapTile(i, tile)); // v9.4: child-tappable
     board.appendChild(tile);
   });
   if (dom.key === "patterns"){
@@ -3470,7 +3589,8 @@ function renderSeekfindScene(scene){
     el.style.fontSize = slot.size + "px";
     el.style.animationDelay = (Math.random()*2).toFixed(2) + "s";
     el.textContent = info ? info.emoji : "❓";
-    el.onclick = () => tapSeekObj(w, el);
+    attachTap(el, () => tapSeekObj(w, el)); // v9.4: child-tappable; pointer capture in attachTap matters
+    // here specifically since these objects bob via the seekbob animation — see attachTap's comment.
     wrap.appendChild(el);
   });
 }
@@ -4128,6 +4248,7 @@ function renderStorageDiagnostic(){
   updateMuteBtn();
   refreshProgressBtn();
   $("importFile").addEventListener("change", importData);
+  attachTap($("mascot"), tapMascot); // v9.4: child-tappable — see attachTap()'s own comment
   runCategorySelfTest(); // v6 (fix 4a): dev-time assertion sweep, see its own comment above
   runVocabRungSelfTest(); // v6 (fix 5a): see its own comment above
   runVocabThemeSelfTest(); // v7 (Part B): see its own comment above
