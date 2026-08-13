@@ -1,31 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- background: game's cream, rounded-square (icon.svg for Milo's Learning Adventure) -->
-  <rect x="0" y="0" width="512" height="512" rx="96" ry="96" fill="#fdf6e3"/>
-
-  <!-- fox face, scaled down + centered for generous padding (maskable-safe) -->
-  <g transform="translate(256,256) scale(0.82) translate(-256,-256)">
-    <!-- ears (behind head), pointed, with cream inner-ear -->
-    <path d="M300,190 L372,40 L345,230 Z" fill="#ff8a3d"/>
-    <path d="M305,175 L358,80 L330,210 Z" fill="#fff3e0"/>
-    <path d="M212,190 L140,40 L167,230 Z" fill="#ff8a3d"/>
-    <path d="M207,175 L154,80 L182,210 Z" fill="#fff3e0"/>
-
-    <!-- head: round face -->
-    <ellipse cx="256" cy="280" rx="150" ry="145" fill="#ff8a3d"/>
-
-    <!-- white cheeks / pointed muzzle, poking past the round head for the classic fox snout -->
-    <path d="M256,225
-             Q320,230 315,320
-             Q310,400 256,460
-             Q202,400 197,320
-             Q192,230 256,225
-             Z" fill="#ffffff"/>
-
-    <!-- eyes -->
-    <ellipse cx="205" cy="250" rx="16" ry="20" fill="#2b2118"/>
-    <ellipse cx="307" cy="250" rx="16" ry="20" fill="#2b2118"/>
-
-    <!-- nose -->
-    <path d="M244,318 L268,318 L256,340 Z" fill="#2b2118"/>
+  <defs>
+    <clipPath id="head"><circle cx="256" cy="300" r="152"/></clipPath>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="#fdf6e3"/>
+  <!-- ears: filled triangles with darker inner ear -->
+  <polygon points="128,86 214,208 106,226" fill="#ff8a3d"/>
+  <polygon points="384,86 298,208 406,226" fill="#ff8a3d"/>
+  <polygon points="140,120 200,204 126,216" fill="#d96f26"/>
+  <polygon points="372,120 312,204 386,216" fill="#d96f26"/>
+  <!-- head -->
+  <circle cx="256" cy="300" r="152" fill="#ff8a3d"/>
+  <!-- white cheeks / muzzle band, clipped to the head -->
+  <g clip-path="url(#head)">
+    <ellipse cx="162" cy="392" rx="105" ry="88" fill="#ffffff"/>
+    <ellipse cx="350" cy="392" rx="105" ry="88" fill="#ffffff"/>
+    <ellipse cx="256" cy="420" rx="90" ry="70" fill="#ffffff"/>
   </g>
+  <!-- eyes -->
+  <circle cx="198" cy="282" r="17" fill="#3a3226"/>
+  <circle cx="314" cy="282" r="17" fill="#3a3226"/>
+  <!-- nose -->
+  <path d="M236 358 Q256 348 276 358 Q272 382 256 388 Q240 382 236 358 Z" fill="#3a3226"/>
 </svg>
