@@ -1047,6 +1047,11 @@ const BODY_VB = { minX:-5, w:110, h:215 };
 // bend at a visible knee, arms end in a tapered wrist + palm + 4-5 stubby fingers,
 // feet are side-profile shoes with a distinct heel bump at the back vs. toe/instep
 // at the front. See NOTES.md v9.2 for the pairwise + dead-center-tap probe results.
+// v9.6: feet redrawn barefoot (skin-colored capsule + 5 toe ellipses + a separate
+// heel ellipse, no more dark shoe silhouette) and the elbow redrawn as a visible
+// bend (forearm angles back inward after the elbow, with a joint-bump ellipse at
+// the pivot) — elbow/wrist/hands/fingers/ankle/heel/feet coords below updated to
+// match. See NOTES.md v9.6.
 const BODY_REGIONS = {
   hair:      { cy:6,   r:6, cx:[50] },
   eyebrow:   { cy:18,  r:4, cx:[37,63] },
@@ -1057,15 +1062,15 @@ const BODY_REGIONS = {
   chin:      { cy:68,  r:4, cx:[50] },
   neck:      { cy:80,  r:6, cx:[50] },
   shoulders: { cy:93,  r:7, cx:[27,73] },
-  elbow:     { cy:107, r:8, cx:[10,90] },
+  elbow:     { cy:114, r:6, cx:[8,92] },
   tummy:     { cy:118, r:14,cx:[50] },
-  wrist:     { cy:130, r:6, cx:[4,96] },
-  hands:     { cy:147, r:7, cx:[3,97] },
-  fingers:   { cy:161, r:5, cx:[3,97] },
+  wrist:     { cy:133, r:5, cx:[17,83] },
+  hands:     { cy:147, r:7, cx:[17,83] },
+  fingers:   { cy:160, r:5, cx:[17,83] },
   knees:     { cy:167, r:7, cx:[31,69] },
-  ankle:     { cy:185, r:5, cx:[37,63] },
-  feet:      { cy:197, r:8, cx:[18,82] },
-  heel:      { cy:202, r:6, cx:[43,57] },
+  ankle:     { cy:187, r:5, cx:[36,64] },
+  feet:      { cy:197, r:7, cx:[19,81] },
+  heel:      { cy:201, r:6, cx:[42,58] },
 };
 // ladder per the task: nose/eyes/mouth/ears/hair/hands/feet/tummy 20-30 (kept low
 // for younger-sibling use), knees/fingers/neck 34-42, elbow/ankle/wrist/shoulders
@@ -1083,39 +1088,51 @@ function bodyFigureSVG(){
     <rect x="54" y="124" width="16" height="28" rx="8" fill="${shorts}"/>
     <path d="M38,150 L31,167 L38,177" stroke="${skin}" stroke-width="13" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
     <path d="M62,150 L69,167 L62,177" stroke="${skin}" stroke-width="13" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M38,177 L37,192" stroke="${skin}" stroke-width="6.5" fill="none" stroke-linecap="round"/>
-    <path d="M62,177 L63,192" stroke="${skin}" stroke-width="6.5" fill="none" stroke-linecap="round"/>
+    <path d="M38,177 L37,184" stroke="${skin}" stroke-width="6.5" fill="none" stroke-linecap="round"/>
+    <path d="M62,177 L63,184" stroke="${skin}" stroke-width="6.5" fill="none" stroke-linecap="round"/>
     <ellipse cx="31" cy="167" rx="4.5" ry="5.5" fill="${skin}" stroke="${ink}" stroke-width="1" stroke-opacity="0.3"/>
     <ellipse cx="69" cy="167" rx="4.5" ry="5.5" fill="${skin}" stroke="${ink}" stroke-width="1" stroke-opacity="0.3"/>
     <path d="M26,165 Q31,171 36,165" stroke="${ink}" stroke-width="1.6" fill="none" stroke-linecap="round" opacity="0.45"/>
     <path d="M64,165 Q69,171 74,165" stroke="${ink}" stroke-width="1.6" fill="none" stroke-linecap="round" opacity="0.45"/>
-    <path d="M36,193 L14,200" stroke="${ink}" stroke-width="13" fill="none" stroke-linecap="round"/>
-    <path d="M64,193 L86,200" stroke="${ink}" stroke-width="13" fill="none" stroke-linecap="round"/>
-    <ellipse cx="43" cy="202" rx="6.5" ry="6" fill="${ink}"/>
-    <ellipse cx="57" cy="202" rx="6.5" ry="6" fill="${ink}"/>
+    <path d="M37,184 L35,190" stroke="${skin}" stroke-width="4.2" fill="none" stroke-linecap="round"/>
+    <path d="M63,184 L65,190" stroke="${skin}" stroke-width="4.2" fill="none" stroke-linecap="round"/>
+    <ellipse cx="42" cy="201" rx="6.5" ry="6" fill="${skin}" stroke="${ink}" stroke-width="1" stroke-opacity="0.35"/>
+    <ellipse cx="58" cy="201" rx="6.5" ry="6" fill="${skin}" stroke="${ink}" stroke-width="1" stroke-opacity="0.35"/>
+    <path d="M35,190 L15,197" stroke="${skin}" stroke-width="12" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M65,190 L85,197" stroke="${skin}" stroke-width="12" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <ellipse cx="5" cy="193" rx="2" ry="3" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="8" cy="197" rx="2.1" ry="3.6" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="12" cy="199.5" rx="2.2" ry="3.8" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="16" cy="199" rx="2.1" ry="3.6" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="19" cy="196" rx="2" ry="3.2" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="95" cy="193" rx="2" ry="3" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="92" cy="197" rx="2.1" ry="3.6" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="88" cy="199.5" rx="2.2" ry="3.8" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="84" cy="199" rx="2.1" ry="3.6" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="81" cy="196" rx="2" ry="3.2" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
     <rect x="43" y="62" width="14" height="28" rx="5" fill="${skin}"/>
     <rect x="27" y="86" width="46" height="48" rx="16" fill="${shirt}"/>
     <circle cx="50" cy="117" r="2.1" fill="${ink}" opacity="0.5"/>
     <ellipse cx="27" cy="93" rx="8" ry="7" fill="${skin}"/>
     <ellipse cx="73" cy="93" rx="8" ry="7" fill="${skin}"/>
-    <path d="M28,94 L10,107 L4,126" stroke="${skin}" stroke-width="11" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M72,94 L90,107 L96,126" stroke="${skin}" stroke-width="11" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M6,104 Q10,109 14,104" stroke="${ink}" stroke-width="1.3" fill="none" stroke-linecap="round" opacity="0.4"/>
-    <path d="M86,104 Q90,109 94,104" stroke="${ink}" stroke-width="1.3" fill="none" stroke-linecap="round" opacity="0.4"/>
-    <path d="M4,127 L4,138" stroke="${skin}" stroke-width="7" fill="none" stroke-linecap="round"/>
-    <path d="M96,127 L96,138" stroke="${skin}" stroke-width="7" fill="none" stroke-linecap="round"/>
-    <ellipse cx="3" cy="147" rx="8" ry="7" fill="${skin}"/>
-    <ellipse cx="97" cy="147" rx="8" ry="7" fill="${skin}"/>
-    <ellipse cx="-1.5" cy="142" rx="3" ry="4.2" fill="${skin}"/>
-    <ellipse cx="101.5" cy="142" rx="3" ry="4.2" fill="${skin}"/>
-    <ellipse cx="-2" cy="158" rx="2.2" ry="4.5" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
-    <ellipse cx="1.7" cy="161" rx="2.2" ry="4.8" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
-    <ellipse cx="5.3" cy="161" rx="2.2" ry="4.8" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
-    <ellipse cx="8.7" cy="158" rx="2.2" ry="4.3" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
-    <ellipse cx="102" cy="158" rx="2.2" ry="4.5" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
-    <ellipse cx="98.3" cy="161" rx="2.2" ry="4.8" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
-    <ellipse cx="94.7" cy="161" rx="2.2" ry="4.8" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
-    <ellipse cx="91.3" cy="158" rx="2.2" ry="4.3" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <path d="M28,94 L8,114 L16,127" stroke="${skin}" stroke-width="11" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M72,94 L92,114 L84,127" stroke="${skin}" stroke-width="11" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <ellipse cx="8" cy="114" rx="4.5" ry="4" fill="${skin}" stroke="${ink}" stroke-width="1" stroke-opacity="0.3"/>
+    <ellipse cx="92" cy="114" rx="4.5" ry="4" fill="${skin}" stroke="${ink}" stroke-width="1" stroke-opacity="0.3"/>
+    <path d="M16,127 L18,138" stroke="${skin}" stroke-width="7" fill="none" stroke-linecap="round"/>
+    <path d="M84,127 L82,138" stroke="${skin}" stroke-width="7" fill="none" stroke-linecap="round"/>
+    <ellipse cx="17" cy="147" rx="8" ry="7" fill="${skin}"/>
+    <ellipse cx="83" cy="147" rx="8" ry="7" fill="${skin}"/>
+    <ellipse cx="12.5" cy="142" rx="3" ry="4.2" fill="${skin}"/>
+    <ellipse cx="87.5" cy="142" rx="3" ry="4.2" fill="${skin}"/>
+    <ellipse cx="12" cy="158" rx="2.2" ry="4.5" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="15.7" cy="161" rx="2.2" ry="4.8" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="19.3" cy="161" rx="2.2" ry="4.8" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="22.7" cy="158" rx="2.2" ry="4.3" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="88" cy="158" rx="2.2" ry="4.5" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="84.3" cy="161" rx="2.2" ry="4.8" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="80.7" cy="161" rx="2.2" ry="4.8" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
+    <ellipse cx="77.3" cy="158" rx="2.2" ry="4.3" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
     <ellipse cx="15" cy="32" rx="6.5" ry="9" fill="${skin}" stroke="${ink}" stroke-width="1" stroke-opacity="0.35"/><ellipse cx="85" cy="32" rx="6.5" ry="9" fill="${skin}" stroke="${ink}" stroke-width="1" stroke-opacity="0.35"/>
     <circle cx="50" cy="38" r="32" fill="${skin}"/>
     <path d="M18,20 Q50,-8 82,20 Q82,3 50,1 Q18,3 18,20 Z" fill="#6b4a2b"/>
