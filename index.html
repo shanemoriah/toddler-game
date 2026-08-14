@@ -177,6 +177,40 @@
   /* ---------- v7: picker section headers (17 tiles grouped into 4 labeled sections) ---------- */
   .picker-section-head { grid-column: 1/-1; text-align: left; font-weight: 800; color: #8a7d66; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; margin-top: 10px; }
   .picker-section-head:first-of-type { margin-top: 2px; }
+  /* ---------- v10: Mix-It-Up arcade — picker tile ----------
+     A subtle animated rainbow border is the ONLY visual difference from a normal picker
+     tile (same size/padding/emoji/label layout) — deliberately not louder than that, so it
+     reads as "special" without looking like an error state or a different kind of control.
+     background-clip:padding-box on the inner layer + border-box on the outer gradient layer
+     is the standard two-layer trick for a gradient BORDER (a plain `border-image` can't
+     animate its position the way `background-position` can). */
+  .picker-tile-arcade {
+    border: 4px solid transparent;
+    background-image: linear-gradient(var(--tile), var(--tile)),
+      linear-gradient(90deg, #ff6b6b, #ffb84d, #ffe45e, #6bcb77, #4ecdc4, #6b8fff, #c56bff, #ff6b6b);
+    background-origin: border-box; background-clip: padding-box, border-box;
+    background-size: 100% 100%, 300% 100%;
+    animation: rainbowShift 6s linear infinite;
+  }
+  @keyframes rainbowShift { to { background-position: 0 0, 300% 0; } }
+  /* ---------- v10: Mix-It-Up arcade — streak indicator (HUD) ----------
+     Lives in #hud next to #stars, hidden except during an active arcade session (toggled by
+     startArcade()/exitArcade()). .pulse pops on every increment; .fade gently dims to near-
+     invisible on a silent miss/timeout reset — no shake, no red, matching the task's "no
+     negative feedback" requirement for a streak reset. */
+  #arcadeStreak { display: none; align-items: center; gap: 3px; font-size: 19px; font-weight: 800; color: var(--accent); transition: opacity .5s; }
+  #arcadeStreak.fade { opacity: .3; }
+  #arcadeStreak.pulse { animation: arcadeStreakPulse .4s; }
+  @keyframes arcadeStreakPulse { 0%{transform:scale(1)} 50%{transform:scale(1.4)} 100%{transform:scale(1)} }
+  /* ---------- v10: Mix-It-Up arcade — its OWN answer timer bar ----------
+     Visually identical treatment to #timerBar (same thin shrinking bar under the prompt) but a
+     SEPARATE element/id driven by SEPARATE JS (startArcadeTimer/cancelArcadeTimer, own
+     `state.arcade.timer`) — arcade must never share the scored engine's `_answerTimer`/
+     #timerBar/#timerBtn, which are parent-triggered and gated by scored-mode-only state. Same
+     align-self:stretch load-bearing note as #timerBar (see its own comment) applies here too.
+  */
+  #arcadeTimerBar { height: 4px; margin: 0 6px 6px; border-radius: 2px; background: var(--accent2); width: 0%; opacity: 0; transition: none; align-self: stretch; }
+  #arcadeTimerBar.running { opacity: 1; }
   /* ---------- v7: My Body tap-on-figure hit regions (invisible unless mid-feedback) ---------- */
   .body-hit.correct { background: rgba(107,203,119,.35); box-shadow: 0 0 0 4px var(--good); animation: pop .5s; }
   .body-hit.wrong { animation: seekshake .45s; }
@@ -264,6 +298,7 @@
       <button id="mapBtn" onclick="backToMap()" style="display:none" aria-label="Back to map" title="Back to the map">🗺</button>
     </div>
     <div id="stars"></div>
+    <div id="arcadeStreak">🔥 <span id="arcadeStreakCount">0</span></div>
     <button id="muteBtn" onclick="toggleMute()" aria-label="Mute">🔊</button>
     <button id="quitBtn" onclick="endGame()" style="display:none">Finish</button>
   </div>
@@ -314,6 +349,7 @@
       <button id="dkBtn" class="skip-btn" onclick="dontKnowItem()" title="Child doesn't know this one (parent)">🙅 Doesn't know</button>
     </div>
     <div id="timerBar"></div>
+    <div id="arcadeTimerBar"></div>
     <div id="categoryAnchors"></div>
     <div id="domainTransition"></div>
     <div id="board"></div>
@@ -531,6 +567,29 @@ const VOCAB_WORDS = [
   ["police officer","👮",52,"professions"],["farmer","👩‍🌾",54,"professions"],["tower","🗼",60,"buildings"],
   ["trumpet","🎺",53,"music"],["chef","👨‍🍳",58,"professions"],["factory","🏭",65,"buildings"],
   ["astronaut","🧑‍🚀",62,"professions"],["chapel","💒",72,"buildings"],["builder","👷",66,"professions"],
+  // ---- v10 (Mix-It-Up arcade content expansion): 134 -> 206 words. Four new themes (sports/
+  // weather/space/bugs, 8 words each) plus ~4 more per existing theme, weighted toward
+  // mid-range difficulty (b 24-55, where arcade's wider ±14mo sampling window spends most of
+  // its time) while still spanning the full 14-90 ladder. Every new word's b-value reuses or
+  // sits within 1-2mo of an already-present rung, so the existing gap<=2mo and >55mo-rung-
+  // density self-tests (runVocabRungSelfTest) are satisfied by construction — additive-only
+  // changes can't widen a gap or thin a rung, only narrow/densify. Word text and emoji were
+  // verified unique against the full 206-word bank via a throwaway Node script before landing
+  // here (see runVocabUniquenessSelfTest below for the same check, kept live in-game).
+  ["basketball","🏀",26,"sports"],["tennis","🎾",30,"sports"],["football","🏈",34,"sports"],["baseball","⚾",36,"sports"],["bowling","🎳",40,"sports"],["skateboard","🛹",44,"sports"],["swim goggles","🥽",48,"sports"],["golf","⛳",54,"sports"],
+  ["sun","🌞",18,"weather"],["cloud","☁️",24,"weather"],["rain","🌧️",26,"weather"],["snow","❄️",28,"weather"],["wind","🌬️",32,"weather"],["lightning","⚡",36,"weather"],["tornado","🌪️",44,"weather"],["hurricane","🌀",52,"weather"],
+  ["star","⭐",22,"space"],["rocket","🚀",26,"space"],["planet","🌎",30,"space"],["alien","👽",34,"space"],["comet","☄️",40,"space"],["sunrise","🌅",44,"space"],["galaxy","🌌",48,"space"],["asteroid","🪨",55,"space"],
+  ["ant","🐜",20,"bugs"],["snail","🐌",24,"bugs"],["spider","🕷️",28,"bugs"],["caterpillar","🐛",32,"bugs"],["fly","🪰",36,"bugs"],["worm","🪱",40,"bugs"],["beetle","🪲",44,"bugs"],["scorpion","🦂",50,"bugs"],
+  ["grapes","🍇",25,"food"],["sandwich","🥪",38,"food"],["pasta","🍝",42,"food"],["watermelon","🍉",46,"food"],
+  ["sheep","🐑",24,"animals"],["horse","🐴",27,"animals"],["elephant","🐘",32,"animals"],["monkey","🐵",36,"animals"],
+  ["key","🔑",26,"household"],["lamp","💡",28,"household"],["telephone","☎️",30,"household"],["television","📺",34,"household"],
+  ["boat","⛵",24,"vehicles"],["airplane","✈️",26,"vehicles"],["helicopter","🚁",36,"vehicles"],["motorcycle","🏍️",44,"vehicles"],
+  ["dress","👗",28,"clothes"],["mittens","🧤",30,"clothes"],["scarf","🧣",34,"clothes"],["boots","🥾",40,"clothes"],
+  ["tree","🌳",22,"nature"],["seashell","🐚",26,"nature"],["leaf","🍃",30,"nature"],["mountain","⛰️",38,"nature"],
+  ["microphone","🎤",26,"music"],["headphones","🎧",32,"music"],["long drum","🪘",38,"music"],["banjo","🪕",44,"music"],
+  ["hammer","🔨",28,"tools"],["paintbrush","🖌️",30,"tools"],["screwdriver","🪛",34,"tools"],["saw","🪚",46,"tools"],
+  ["house","🏠",18,"buildings"],["bridge","🌉",42,"buildings"],["temple","🛕",48,"buildings"],["museum","🏛️",54,"buildings"],
+  ["artist","🧑‍🎨",40,"professions"],["teacher","🧑‍🏫",44,"professions"],["pilot","🧑‍✈️",50,"professions"],["scientist","🧑‍🔬",56,"professions"],
 ];
 
 // lookup: word label -> {emoji, age, theme}, shared by the vocabulary domain and
@@ -560,7 +619,8 @@ function runVocabRungSelfTest(){
 // vocabDistractors/pickNextItem's theme-aware logic — an untagged word would silently fall
 // back to `undefined` as its theme, which is harmless functionally but would never rotate
 // correctly), and every theme has >=6 words (the task's "each theme has 6-10 words" floor).
-const VOCAB_THEMES = ["food","animals","nature","vehicles","household","clothes","buildings","professions","music","tools"];
+const VOCAB_THEMES = ["food","animals","nature","vehicles","household","clothes","buildings","professions","music","tools",
+  "sports","weather","space","bugs"]; // v10: four new themes added for arcade content variety — see the VOCAB_WORDS block above.
 function runVocabThemeSelfTest(){
   let untagged = 0, thin = 0;
   const counts = {};
@@ -574,6 +634,22 @@ function runVocabThemeSelfTest(){
   }
   console.log(`vocab theme self-test: ${VOCAB_WORDS.length} words, ${untagged} untagged, ${thin} themes under 6 words —`, counts);
   return untagged === 0 && thin === 0;
+}
+
+// v10 (Mix-It-Up arcade content expansion): dev-time assertion — no two VOCAB_WORDS entries
+// share a word (a picker distractor/target collision) or an emoji (two different words that
+// would render as the IDENTICAL tile — genuinely ambiguous, not just similar). Requested
+// specifically for the 134->206 word expansion, but stays live going forward like every other
+// self-test here so a future addition can't silently reintroduce a collision.
+function runVocabUniquenessSelfTest(){
+  const words = VOCAB_WORDS.map(w => w[0]);
+  const emojis = VOCAB_WORDS.map(w => w[1]);
+  const wordDupes = words.length - new Set(words).size;
+  const emojiDupes = emojis.length - new Set(emojis).size;
+  if (wordDupes) console.assert(false, `vocab uniqueness self-test: ${wordDupes} duplicate word(s) among ${words.length}`);
+  if (emojiDupes) console.assert(false, `vocab uniqueness self-test: ${emojiDupes} duplicate emoji(s) among ${emojis.length}`);
+  console.log(`vocab uniqueness self-test: ${words.length} words, ${wordDupes} word dupes, ${emojiDupes} emoji dupes`);
+  return wordDupes === 0 && emojiDupes === 0;
 }
 
 // ---- v3 (Feature 3): seek-and-find scenes. Each scene is a dense, single
@@ -917,6 +993,18 @@ const state = {
   sessionMode: null, // "single" (picker: one domain, return to picker) | "all" (Play everything!)
   mascotSpeaking: false, // v9.3: tapMascot() debounce — see its own comment
   visits: null, // v9.3: {first, count} — see stampVisit()/renderStorageDiagnostic()
+  // v10: Mix-It-Up arcade — deliberately its OWN state slot, never state.domain/domainIdx/
+  // finalDomains. This is the whole safety story for "arcade is unscored and never trips the
+  // rotation lock": every scored code path (finalizeDomain/domainDone/recordDomainCompletion/
+  // saveSession) only ever reads/writes via state.domain or state.finalDomains, and arcade code
+  // never touches either — so there is no guard to remember, it's structurally impossible for
+  // an arcade round to be mistaken for a scored one. See NOTES.md v10.
+  arcade: {
+    active: false, locked: false, firstTry: true,
+    streak: 0, answeredSinceInterlude: 0,
+    currentItem: null, timer: null,
+    bags: { vocab: [], functions: [], seekfind: [] }, // shuffle bags — in-memory only, reset on (re)entry
+  },
 };
 
 const THETA_MIN = 8, THETA_MAX = 100; // v4: extended from 75 -> 100 (numbers/feelings ladders reach b~85)
@@ -935,6 +1023,10 @@ const PRESENT_CAP = 14; // v5: 12->14, so accelerated runs have room to reach th
 /* ---------- v7: "What's It For?" (functions) ---------- */
 // b ladder 34-58: drink/sleep/wash early (everyday routine objects a toddler
 // handles daily), write/cut mid, telescope (measure/see-far) late per the task.
+// v10 (Mix-It-Up arcade content expansion): extended 10 -> 30 items, b ladder now runs
+// 32-85 so arcade's wider theta-window sampling has real breadth to draw from at both ends.
+// See FUNCTION_OVERLAP_EXCLUDE below for pairs deliberately kept out of each other's
+// distractor pool (two objects that could BOTH plausibly answer the same prompt).
 const FUNCTION_DEFS = [
   ["drink", "🥤", 34],
   ["sleep", "🛏️", 36],
@@ -946,12 +1038,88 @@ const FUNCTION_DEFS = [
   ["stay dry in the rain", "🌂", 50],
   ["brush your teeth", "🪥", 53],
   ["see far away", "🔭", 58],
+  ["eat", "🍽️", 32],
+  ["comb your hair", "🪮", 37],
+  ["take a picture", "📷", 40],
+  ["see in the dark", "🔦", 43],
+  ["call someone", "📞", 46],
+  ["carry groceries", "🛍️", 49],
+  ["look at your reflection", "🪞", 52],
+  ["tell time", "⌚", 55],
+  ["cut your food", "🔪", 58],
+  ["stay warm", "🧥", 60],
+  ["fan yourself", "🪭", 63],
+  ["measure length", "📏", 66],
+  ["weigh something", "⚖️", 68],
+  ["magnify small things", "🔍", 71],
+  ["find your way", "🧭", 73],
+  ["keep food cold", "🧊", 75],
+  ["wake you up", "⏰", 77],
+  ["catch a fish", "🎣", 80],
+  ["dig a hole", "⛏️", 83],
+  ["build something", "🔨", 85],
 ];
+// v10: pairs whose real-world functions genuinely overlap enough that BOTH could plausibly
+// answer the other's prompt (e.g. a telescope and a magnifying glass both "help you see
+// better") — kept out of each other's distractor pool by functionDistractors() below, same
+// declarative-exclusion + self-test technique CATEGORY_EXCLUDE/runCategorySelfTest already
+// established for the categories domain. One-directional entries aren't needed here (unlike
+// CATEGORY_EXCLUDE) since every pair below is a genuine two-way overlap.
+const FUNCTION_OVERLAP_EXCLUDE = [
+  ["cut paper", "cut your food"],                 // both "cut", different material/tool
+  ["stay dry in the rain", "stay warm"],           // both "weather comfort" objects
+  ["tell time", "wake you up"],                    // an alarm clock also tells time
+  ["see far away", "magnify small things"],        // both "see better" optics
+  ["magnify small things", "find your way"],       // both "explorer" tools
+  ["sweep the floor", "dig a hole"],                // both "move material" tools
+];
+function functionOverlaps(a, b){
+  return FUNCTION_OVERLAP_EXCLUDE.some(([x, y]) => (a === x && b === y) || (a === y && b === x));
+}
+// v10: FUNCTION_DEFS-specific distractor selection — excludes overlapping-function pairs
+// (see FUNCTION_OVERLAP_EXCLUDE above), falling back to the unfiltered pool if exclusion
+// would leave too few candidates (same never-soft-lock contract applyFloorRule/pickAmongTopN
+// already use elsewhere). Scoped to makeFunctionItem only — every other domain's distractor
+// helper (simpleDistractors/vocabDistractors/etc) is untouched.
+function functionDistractors(pool, target, n){
+  const clean = pool.filter(x => x.label !== target.label && !functionOverlaps(x.label, target.label));
+  const source = clean.length >= n ? clean : pool.filter(x => x.label !== target.label);
+  return shuffle(source).slice(0, n);
+}
+// v10: dev-time assertion — draws many items per FUNCTION_DEFS entry and asserts no
+// distractor tile is ever one of that item's declared overlap-exclude partners, plus sanity-
+// checks FUNCTION_OVERLAP_EXCLUDE itself references real FUNCTION_DEFS names (catches a typo
+// silently no-oping the exclusion). Same pattern as runCategorySelfTest above.
+function runFunctionOverlapSelfTest(){
+  const defs = FUNCTION_DEFS.map(([n, e, a]) => ({ label: n, name: n, emoji: e, age: a }));
+  let violations = 0, draws = 0;
+  for (const target of defs){
+    for (let i = 0; i < 200; i++){
+      const ds = functionDistractors(defs, target, 3);
+      draws++;
+      for (const d of ds){
+        if (functionOverlaps(d.label, target.label)){
+          violations++;
+          console.assert(false, `function overlap self-test: "${target.label}" drew overlapping distractor "${d.label}"`);
+        }
+      }
+    }
+  }
+  const names = new Set(defs.map(d => d.label));
+  let badPairs = 0;
+  for (const [a, b] of FUNCTION_OVERLAP_EXCLUDE){
+    if (!names.has(a) || !names.has(b)){ badPairs++; console.assert(false, `function overlap self-test: exclude pair references unknown item (${a} / ${b})`); }
+  }
+  console.log(`function overlap self-test: ${draws} draws across ${defs.length} items, ${violations} violations, ${badPairs} bad exclude-pair references`);
+  return violations === 0 && badPairs === 0;
+}
 function makeFunctionItem(d, pool, arity){
-  // distractors are the OTHER function-objects in the same 10-item bank — every
-  // tile is itself a plausible "a tool" answer, which is what makes the item
-  // diagnostic (a random tap still has to guess among real tools, not junk).
-  const distractors = simpleDistractors(pool, d, arity - 1);
+  // distractors are the OTHER function-objects in the bank — every tile is itself a
+  // plausible "a tool" answer, which is what makes the item diagnostic (a random tap
+  // still has to guess among real tools, not junk). v10: functionDistractors() (not the
+  // generic simpleDistractors) additionally excludes genuinely overlapping-function pairs
+  // — see FUNCTION_OVERLAP_EXCLUDE's own comment.
+  const distractors = functionDistractors(pool, d, arity - 1);
   const choices = shuffle([d, ...distractors]);
   return { label: d.name, b: d.age, c: 1/choices.length, s: 4,
     prompt: `Which one do you use to ${d.name}?`,
@@ -1482,6 +1650,14 @@ function collectAllSayStrings(){
   add("Hi friend! Let's play!");
   MASCOT_LINES.forEach(add); // v9.3: tapMascot() encouragement lines — see its own comment
   add(LOCKED_DOMAIN_LINE); // v9.5: locked picker tile tap — see lockedTileTap()'s own comment
+  // v10: Mix-It-Up arcade — intro/interlude/streak-celebration lines (defined further down,
+  // next to the rest of the arcade code — forward reference is safe, this function only ever
+  // RUNS from loadAudioManifest()/tools/dump_say_strings.js, long after every top-level const
+  // in this file has been initialized, same as the MASCOT_LINES/LOCKED_DOMAIN_LINE references
+  // just above).
+  add(ARCADE_INTRO_LINE);
+  add(ARCADE_INTERLUDE_LINE);
+  [...ARCADE_STREAK_LINES_3, ...ARCADE_STREAK_LINES_5, ...ARCADE_STREAK_LINES_10PLUS].forEach(add);
 
   // ---- domain intro / celebration, one per DOMAINS[] entry (beginDomain/domainDone) ----
   for (const dom of DOMAINS){
@@ -3392,6 +3568,20 @@ function renderPicker(){
       grid.appendChild(tile);
     }
   }
+  // v10: Mix-It-Up arcade — its OWN section, appended after every DOMAINS[]-driven section
+  // above. Deliberately NOT part of `sections`/DOMAINS[] (see state.arcade's own comment on
+  // why arcade must never be mistaken for a scored domain) — it's a picker-display-only tile
+  // that calls startArcade() instead of playDomain(), so it's never subject to the rotation
+  // lock (lockedKeys is built purely from DOMAINS[] keys, which never includes "arcade").
+  const funHead = document.createElement("div");
+  funHead.className = "picker-section-head";
+  funHead.textContent = "Just for fun";
+  grid.appendChild(funHead);
+  const arcadeTile = document.createElement("div");
+  arcadeTile.className = "picker-tile picker-tile-arcade";
+  arcadeTile.innerHTML = `<div class="picker-emoji">🎪</div><div class="picker-label">Mix-It-Up!</div>`;
+  attachTap(arcadeTile, () => startArcade()); // v9.4: child-tappable
+  grid.appendChild(arcadeTile);
 }
 function playDomain(key){
   const idx = DOMAINS.findIndex(d => d.key === key);
@@ -3476,6 +3666,11 @@ function nextDomain(){
 }
 
 function backToMap(){
+  // v10: arcade owns its own exit path (exitArcade()) — everything below this guard assumes a
+  // SCORED domain may be in flight (state.domain), which is never true while arcade is active
+  // (see state.arcade's own comment), so route there instead and return before touching any of
+  // the scored-only logic below.
+  if (state.arcade.active){ exitArcade(); return; }
   // v4 (mod 2): one-tap, no confirmation. Finalizes whatever's in-flight (same path
   // Finish uses for partials — finalizeDomain no-ops on nothing answered), then
   // returns to the picker. Setting sessionMode to "single" converts a "Play
@@ -3762,7 +3957,13 @@ function seekfindSlots(n){
     };
   });
 }
-function renderSeekfindScene(scene){
+function renderSeekfindScene(scene, tapHandler){
+  // v10: optional 3rd param — defaults to the scored-mode tapSeekObj, but arcade passes
+  // tapArcadeSeekObj so the SAME pure scene-builder can be reused for arcade seek&find
+  // rounds without wiring taps into the scored engine (which reads/writes state.domain).
+  // Scored call sites are unaffected: they don't pass a 2nd arg, so this defaults exactly to
+  // their previous behavior.
+  tapHandler = tapHandler || tapSeekObj;
   const wrap = $("seekBoard");
   wrap.innerHTML = "";
   scene.def.words.forEach((w, i) => {
@@ -3776,7 +3977,7 @@ function renderSeekfindScene(scene){
     el.style.fontSize = slot.size + "px";
     el.style.animationDelay = (Math.random()*2).toFixed(2) + "s";
     el.textContent = info ? info.emoji : "❓";
-    attachTap(el, () => tapSeekObj(w, el)); // v9.4: child-tappable; pointer capture in attachTap matters
+    attachTap(el, () => tapHandler(w, el)); // v9.4: child-tappable; pointer capture in attachTap matters
     // here specifically since these objects bob via the seekbob animation — see attachTap's comment.
     wrap.appendChild(el);
   });
@@ -4017,6 +4218,13 @@ function endGame(){
   if (state.domain) finalizeDomain(state.domain);
   state.domain = null; // guard against a stale nextDomain()->speak() callback firing renderItem() late
   cancelAnswerTimer(); // v9.5: Finish cancels any running answer timer
+  // v10: Finish is a sanctioned arcade-exit path too — arcade contributes NOTHING to results
+  // (nothing here reads state.arcade), but a just-resolved question's pending setTimeout
+  // (renderArcadeItem/advanceArcade/a streak-celebration chain) must not fire against the
+  // now-gone gameScreen after we've moved on to the results screen. Both are guarded by
+  // `state.arcade.active` checks at their own top, so clearing it here (+ the timer) makes
+  // every one of those a safe no-op instead of relying on nothing ever racing this.
+  state.arcade.active = false; cancelArcadeTimer();
   ttsCancel(); stopClip(); // v8: Finish is a sanctioned interrupt path — stop any playing recorded clip too
   $("quitBtn").style.display = "none";
   $("progressWrap").style.display = "none";
@@ -4356,6 +4564,18 @@ function mergeCompletions(a, b){
   for (const k of new Set([...Object.keys(au), ...Object.keys(bu)])) lockedUntil[k] = Math.max(au[k] || 0, bu[k] || 0);
   return { total, lockedUntil };
 }
+function mergeArcade(a, b){
+  // v10: same "monotonic counters, take the max" reasoning as mergeVisits/mergeCompletions —
+  // totalPlays only ever grows, bestStreak only ever grows within one device's history, and
+  // introShown is a one-way flag (once true on EITHER side, stays true — never re-show the
+  // intro line just because the other storage tier hadn't recorded it yet).
+  a = a || {}; b = b || {};
+  return {
+    totalPlays: Math.max(a.totalPlays || 0, b.totalPlays || 0),
+    bestStreak: Math.max(a.bestStreak || 0, b.bestStreak || 0),
+    introShown: !!(a.introShown || b.introShown),
+  };
+}
 function mergeVisits(a, b){
   // Not a union (a single counter, not a list): take the HIGHER count (whichever side wasn't
   // wiped has the true, larger count) and the EARLIER `first` (the more historically
@@ -4412,6 +4632,12 @@ async function reconcileStorage(){
   let lsCompletions = null; try { const r = localStorage.getItem("tg_completions"); lsCompletions = r ? JSON.parse(r) : null; } catch(e){}
   persistSet("tg_completions", JSON.stringify(mergeCompletions(lsCompletions, idbCompletions)));
 
+  // tg_arcade: merged via mergeArcade (max totalPlays, max bestStreak, OR'd introShown) — v10.
+  const idbArcadeRaw = idbOk ? await kvGet("tg_arcade") : null;
+  let idbArcade = null; if (idbArcadeRaw){ try { idbArcade = JSON.parse(idbArcadeRaw); } catch(e){} }
+  let lsArcade = null; try { const r = localStorage.getItem("tg_arcade"); lsArcade = r ? JSON.parse(r) : null; } catch(e){}
+  persistSet("tg_arcade", JSON.stringify(mergeArcade(lsArcade, idbArcade)));
+
   return { sessionsChanged, checklistChanged };
 }
 // Stamped once per page load, AFTER reconcileStorage() has restored localStorage's tg_visits
@@ -4448,6 +4674,429 @@ function renderStorageDiagnostic(){
   }
 }
 
+/* =====================================================================
+   v10: "MIX-IT-UP!" ARCADE — bonus free-play mode.
+
+   Design summary (see NOTES.md v10 for the full write-up):
+   - UNSCORED, by construction: arcade never reads or writes state.domain/state.domainIdx/
+     state.finalDomains, so every scored-only mechanism (EAP/theta updates, session-history
+     entries, the rotation lock's recordDomainCompletion) simply never runs for arcade —
+     there's no guard to remember, it's structurally impossible to leak.
+   - Own state slot (state.arcade), own timer (never _answerTimer/#timerBtn/#timerBar), own
+     render/tap handlers (renderArcadeItem/tapArcadeTile/tapArcadeSeekObj) — NOT the scored
+     renderItem/tapTile/tapSeekObj, which all read/write state.domain directly and would (if
+     reused naively) risk exactly the kind of state-machine leakage this design avoids.
+   - Reuses PURE helpers freely where safe: makeVocabItem/makeFunctionItem (item builders),
+     renderSeekfindScene (now takes an optional tap-handler param — see its own comment),
+     seekfindSlots, priorFor (theta-or-age lookup), pickAmongTopN (mild top-N randomness),
+     shuffle/pick/speak/sayItem/confetti/chimeGood/chimeTry/fanfare/attachTap — none of these
+     touch state.domain.
+   ===================================================================== */
+
+const ARCADE_QUESTION_MS = 15000;      // 15s auto-advance timer, per item
+const ARCADE_REVEAL_MS = 2000;         // ~2s reveal-then-advance on timeout
+const ARCADE_INTERLUDE_EVERY = 25;     // gentle break screen every ~25 questions
+const ARCADE_DIFFICULTY_WINDOW = 14;   // theta-or-age ± this many months, deliberately the
+                                        // same width vocabDistractors() already uses for its
+                                        // own "near" filter — wider than the scored engine's
+                                        // actual per-item TARGETING (which converges tightly
+                                        // via computeTarget/pickAmongTopN's top-3), so arcade
+                                        // items land all over a broad band instead of chasing
+                                        // one adaptive point — "for variety", per the task.
+
+// v10: intro/interlude/streak-celebration lines — bundled via collectAllSayStrings() (see the
+// add() calls added there) and tools/gen_audio.sh, same as MASCOT_LINES. Kept short and in the
+// same warm, exclamation-forward voice as the rest of the fox's lines.
+const ARCADE_INTRO_LINE = "Bonus round! Let's just play!";
+const ARCADE_INTERLUDE_LINE = "Wow, we played a lot! Keep going?";
+const ARCADE_STREAK_LINES_3 = ["Three in a row!", "You're on fire!"];
+const ARCADE_STREAK_LINES_5 = ["Super streak!", "Look at you go!"];
+const ARCADE_STREAK_LINES_10PLUS = ["Ten in a row! Amazing!", "Wow, incredible streak!"];
+
+// References into the SAME defs the scored vocabulary/functions domains use (mapped shape:
+// {label, word/name, emoji, age, theme?}), so arcade's item text/audio is byte-identical to
+// what collectAllSayStrings() already bundles for those domains — no separate bundling needed
+// for arcade's own vocab/functions picks, only for the lines above.
+const ARCADE_VOCAB_DEFS = DOMAINS.find(d => d.key === "vocabulary").defs;
+const ARCADE_FUNCTIONS_DEFS = DOMAINS.find(d => d.key === "functions").defs;
+
+// ---- tg_arcade stats (dual-write, same persistSet()/reconcileStorage() pattern as every
+// other persisted key): { totalPlays, bestStreak, introShown }. totalPlays counts every
+// RESOLVED arcade question (correct, missed, or timed out) — a simple, honest "how much has
+// this kid played" counter, not gated on getting anything right.
+function loadArcadeStats(){
+  try { return JSON.parse(localStorage.getItem("tg_arcade") || "{}"); } catch(e){ return {}; }
+}
+function saveArcadeStats(s){ persistSet("tg_arcade", JSON.stringify(s)); }
+function recordArcadePlay(){
+  const s = loadArcadeStats();
+  s.totalPlays = (s.totalPlays || 0) + 1;
+  saveArcadeStats(s);
+}
+function persistArcadeBestStreakIfHigher(){
+  const s = loadArcadeStats();
+  if (state.arcade.streak > (s.bestStreak || 0)){ s.bestStreak = state.arcade.streak; saveArcadeStats(s); }
+}
+function arcadeIntroShown(){ return !!loadArcadeStats().introShown; }
+function markArcadeIntroShown(){
+  const s = loadArcadeStats();
+  if (!s.introShown){ s.introShown = true; saveArcadeStats(s); }
+}
+
+// ---- difficulty center: THIS session's just-finalized theta for the domain if it was
+// already played this session (the most "current" read of the child's ability), else the
+// most recent SAVED session's theta (priorFor()'s own existing fallback), else chronological
+// age (priorFor()'s ultimate fallback) — exactly "current theta when history exists, else
+// age" per the task, reusing priorFor()'s pure lookup rather than re-deriving it.
+function arcadeThetaCenter(domainKey){
+  const fd = state.finalDomains[domainKey];
+  if (fd && typeof fd.theta === "number" && isFinite(fd.theta)) return fd.theta;
+  return priorFor(domainKey, state.age).mu;
+}
+// v10 adversarial-review fix: a plain "non-empty" fallback let FUNCTION_DEFS (only 30 items,
+// floor b=32) collapse to a 1-4 item window for young ages (e.g. age 18 -> just 1 item within
+// +-14mo) — technically "a shuffle bag" but one so small it feels like the same item on
+// repeat. Requires a real minimum pool (8 — enough for a shuffle bag to feel varied, same
+// order of magnitude as the ">=6 per theme"/">=3 per rung" floors this file already uses
+// elsewhere) before accepting the filtered window; otherwise falls back to the full bank,
+// same as an empty result always did.
+const ARCADE_MIN_BAG_POOL = 8;
+function arcadeWindowFilter(items, getB, center){
+  const near = items.filter(x => Math.abs(getB(x) - center) <= ARCADE_DIFFICULTY_WINDOW);
+  return near.length >= ARCADE_MIN_BAG_POOL ? near : items;
+}
+
+// ---- shuffle bags — one per content source, in-memory only (never persisted; a fresh
+// state.arcade object is created at module load, and startArcade() below explicitly resets
+// them too, so bags never survive a map-out/re-entry or a page reload). Recomputes the
+// difficulty window each refill (cheap — this only happens once per ~pool-size questions),
+// so a same-arcade-session change is impossible today (nothing updates theta while purely in
+// arcade) but the design doesn't rely on that staying true.
+function refillArcadeBag(source){
+  let pool;
+  if (source === "vocab"){
+    pool = arcadeWindowFilter(ARCADE_VOCAB_DEFS, d => d.age, arcadeThetaCenter("vocabulary"));
+  } else if (source === "functions"){
+    pool = arcadeWindowFilter(ARCADE_FUNCTIONS_DEFS, d => d.age, arcadeThetaCenter("functions"));
+  } else { // seekfind — target pool is every (scene, word) pair across all 3 scenes
+    const center = arcadeThetaCenter("vocabulary"); // seekfind targets ARE vocab words; no separate seekfind theta exists
+    const pairs = [];
+    for (const scene of SEEKFIND_SCENES) for (const w of scene.words) pairs.push({ sceneKey: scene.key, word: w, age: VOCAB_BY_WORD[w].age });
+    pool = arcadeWindowFilter(pairs, p => p.age, center);
+  }
+  state.arcade.bags[source] = shuffle(pool);
+}
+function drawFromArcadeBag(source){
+  if (!state.arcade.bags[source] || !state.arcade.bags[source].length) refillArcadeBag(source);
+  const bag = state.arcade.bags[source];
+  return bag.pop();
+}
+// 40% vocab / 30% functions / 30% seekfind, per the task — approximate by design (a weighted
+// random pick per question, not a fixed round-robin sequence).
+function pickArcadeSource(){
+  const r = Math.random();
+  if (r < 0.40) return "vocab";
+  if (r < 0.70) return "functions";
+  return "seekfind";
+}
+function buildArcadeItem(source){
+  if (source === "vocab"){
+    const d = drawFromArcadeBag("vocab");
+    const it = makeVocabItem(d, ARCADE_VOCAB_DEFS, 4); // full pool for distractor variety, same as scored mode's dom.make(raw, dom.defs, arity)
+    it.arcadeSource = "vocab"; it.kind = "tile";
+    return it;
+  }
+  if (source === "functions"){
+    const d = drawFromArcadeBag("functions");
+    const it = makeFunctionItem(d, ARCADE_FUNCTIONS_DEFS, 4);
+    it.arcadeSource = "functions"; it.kind = "tile";
+    return it;
+  }
+  const pair = drawFromArcadeBag("seekfind");
+  const info = VOCAB_BY_WORD[pair.word];
+  return {
+    label: pair.word, b: info.age,
+    prompt: `Find the ${pair.word}!`, say: `Can you find the ${pair.word}? Tap the ${pair.word}!`,
+    revealText: `This one is the ${pair.word}!`, // identical string to the scored seekfind bundle — no extra audio needed
+    sceneKey: pair.sceneKey, arcadeSource: "seekfind", kind: "seek",
+  };
+}
+
+/* ---------- arcade-owned answer timer (Feature 3) ----------
+   Deliberately NOT _answerTimer/startAnswerTimer/cancelAnswerTimer (the v9.5 parent timer) —
+   own variable (state.arcade.timer), own DOM element (#arcadeTimerBar), same visual mechanics
+   (a plain CSS width transition, not per-frame JS — see v9.5's own comment on why). Cancelled
+   on ANY resolving tap (correct or the final/second wrong tap) inside tapArcadeTile/
+   tapArcadeSeekObj, so there is exactly one path that can ever advance to the next question
+   for a given item: either the child resolves it (timer cancelled first, synchronously —
+   JS's single-threaded execution makes this a hard guarantee, not just "usually" safe) or the
+   15s timeout fires and the child never resolved it. A first WRONG tap (still on firstTry)
+   also cancels it — once a child is actively engaged with a question at all, further time
+   pressure serves no purpose; the retry proceeds at its own pace with no timeout re-armed. */
+function cancelArcadeTimer(){
+  if (state.arcade.timer){ clearTimeout(state.arcade.timer.timeoutId); state.arcade.timer = null; }
+  const bar = $("arcadeTimerBar");
+  if (bar){ bar.classList.remove("running"); bar.style.transition = "none"; bar.style.width = "0%"; }
+}
+function startArcadeTimer(){
+  cancelArcadeTimer();
+  const it = state.arcade.currentItem;
+  const bar = $("arcadeTimerBar");
+  if (bar){
+    bar.style.transition = "none"; bar.style.width = "100%"; bar.classList.add("running");
+    void bar.offsetWidth; // force a reflow so the transition below actually animates from 100%
+    bar.style.transition = `width ${ARCADE_QUESTION_MS / 1000}s linear`;
+    bar.style.width = "0%";
+  }
+  const timeoutId = setTimeout(() => {
+    const firedFor = it;
+    cancelArcadeTimer();
+    // belt-and-braces, same style as startAnswerTimer()'s own guard: every resolution path
+    // already cancels this timer itself, so this makes a resolution/expiry race harmless even
+    // if a call site were ever missed, rather than actually relying on it.
+    if (state.arcade.active && state.arcade.currentItem === firedFor && !state.arcade.locked) arcadeTimeout();
+  }, ARCADE_QUESTION_MS);
+  state.arcade.timer = { timeoutId, forItem: it };
+}
+
+/* ---------- resolution bookkeeping (shared by every "this question is over" path) ---------- */
+function scheduleArcadeAdvance(ms){
+  setTimeout(() => { if (state.arcade.active) advanceArcade(); }, ms);
+}
+function bumpArcadeStreakHUD(){
+  const el = $("arcadeStreak"), count = $("arcadeStreakCount");
+  if (!el) return;
+  count.textContent = state.arcade.streak;
+  el.classList.remove("fade");
+  el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse");
+}
+function resetArcadeStreakHUD(){
+  const el = $("arcadeStreak"), count = $("arcadeStreakCount");
+  if (!el) return;
+  el.classList.add("fade");
+  setTimeout(() => { if (count) count.textContent = "0"; }, 400);
+}
+function arcadeCelebrationLevelFor(streak){
+  if (streak === 3) return 3;
+  if (streak === 5) return 5;
+  if (streak >= 10 && streak % 5 === 0) return 10; // 10, 15, 20, ... all use the "10+" tier
+  return null;
+}
+// Escalating visual + a spoken line, chained via speak()'s OWN callback param — never a second,
+// independent speak() call fired back-to-back with the praise line. This is load-bearing, not
+// stylistic: speak()'s bundled-clip tier calls playAudioClip(), which calls stopClip() FIRST —
+// two independent speak() calls in a row would have the second one CUT OFF the first mid-clip.
+// Chaining through cb guarantees the celebration line only ever starts after the praise line's
+// own finish, exactly the "queue, never cancel" contract the task calls for. Re-checks
+// state.arcade.active before actually speaking — ttsCancel()/stopClip() (called by exitArcade())
+// synchronously fire an in-flight utterance's own finish callback, so a map-out mid-praise-line
+// would otherwise let a celebration line start speaking on the picker screen.
+function celebrateArcadeStreak(level, cb){
+  if (!state.arcade.active){ return; }
+  if (level === 3){ confetti(6); speak(pick(ARCADE_STREAK_LINES_3), cb); }
+  else if (level === 5){ confetti(24); fanfare(); speak(pick(ARCADE_STREAK_LINES_5), cb); }
+  else { confetti(40); fanfare(); speak(pick(ARCADE_STREAK_LINES_10PLUS), cb); }
+}
+function finishArcadeQuestion(firstTryCorrect, missDelayMs){
+  state.arcade.answeredSinceInterlude++;
+  recordArcadePlay();
+  if (firstTryCorrect){
+    state.arcade.streak++;
+    bumpArcadeStreakHUD();
+    persistArcadeBestStreakIfHigher();
+    const level = arcadeCelebrationLevelFor(state.arcade.streak);
+    if (level){
+      speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]), () => {
+        if (!state.arcade.active) return; // exited while the praise line was still playing
+        celebrateArcadeStreak(level, () => scheduleArcadeAdvance(400));
+      });
+      return;
+    }
+    speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]));
+    scheduleArcadeAdvance(1300);
+  } else {
+    // miss or timeout: silent reset (no sound, no shake) — the fade is the ONLY feedback.
+    state.arcade.streak = 0;
+    resetArcadeStreakHUD();
+    scheduleArcadeAdvance(missDelayMs || 1600); // timeout passes ARCADE_REVEAL_MS (~2s, per the task); a manual second-miss uses the same 1600ms the scored engine's own reveal uses
+  }
+}
+function arcadeTimeout(){
+  state.arcade.locked = true;
+  const it = state.arcade.currentItem;
+  // v10 adversarial-review focus: timeout must still go through the SAME "resolved" bookkeeping
+  // (answeredSinceInterlude/totalPlays/streak) every tap-driven resolution uses — recordArcadePlay
+  // is what makes tg_arcade.totalPlays reflect actual play even when a question times out.
+  if (it.kind === "seek"){
+    const el = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
+    if (el) el.classList.add("reveal","found");
+  } else {
+    const board = $("board");
+    const tiles = [...board.children];
+    tiles[it.correct].classList.add("reveal");
+    tiles.forEach((t,j) => { if (j !== it.correct) t.classList.add("dim"); });
+  }
+  speak(it.revealText || `This one is the ${it.label}!`);
+  finishArcadeQuestion(false, ARCADE_REVEAL_MS);
+}
+
+/* ---------- tap handlers (arcade-owned; NOT tapTile/tapSeekObj) ---------- */
+function tapArcadeTile(i, tileEl){
+  if (state.arcade.locked || !state.arcade.currentItem) return;
+  cancelArcadeTimer(); // ANY tap (right or wrong) cancels — see startArcadeTimer()'s own comment
+  const it = state.arcade.currentItem;
+  const tiles = [...$("board").children];
+  if (i === it.correct){
+    state.arcade.locked = true;
+    tileEl.classList.add("correct");
+    tiles.forEach((t,j) => { if (j !== i) t.classList.add("dim"); });
+    chimeGood();
+    const firstTry = state.arcade.firstTry;
+    if (firstTry) confetti(8);
+    finishArcadeQuestion(firstTry);
+  } else {
+    chimeTry();
+    tileEl.classList.add("wrong");
+    setTimeout(() => tileEl.classList.remove("wrong"), 500);
+    if (state.arcade.firstTry){
+      state.arcade.firstTry = false;
+      speak(pick(["Good try! Look again!","Hmm, try again!"]));
+      // not resolved yet — no advance, no streak change, timer stays cancelled (no restart)
+    } else {
+      state.arcade.locked = true;
+      tiles[it.correct].classList.add("reveal");
+      tiles.forEach((t,j) => { if (j !== it.correct) t.classList.add("dim"); });
+      speak(`This one is the ${it.label}!`);
+      finishArcadeQuestion(false);
+    }
+  }
+}
+function tapArcadeSeekObj(word, el){
+  if (state.arcade.locked || !state.arcade.currentItem) return;
+  cancelArcadeTimer();
+  const it = state.arcade.currentItem;
+  if (word === it.label){
+    state.arcade.locked = true;
+    el.classList.add("correct","found");
+    chimeGood();
+    const firstTry = state.arcade.firstTry;
+    if (firstTry) confetti(8);
+    finishArcadeQuestion(firstTry);
+  } else {
+    chimeTry();
+    el.classList.add("wrong");
+    setTimeout(() => el.classList.remove("wrong"), 500);
+    if (state.arcade.firstTry){
+      state.arcade.firstTry = false;
+      speak(pick(["Good try! Look again!","Hmm, try again!"]));
+    } else {
+      state.arcade.locked = true;
+      const targetEl = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
+      if (targetEl) targetEl.classList.add("reveal","found");
+      speak(it.revealText || `This one is the ${it.label}!`);
+      finishArcadeQuestion(false);
+    }
+  }
+}
+
+/* ---------- render ---------- */
+function renderArcadeSeekfindBoard(it){
+  // v10: unlike scored seek&find (one scene persists across several consecutive rounds, via
+  // ds.sf), arcade picks "random scene, random target" independently every seekfind turn —
+  // simpler and correct-by-construction (no cross-turn "found" state to carry between
+  // non-consecutive seekfind picks, since vocab/functions turns interleave in between). Minor
+  // cost: consecutive bag draws that happen to land in the same scene just re-render it fresh
+  // (harmless — a brief re-layout, not a bug) rather than visually "continuing" the same board.
+  const sceneDef = SEEKFIND_SCENES.find(s => s.key === it.sceneKey);
+  const scene = { def: sceneDef, slots: seekfindSlots(sceneDef.words.length) };
+  renderSeekfindScene(scene, tapArcadeSeekObj); // v10: 2nd-arg override — see that function's own comment
+}
+function renderArcadeItem(){
+  if (!state.arcade.active) return; // stale callback after exitArcade()/endGame() — see their own comments
+  state.arcade.firstTry = true; state.arcade.locked = false;
+  $("categoryAnchors").style.display = "none"; // arcade never uses this (categories/patterns aren't in the mix)
+  const source = pickArcadeSource();
+  const it = buildArcadeItem(source);
+  state.arcade.currentItem = it;
+  $("promptText").textContent = it.prompt;
+  if (it.kind === "seek"){
+    $("board").style.display = "none";
+    $("seekBoard").style.display = "block";
+    renderArcadeSeekfindBoard(it);
+  } else {
+    $("seekBoard").style.display = "none";
+    $("board").style.display = "grid";
+    const board = $("board");
+    board.innerHTML = "";
+    const nTiles = it.tiles.length;
+    board.style.gridTemplateColumns = (nTiles === 3 || nTiles >= 5) ? "1fr 1fr 1fr" : "1fr 1fr";
+    board.classList.toggle("compact", nTiles >= 5);
+    it.tiles.forEach((html, i) => {
+      const tile = document.createElement("div");
+      tile.className = "tile";
+      tile.innerHTML = html;
+      attachTap(tile, () => tapArcadeTile(i, tile));
+      board.appendChild(tile);
+    });
+  }
+  sayItem(it);
+  startArcadeTimer();
+}
+function advanceArcade(){
+  if (!state.arcade.active) return;
+  if (state.arcade.answeredSinceInterlude >= ARCADE_INTERLUDE_EVERY){
+    state.arcade.answeredSinceInterlude = 0;
+    showArcadeInterlude();
+    return;
+  }
+  renderArcadeItem();
+}
+function showArcadeInterlude(){
+  $("interludeEmoji").textContent = "🎪";
+  $("interludeText").textContent = ARCADE_INTERLUDE_LINE;
+  $("interludeBtn").textContent = "Keep going! →";
+  $("interludeBtn").onclick = () => { if (state.arcade.active){ show("gameScreen"); renderArcadeItem(); } };
+  show("interlude");
+  speak(ARCADE_INTERLUDE_LINE);
+  // note: the interlude screen's OTHER button ("We're done for now — see results") is static
+  // HTML wired to the existing onclick="endGame()" — already arcade-safe (see endGame()'s own
+  // v10 comment), no override needed.
+}
+
+/* ---------- entry / exit ---------- */
+function startArcade(){
+  state.arcade.active = true;
+  state.arcade.streak = 0;
+  state.arcade.answeredSinceInterlude = 0;
+  state.arcade.bags = { vocab: [], functions: [], seekfind: [] }; // fresh bags every entry, per the task
+  state.arcade.currentItem = null; state.arcade.locked = true; state.arcade.firstTry = true;
+  state.domain = null; state.domainIdx = -1; // belt-and-braces — should already be null (only reachable from the picker)
+  clearBoardUI(); // reuse as-is: wipes #board/#seekBoard/#promptText, hides skip/dk/timerBtn+cancels the SCORED timer — all correct for arcade too
+  $("progressWrap").style.display = "none"; // arcade is endless — no meaningful "progress" bar
+  $("mapBtn").style.display = "inline-block";
+  const streakEl = $("arcadeStreak");
+  if (streakEl){ streakEl.style.display = "inline-flex"; streakEl.classList.remove("fade"); }
+  $("arcadeStreakCount").textContent = "0";
+  show("gameScreen");
+  if (!arcadeIntroShown()){
+    markArcadeIntroShown();
+    speak(ARCADE_INTRO_LINE, () => { if (state.arcade.active) renderArcadeItem(); });
+  } else {
+    renderArcadeItem();
+  }
+}
+function exitArcade(){
+  state.arcade.active = false;
+  cancelArcadeTimer();
+  state.arcade.bags = { vocab: [], functions: [], seekfind: [] }; // reset — bags are session-scoped, per the task
+  state.arcade.currentItem = null;
+  const streakEl = $("arcadeStreak");
+  if (streakEl) streakEl.style.display = "none";
+  ttsCancel(); stopClip(); // v8-style sanctioned interrupt path
+  state.sessionMode = "single";
+  showPicker();
+}
+
 /* ---------- init ---------- */
 (function init(){
   // ---- synchronous baseline (unchanged from pre-v9.3 behavior) — fast first paint that
@@ -4465,6 +5114,8 @@ function renderStorageDiagnostic(){
   runCategorySelfTest(); // v6 (fix 4a): dev-time assertion sweep, see its own comment above
   runVocabRungSelfTest(); // v6 (fix 5a): see its own comment above
   runVocabThemeSelfTest(); // v7 (Part B): see its own comment above
+  runVocabUniquenessSelfTest(); // v10: see its own comment above
+  runFunctionOverlapSelfTest(); // v10: see its own comment above
   loadAudioManifest(); // v9: fire-and-forget fetch of audio/manifest.json — see its own comment above
 
   // ---- v9.3: reconcile localStorage/IndexedDB, THEN stamp this visit — see
