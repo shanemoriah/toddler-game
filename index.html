@@ -45,6 +45,19 @@
   /* ---------- skip (parent-facing, deliberately unobtrusive — not a kid-attractor) ---------- */
   .skip-btn { background: none; border: none; font-size: 12px; color: #b8ab90; cursor: pointer; padding: 4px 10px; opacity: .7; touch-action: manipulation; }
   .skip-btn:active { opacity: 1; }
+  /* ---------- v9.5: parent answer timer (Feature 1) ----------
+     #timerBtn is a .skip-btn like Skip/Doesn't-know (same unobtrusive parent-facing styling);
+     .active just tints it while a countdown is live, no layout change. #timerBar is a thin,
+     deliberately calm shrinking bar under the prompt — see startAnswerTimer()'s own comment for
+     why the shrink itself is a plain CSS width transition rather than per-frame JS. */
+  #timerBtn.active { color: var(--accent2); opacity: 1; }
+  /* align-self:stretch is load-bearing, not cosmetic — #timerBar is a flex ITEM of .screen
+     (align-items:center), so without it the bar shrink-to-fits to its own (empty) content
+     instead of the true available width, same root cause NOTES.md v9.3 documents for
+     #categoryAnchors: the width:0%/width:100% toggle in startAnswerTimer()/cancelAnswerTimer()
+     would resolve against a 0px containing block and never visibly animate. */
+  #timerBar { height: 4px; margin: 0 6px 6px; border-radius: 2px; background: var(--accent2); width: 0%; opacity: 0; transition: none; align-self: stretch; }
+  #timerBar.running { opacity: 1; }
   /* ---------- categories (Feature 6): anchor strip above the tile grid ---------- */
   /* v9.3 fix: #categoryAnchors is a flex ITEM of .screen (align-items:center), so without an
      explicit width it shrink-to-fits to its own CONTENT'S natural size instead of the true
@@ -151,6 +164,16 @@
   .picker-emoji { font-size: 42px; }
   .picker-label { font-size: 14px; font-weight: 700; }
   .picker-badge { position: absolute; top: 4px; right: 10px; font-size: 20px; }
+  /* ---------- v9.5: rotation lock (Feature 2) — locked picker tiles ----------
+     Greyed via opacity (not a red/error color — being locked isn't a mistake), 🔒 badge
+     REPLACES the ⭐ position (see renderPicker()'s own comment on why a just-completed,
+     now-locked domain shows the lock, not the star, until it unlocks again), small caption
+     under the label. lockedTileTap()'s wobble is deliberately gentle (small rotation, no
+     shake/red border like .tile.wrong) — a locked tile isn't a wrong answer. */
+  .picker-tile.locked { opacity: .45; }
+  .picker-caption { font-size: 11px; color: #8a7d66; line-height: 1.25; }
+  @keyframes gentleWobble { 0%,100%{transform:rotate(0)} 25%{transform:rotate(-4deg)} 75%{transform:rotate(4deg)} }
+  .picker-tile.wobble { animation: gentleWobble .4s; }
   /* ---------- v7: picker section headers (17 tiles grouped into 4 labeled sections) ---------- */
   .picker-section-head { grid-column: 1/-1; text-align: left; font-weight: 800; color: #8a7d66; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; margin-top: 10px; }
   .picker-section-head:first-of-type { margin-top: 2px; }
@@ -286,9 +309,11 @@
     <div id="promptBar">
       <button id="speakBtn" onclick="repeatPrompt()">🔊</button>
       <div id="promptText"></div>
+      <button id="timerBtn" class="skip-btn" onclick="startAnswerTimer()" title="Start a 10-second answer timer (parent)">⏱</button>
       <button id="skipBtn" class="skip-btn" onclick="skipItem()" title="Skip this item (parent)">🤷 Skip</button>
       <button id="dkBtn" class="skip-btn" onclick="dontKnowItem()" title="Child doesn't know this one (parent)">🙅 Doesn't know</button>
     </div>
+    <div id="timerBar"></div>
     <div id="categoryAnchors"></div>
     <div id="domainTransition"></div>
     <div id="board"></div>
@@ -1181,6 +1206,7 @@ function tapBodyPart(part, el){
   const highlightAll = (cls) => { $("seekBoard").querySelectorAll(`.body-hit[data-part="${it.label}"]`).forEach(e => e.classList.add(cls)); };
   if (part === it.label){
     state.locked = true;
+    cancelAnswerTimer(); // v9.5: item resolved (correct) — stop any running answer timer
     highlightAll("correct");
     chimeGood();
     if (state.firstTry){ addStar(); confetti(8); }
@@ -1197,6 +1223,7 @@ function tapBodyPart(part, el){
       speak(pick(["Good try! Look again!","Hmm, try again!"]));
     } else {
       state.locked = true;
+      cancelAnswerTimer(); // v9.5: item resolved (second-miss reveal) — stop any running answer timer
       recordResult(it, false);
       highlightAll("reveal");
       speak(it.revealText || `This one is the ${it.label}!`);
@@ -1439,6 +1466,7 @@ function collectAllSayStrings(){
   // (the on-screen flow is unaffected; only the SPOKEN greeting changed).
   add("Hi friend! Let's play!");
   MASCOT_LINES.forEach(add); // v9.3: tapMascot() encouragement lines — see its own comment
+  add(LOCKED_DOMAIN_LINE); // v9.5: locked picker tile tap — see lockedTileTap()'s own comment
 
   // ---- domain intro / celebration, one per DOMAINS[] entry (beginDomain/domainDone) ----
   for (const dom of DOMAINS){
@@ -3134,6 +3162,10 @@ const MASCOT_LINES = [
   "You make me so happy!",
   "Woohoo, you're amazing!",
 ];
+// v9.5: spoken line for a locked picker tile tap — see lockedTileTap()/renderPicker() and
+// collectAllSayStrings() (bundled below, next to MASCOT_LINES, same reason: this is a
+// child-adjacent tap that needs to speak even with no live TTS engine).
+const LOCKED_DOMAIN_LINE = "Let's try a different game first!";
 // Whether the shared TTS engine OR the shared clip-audio element (bundled/recorded clips
 // both play through playAudioClip()/_currentClipAudio — see its own comment above) is
 // currently mid-playback. Used by tapMascot() below to detect an in-flight GAME prompt
@@ -3154,6 +3186,58 @@ function tapMascot(){
   if (isAnyAudioPlaying()) return;
   state.mascotSpeaking = true;
   speak(pick(MASCOT_LINES), () => { state.mascotSpeaking = false; });
+}
+
+/* ---------- v9.5: parent answer timer (Feature 1) ----------
+   A parent-tappable ⏱ button next to Skip/Doesn't-know starts a 10-second countdown for the
+   CURRENT item only. No auto-start (a parent opts in per question), no ticking sound — just a
+   thin shrinking bar under the prompt, animated via a plain CSS width transition (100% -> 0%
+   over the same 10s the real setTimeout deadline uses) rather than a per-frame JS timer, so the
+   visual can never itself drift out of sync with the moment dontKnowItem() actually fires.
+   On expiry with no resolution, routes through dontKnowItem() exactly (scores incorrect, ᴰᴷ
+   mark, neutral transition) — no separate scoring path.
+   Cancelled — via cancelAnswerTimer() — at every point that resolves or abandons the current
+   item (correct tap, second-miss reveal, manual skip/doesn't-know, map-out) and unconditionally
+   at the top of renderItem(), so a timer can never survive into the next item/domain. Re-
+   tappable each question: a second tap while one is already running just restarts the full 10s
+   (cancelAnswerTimer() at the top of startAnswerTimer() below) rather than toggling it off or
+   stacking a second deadline — "start a countdown" is the button's only stated affordance. */
+let _answerTimer = null; // { timeoutId, item } targeting state.currentItem at start time, or null
+
+function cancelAnswerTimer(){
+  if (_answerTimer){ clearTimeout(_answerTimer.timeoutId); _answerTimer = null; }
+  const bar = $("timerBar");
+  if (bar){ bar.classList.remove("running"); bar.style.transition = "none"; bar.style.width = "0%"; }
+  const btn = $("timerBtn");
+  if (btn) btn.classList.remove("active");
+}
+
+function startAnswerTimer(){
+  // Nothing live to time — between domains, mid domain-transition narration, or the item
+  // already resolved. Same guard shape as skipItem/dontKnowItem.
+  if (state.locked || !state.currentItem || !state.domain) return;
+  cancelAnswerTimer(); // re-tappable: a second tap restarts the full 10s rather than stacking
+  const it = state.currentItem;
+  const bar = $("timerBar");
+  if (bar){
+    bar.style.transition = "none";
+    bar.style.width = "100%";
+    bar.classList.add("running");
+    void bar.offsetWidth; // force a reflow so the transition below actually animates from 100%
+    bar.style.transition = "width 10s linear";
+    bar.style.width = "0%";
+  }
+  const timerBtn = $("timerBtn");
+  if (timerBtn) timerBtn.classList.add("active"); // guarded to match cancelAnswerTimer()'s own null-check style
+  const timeoutId = setTimeout(() => {
+    const firedFor = it;
+    cancelAnswerTimer(); // clears _answerTimer/bar/button — safe even though this timeout already fired
+    // Only fire dontKnowItem() if this is STILL the same, unresolved item — belt-and-braces:
+    // every resolution path already cancels this timer itself, but this guard makes a
+    // resolution/expiry race harmless even if one of those call sites were ever missed.
+    if (state.currentItem === firedFor && !state.locked && state.domain) dontKnowItem();
+  }, 10000);
+  _answerTimer = { timeoutId, item: it };
 }
 
 /* ---------- flow ---------- */
@@ -3184,6 +3268,60 @@ function startGame(){
   showPicker();
 }
 
+/* ---------- v9.5: rotation lock (Feature 2) ----------
+   "Don't grind one game": tracks an ordered count of COMPLETED domain runs in
+   localStorage/IndexedDB key "tg_completions" ({total, lockedUntil: {domainKey: M}}), dual-
+   written via persistSet() like every other persisted key (see reconcileStorage()'s own
+   tg_completions block for the cross-store merge rule). "Completed" = domainDone() actually
+   ran (natural end via stop-rule or pool exhaustion) — see recordDomainCompletion()'s one call
+   site. map-outs (backToMap) and mid-domain Finish (endGame) call finalizeDomain() directly and
+   NEVER go through domainDone(), so they never count, per the task's own definition.
+   Rule: on completing domain X, total++ then lockedUntil[X] = total + 5 — X stays locked while
+   total < lockedUntil[X], i.e. for the next 5 completions of ANY domain. */
+function loadCompletions(){
+  try { return JSON.parse(localStorage.getItem("tg_completions") || "{}"); } catch(e){ return {}; }
+}
+function recordDomainCompletion(domainKey){
+  const c = loadCompletions();
+  c.total = (c.total || 0) + 1;
+  c.lockedUntil = c.lockedUntil || {};
+  c.lockedUntil[domainKey] = c.total + 5;
+  persistSet("tg_completions", JSON.stringify(c)); // v9.3-style dual-write, see persistSet()
+}
+// Every DOMAINS[] key currently locked under completions object `c` — a plain array (not a
+// Set) since every call site immediately wraps it in one or just needs .length/.includes.
+function lockedDomainKeys(c){
+  const total = c.total || 0, lockedUntil = c.lockedUntil || {};
+  return DOMAINS.filter(d => total < (lockedUntil[d.key] || 0)).map(d => d.key);
+}
+// Defensive guard from the task spec: "if somehow ALL domains lock (impossible with 17 and
+// lock-window 5, but defensive), treat all as unlocked" — both call sites below apply this the
+// same way (locked.length >= DOMAINS.length neutralizes the lock entirely for that read).
+function isDomainLocked(domainKey){
+  const locked = lockedDomainKeys(loadCompletions());
+  return locked.length < DOMAINS.length && locked.includes(domainKey);
+}
+// First DOMAINS[] index at or after `fromIdx` that isn't locked (or -1 if none remain) — used
+// by playEverything()/nextDomain()/domainDone() so "Play everything!" skips locked domains at
+// their turn instead of stopping to ask a parent to unlock anything.
+function firstPlayableIndex(fromIdx){
+  const locked = new Set(lockedDomainKeys(loadCompletions()));
+  const allLocked = locked.size >= DOMAINS.length;
+  for (let i = fromIdx; i < DOMAINS.length; i++){
+    if (allLocked || !locked.has(DOMAINS[i].key)) return i;
+  }
+  return -1;
+}
+// Locked picker tile tap: not a real domain-select — gentle, non-scary feedback only (small
+// wobble, no shake/red border like .tile.wrong; a locked tile isn't a wrong answer) plus one
+// spoken line, debounced against an in-flight prompt the same way tapMascot() is so mashing a
+// locked tile can't pile up overlapping speech.
+function lockedTileTap(tile){
+  tile.classList.remove("wobble"); void tile.offsetWidth; tile.classList.add("wobble");
+  if (isAnyAudioPlaying()) return;
+  speak(LOCKED_DOMAIN_LINE);
+}
+
 /* ---------- picker (Feature 1) ---------- */
 function showPicker(){
   state.domain = null; // stale-reference guard, same pattern as endGame()
@@ -3211,6 +3349,11 @@ function renderPicker(){
     if (!sec){ sec = { name: dom.section || "More", doms: [] }; sections.push(sec); }
     sec.doms.push(dom);
   }
+  // v9.5: rotation lock (Feature 2) — read tg_completions ONCE per render (not once per tile)
+  // so every tile drawn in this pass sees one consistent snapshot.
+  const completions = loadCompletions();
+  const lockedKeys = new Set(lockedDomainKeys(completions));
+  const allLocked = lockedKeys.size >= DOMAINS.length; // defensive guard, see lockedDomainKeys()'s own comment
   for (const sec of sections){
     const head = document.createElement("div");
     head.className = "picker-section-head";
@@ -3218,10 +3361,19 @@ function renderPicker(){
     grid.appendChild(head);
     for (const dom of sec.doms){
       const played = !!state.finalDomains[dom.key];
+      const locked = !allLocked && lockedKeys.has(dom.key);
       const tile = document.createElement("div");
-      tile.className = "picker-tile";
-      tile.innerHTML = `${played ? '<div class="picker-badge">⭐</div>' : ""}<div class="picker-emoji">${dom.emoji}</div><div class="picker-label">${dom.label}</div>`;
-      attachTap(tile, () => playDomain(dom.key)); // v9.4: child-tappable
+      tile.className = "picker-tile" + (locked ? " locked" : "");
+      // Locked always shows 🔒 in the badge position, even for a just-completed (and so
+      // technically "played") domain — replacing the ⭐, per the task, not stacking with it.
+      const badge = locked ? '<div class="picker-badge">🔒</div>' : (played ? '<div class="picker-badge">⭐</div>' : "");
+      let caption = "";
+      if (locked){
+        const remaining = Math.max(1, (completions.lockedUntil[dom.key] || 0) - (completions.total || 0));
+        caption = `<div class="picker-caption">after ${remaining} more game${remaining === 1 ? "" : "s"}</div>`;
+      }
+      tile.innerHTML = `${badge}<div class="picker-emoji">${dom.emoji}</div><div class="picker-label">${dom.label}</div>${caption}`;
+      attachTap(tile, () => { if (locked) lockedTileTap(tile); else playDomain(dom.key); }); // v9.4/v9.5: child-tappable, locked tiles no-op
       grid.appendChild(tile);
     }
   }
@@ -3229,12 +3381,14 @@ function renderPicker(){
 function playDomain(key){
   const idx = DOMAINS.findIndex(d => d.key === key);
   if (idx < 0) return;
+  if (isDomainLocked(key)) return; // v9.5: defensive — the picker UI already gates this via lockedTileTap
   state.sessionMode = "single";
   beginDomain(idx);
 }
 function playEverything(){
   state.sessionMode = "all";
-  beginDomain(0);
+  const idx = firstPlayableIndex(0); // v9.5: rotation lock — start on the first unlocked domain
+  beginDomain(idx < 0 ? 0 : idx); // idx<0 is unreachable (the all-locked guard always frees index 0) — defensive fallback only
 }
 
 // v5.1 adversarial-review fix: v5 fixed the SCORING half of the cross-domain stale-item bug
@@ -3253,6 +3407,7 @@ function clearBoardUI(){
   $("promptText").textContent = "";
   $("categoryAnchors").innerHTML = ""; $("categoryAnchors").style.display = "none";
   $("skipBtn").style.display = "none"; $("dkBtn").style.display = "none";
+  $("timerBtn").style.display = "none"; cancelAnswerTimer(); // v9.5: a prior domain's timer must not tick through the "Now let's play with X!" narration window
   $("domainTransition").style.display = "none"; $("domainTransition").innerHTML = ""; // v6: see showDomainTransition/renderItem
 }
 
@@ -3296,9 +3451,12 @@ function beginDomain(idx){
 }
 
 function nextDomain(){
-  // sequential continuation used only by "Play everything!" (state.sessionMode === "all")
-  const idx = state.domainIdx + 1;
-  if (idx >= DOMAINS.length) return endGame();
+  // sequential continuation used only by "Play everything!" (state.sessionMode === "all") —
+  // v9.5: firstPlayableIndex() skips any locked domains at their turn (rotation lock) instead
+  // of a flat +1; also naturally returns -1 (-> endGame()) once nothing DOMAINS.length-and-later
+  // remains, same end condition the old `idx >= DOMAINS.length` check covered.
+  const idx = firstPlayableIndex(state.domainIdx + 1);
+  if (idx < 0) return endGame();
   beginDomain(idx);
 }
 
@@ -3312,6 +3470,7 @@ function backToMap(){
   // callback that fires renderItem() afterward is already guarded by the existing
   // `if (!ds) return` check (showPicker nulls state.domain).
   if (state.domain) finalizeDomain(state.domain);
+  cancelAnswerTimer(); // v9.5: map-out cancels any running answer timer
   state.sessionMode = "single";
   ttsCancel(); stopClip(); // v8: map-out is a sanctioned interrupt path — stop any playing recorded clip too
   showPicker();
@@ -3345,6 +3504,12 @@ function finalizeDomain(ds){
 function domainDone(){
   finalizeDomain(state.domain);
   const dom = DOMAINS[state.domainIdx];
+  // v9.5: rotation lock (Feature 2) — this is the ONE call site for "a domain reached its
+  // natural end" (every domainDone() call comes from a stop-rule or pool-exhaustion check —
+  // see its call sites in renderItem/renderSeekfindRound/renderBodyRound). map-outs
+  // (backToMap) and mid-domain Finish (endGame) call finalizeDomain() directly and never
+  // reach here, so they correctly never count, per the task's own definition.
+  recordDomainCompletion(dom.key);
   if (state.sessionMode === "single"){
     // picker flow: celebrate this one domain, then return to the picker
     // instead of advancing to the next DOMAINS[] entry.
@@ -3357,13 +3522,17 @@ function domainDone(){
     speak(`Hooray! Great job with ${dom.label}!`);
     return;
   }
-  // "Play everything!" — original sequential behavior, unchanged
-  if (state.domainIdx >= DOMAINS.length - 1) return endGame();
-  const next = DOMAINS[state.domainIdx+1];
+  // "Play everything!" — v9.5: firstPlayableIndex() skips any locked domain at its turn
+  // (rotation lock) instead of a flat DOMAINS[state.domainIdx+1]/"last index" check; nextIdx<0
+  // covers both "nothing locked, but we were on the last domain" and "everything after this is
+  // locked" the same way the old length check covered just the former.
+  const nextIdx = firstPlayableIndex(state.domainIdx + 1);
+  if (nextIdx < 0) return endGame();
+  const next = DOMAINS[nextIdx];
   $("interludeEmoji").textContent = next.emoji;
   $("interludeText").textContent = `Yay ${state.name}! Next: ${next.label}!`;
   $("interludeBtn").textContent = "Keep going! →";
-  $("interludeBtn").onclick = () => nextDomain();
+  $("interludeBtn").onclick = () => nextDomain(); // nextDomain() recomputes the same firstPlayableIndex — stays in sync with the preview above
   show("interlude");
   fanfare(); confetti(24);
   speak(`Hooray! Great job with ${dom.label}!`);
@@ -3416,6 +3585,7 @@ function shrinkToFit(els, maxFont, minFont){
 }
 
 function renderItem(){
+  cancelAnswerTimer(); // v9.5: a timer must not survive into the next item — unconditional, before any early return
   const dom = DOMAINS[state.domainIdx];
   const ds = state.domain;
   if (!ds) return; // a stale speak() callback fired after endGame() already tore down the session
@@ -3428,7 +3598,7 @@ function renderItem(){
   if (domainShouldStop(ds)){ domainDone(); return; }
   // v5.1: restore the controls clearBoardUI() hid on domain entry — safe to call on every
   // render (mid-domain re-renders just no-op back to their already-visible state).
-  $("skipBtn").style.display = ""; $("dkBtn").style.display = "";
+  $("skipBtn").style.display = ""; $("dkBtn").style.display = ""; $("timerBtn").style.display = ""; // v9.5
   if (dom.key === "seekfind"){
     $("board").style.display = "none";
     $("seekBoard").style.display = "block";
@@ -3507,6 +3677,7 @@ function skipItem(){
   // for both the tile-grid and seek&find paths), so it won't be re-offered. No penalty
   // sound, no shake/dim styling, mascot untouched — stays cheerful.
   if (state.locked || !state.currentItem || !state.domain) return;
+  cancelAnswerTimer(); // v9.5: manual skip cancels any running answer timer
   state.locked = true;
   const it = state.currentItem;
   if (it.seekfind){
@@ -3534,6 +3705,7 @@ function dontKnowItem(){
   // child doesn't know — the point is measurement, not instruction) — just a brief neutral
   // spoken transition and on to the next item, at Skip's pace.
   if (state.locked || !state.currentItem || !state.domain) return;
+  cancelAnswerTimer(); // v9.5: manual "doesn't know" cancels any running timer; a no-op when THIS call is the timer's own expiry firing (already cleared before invoking dontKnowItem())
   state.locked = true;
   const it = state.currentItem;
   if (it.seekfind){
@@ -3651,6 +3823,7 @@ function tapSeekObj(word, el){
   if (!it || !it.seekfind) return;
   if (word === it.label){
     state.locked = true;
+    cancelAnswerTimer(); // v9.5: item resolved (correct) — stop any running answer timer
     el.classList.add("correct","found");
     if (state.domain && state.domain.sf && state.domain.sf.scene) state.domain.sf.scene.resolved++;
     chimeGood();
@@ -3668,6 +3841,7 @@ function tapSeekObj(word, el){
       speak(pick(["Good try! Look again!","Hmm, try again!"]));
     } else {
       state.locked = true;
+      cancelAnswerTimer(); // v9.5: item resolved (second-miss reveal) — stop any running answer timer
       recordResult(it, false);
       const targetEl = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
       if (targetEl) targetEl.classList.add("reveal","found");
@@ -3699,6 +3873,7 @@ function tapTile(i, tileEl){
   const tiles = [...$("board").children];
   if (i === it.correct){
     state.locked = true;
+    cancelAnswerTimer(); // v9.5: item resolved (correct) — stop any running answer timer
     tileEl.classList.add("correct");
     tiles.forEach((t,j)=>{ if(j!==i) t.classList.add("dim"); });
     chimeGood();
@@ -3718,6 +3893,7 @@ function tapTile(i, tileEl){
     } else {
       // second miss: reveal, record the (first-attempt) result as incorrect, move on
       state.locked = true;
+      cancelAnswerTimer(); // v9.5: item resolved (second-miss reveal) — stop any running answer timer
       recordResult(it, false);
       tiles[it.correct].classList.add("reveal");
       tiles.forEach((t,j)=>{ if(j!==it.correct) t.classList.add("dim"); });
@@ -3825,6 +4001,7 @@ function endGame(){
   // adversarial-review fix).
   if (state.domain) finalizeDomain(state.domain);
   state.domain = null; // guard against a stale nextDomain()->speak() callback firing renderItem() late
+  cancelAnswerTimer(); // v9.5: Finish cancels any running answer timer
   ttsCancel(); stopClip(); // v8: Finish is a sanctioned interrupt path — stop any playing recorded clip too
   $("quitBtn").style.display = "none";
   $("progressWrap").style.display = "none";
@@ -4150,6 +4327,20 @@ function mergeSessionsArr(a, b){
 function mergeChecklistArr(a, b){
   return [...new Set([...(a || []), ...(b || [])])];
 }
+function mergeCompletions(a, b){
+  // v9.5 (Feature 2, rotation lock): union rule, per the task — total is a monotonic counter
+  // (same reasoning as mergeVisits' count below, not a list), so take the max; lockedUntil is
+  // merged per-domain-key, also taking the max of each key present on either side (the side
+  // with the larger total at write time computed the larger, more-recent lockedUntil there —
+  // never drop a key present on only one side, that would silently unlock a domain the OTHER
+  // side still correctly remembers as locked).
+  a = a || {}; b = b || {};
+  const total = Math.max(a.total || 0, b.total || 0);
+  const au = a.lockedUntil || {}, bu = b.lockedUntil || {};
+  const lockedUntil = {};
+  for (const k of new Set([...Object.keys(au), ...Object.keys(bu)])) lockedUntil[k] = Math.max(au[k] || 0, bu[k] || 0);
+  return { total, lockedUntil };
+}
 function mergeVisits(a, b){
   // Not a union (a single counter, not a list): take the HIGHER count (whichever side wasn't
   // wiped has the true, larger count) and the EARLIER `first` (the more historically
@@ -4198,6 +4389,13 @@ async function reconcileStorage(){
   let idbVisits = null; if (idbVisitsRaw){ try { idbVisits = JSON.parse(idbVisitsRaw); } catch(e){} }
   let lsVisits = null; try { const r = localStorage.getItem("tg_visits"); lsVisits = r ? JSON.parse(r) : null; } catch(e){}
   persistSet("tg_visits", JSON.stringify(mergeVisits(lsVisits, idbVisits)));
+
+  // tg_completions: merged via mergeCompletions (max total, max per-domain lockedUntil) — see
+  // its own comment. v9.5 (Feature 2, rotation lock).
+  const idbCompletionsRaw = idbOk ? await kvGet("tg_completions") : null;
+  let idbCompletions = null; if (idbCompletionsRaw){ try { idbCompletions = JSON.parse(idbCompletionsRaw); } catch(e){} }
+  let lsCompletions = null; try { const r = localStorage.getItem("tg_completions"); lsCompletions = r ? JSON.parse(r) : null; } catch(e){}
+  persistSet("tg_completions", JSON.stringify(mergeCompletions(lsCompletions, idbCompletions)));
 
   return { sessionsChanged, checklistChanged };
 }
