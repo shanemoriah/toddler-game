@@ -1070,7 +1070,7 @@ const BODY_REGIONS = {
   knees:     { cy:167, r:7, cx:[31,69] },
   ankle:     { cy:187, r:5, cx:[36,64] },
   feet:      { cy:197, r:7, cx:[19,81] },
-  heel:      { cy:201, r:6, cx:[42,58] },
+  heel:      { cy:195.5, r:6, cx:[32,68] }, // inner rear of foot, just below the ankle (no drawn ball — v9.6.1)
 };
 // ladder per the task: nose/eyes/mouth/ears/hair/hands/feet/tummy 20-30 (kept low
 // for younger-sibling use), knees/fingers/neck 34-42, elbow/ankle/wrist/shoulders
@@ -1096,8 +1096,6 @@ function bodyFigureSVG(){
     <path d="M64,165 Q69,171 74,165" stroke="${ink}" stroke-width="1.6" fill="none" stroke-linecap="round" opacity="0.45"/>
     <path d="M37,184 L35,190" stroke="${skin}" stroke-width="4.2" fill="none" stroke-linecap="round"/>
     <path d="M63,184 L65,190" stroke="${skin}" stroke-width="4.2" fill="none" stroke-linecap="round"/>
-    <ellipse cx="42" cy="201" rx="6.5" ry="6" fill="${skin}" stroke="${ink}" stroke-width="1" stroke-opacity="0.35"/>
-    <ellipse cx="58" cy="201" rx="6.5" ry="6" fill="${skin}" stroke="${ink}" stroke-width="1" stroke-opacity="0.35"/>
     <path d="M35,190 L15,197" stroke="${skin}" stroke-width="12" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
     <path d="M65,190 L85,197" stroke="${skin}" stroke-width="12" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
     <ellipse cx="5" cy="193" rx="2" ry="3" fill="${skin}" stroke="${ink}" stroke-width="0.6" stroke-opacity="0.3"/>
