@@ -1000,10 +1000,27 @@ const state = {
   // never touches either — so there is no guard to remember, it's structurally impossible for
   // an arcade round to be mistaken for a scored one. See NOTES.md v10.
   arcade: {
+    mode: "mixitup",
     active: false, locked: false, firstTry: true,
     streak: 0, answeredSinceInterlude: 0,
     currentItem: null, timer: null,
     bags: { vocab: [], functions: [], seekfind: [] }, // shuffle bags — in-memory only, reset on (re)entry
+  },
+  // v10.1: "Everything Mix!" — a second, structurally IDENTICAL free-play session slot (own
+  // active/locked/streak/timer/bags), never state.domain/state.finalDomains/state.arcade. Draws
+  // from every domain in DOMAINS[] (round-robin over a shuffled `domainOrder`, one shuffle bag
+  // per domain key in `bags`) instead of Mix-It-Up's fixed 40/30/30 vocab/functions/seekfind mix
+  // — see buildEverythingItem()/pickEverythingDomain() further down. Shares every generalized
+  // engine function (timer/streak/interlude/tap-resolution) with `state.arcade` via a `sess`
+  // parameter — see the arcade section's own comment for why that's safe (both slots are read
+  // and written only through those same pure-w.r.t.-state.domain functions, so there is no path
+  // by which the two sessions, or scored play, can bleed into each other).
+  everything: {
+    mode: "everything",
+    active: false, locked: false, firstTry: true,
+    streak: 0, answeredSinceInterlude: 0,
+    currentItem: null, timer: null,
+    bags: {}, domainOrder: null, domainPos: 0, // per-domain-key shuffle bags + round-robin position — reset on (re)entry
   },
 };
 
@@ -1331,7 +1348,13 @@ function resolveBodyTap(viewX, viewY){
     }
   return best;
 }
-function renderBodyFigure(){
+function renderBodyFigure(tapHandler){
+  // v10.1: optional param — defaults to the scored-mode tapBodyPart, but Everything Mix arcade
+  // passes tapArcadeBodyPart so this SAME pure figure-builder can be reused for an arcade round
+  // without wiring taps into the scored engine (which reads/writes state.domain). Scored call
+  // sites are unaffected: they don't pass an arg, so this defaults exactly to prior behavior —
+  // same pattern renderSeekfindScene's own optional 2nd param established in v10.
+  tapHandler = tapHandler || tapBodyPart;
   const wrap = $("seekBoard");
   const hits = Object.entries(BODY_REGIONS).map(([key,r]) => r.cx.map(cx => {
     const left = (cx - BODY_VB.minX) / BODY_VB.w * 100, top = r.cy / BODY_VB.h * 100, wpct = r.r*2 / BODY_VB.w * 100;
@@ -1357,7 +1380,7 @@ function renderBodyFigure(){
     const best = resolveBodyTap(x, y);
     if (!best) return; // empty background tap: no penalty, no reaction
     const el = wrap.querySelector(`.body-hit[data-part="${best.key}"]`);
-    tapBodyPart(best.key, el);
+    tapHandler(best.key, el);
   });
 }
 function renderBodyRound(dom, ds){
@@ -1658,6 +1681,13 @@ function collectAllSayStrings(){
   add(ARCADE_INTRO_LINE);
   add(ARCADE_INTERLUDE_LINE);
   [...ARCADE_STREAK_LINES_3, ...ARCADE_STREAK_LINES_5, ...ARCADE_STREAK_LINES_10PLUS].forEach(add);
+  // v10.1: "Everything Mix!" — only 2 NEW lines (its own intro/interlude copy). Every per-item
+  // say/reveal line it can ever speak is already enumerated below by the existing per-domain loop
+  // (Everything reuses each domain's own dom.make()/renderSeekfindRound-shape/renderBodyRound-
+  // shape item text verbatim, byte-for-byte — see buildEverythingItem()) and the streak-
+  // celebration lines are the SAME ARCADE_STREAK_LINES_* arrays already added just above.
+  add(EVERYTHING_INTRO_LINE);
+  add(EVERYTHING_INTERLUDE_LINE);
 
   // ---- domain intro / celebration, one per DOMAINS[] entry (beginDomain/domainDone) ----
   for (const dom of DOMAINS){
@@ -3582,6 +3612,15 @@ function renderPicker(){
   arcadeTile.innerHTML = `<div class="picker-emoji">🎪</div><div class="picker-label">Mix-It-Up!</div>`;
   attachTap(arcadeTile, () => startArcade()); // v9.4: child-tappable
   grid.appendChild(arcadeTile);
+  // v10.1: "Everything Mix!" — same "Just for fun" section, right after Mix-It-Up!, same rainbow-
+  // border tile style (.picker-tile-arcade, unchanged) — deliberately not louder or different-
+  // looking, just a second bonus-mode tile. Same DOMAINS[]/lockedDomainKeys() reasoning as
+  // Mix-It-Up above: never a candidate for the rotation lock.
+  const everythingTile = document.createElement("div");
+  everythingTile.className = "picker-tile picker-tile-arcade";
+  everythingTile.innerHTML = `<div class="picker-emoji">🎡</div><div class="picker-label">Everything Mix!</div>`;
+  attachTap(everythingTile, () => startEverything());
+  grid.appendChild(everythingTile);
 }
 function playDomain(key){
   const idx = DOMAINS.findIndex(d => d.key === key);
@@ -3671,6 +3710,7 @@ function backToMap(){
   // (see state.arcade's own comment), so route there instead and return before touching any of
   // the scored-only logic below.
   if (state.arcade.active){ exitArcade(); return; }
+  if (state.everything.active){ exitEverything(); return; } // v10.1: same reasoning as arcade above
   // v4 (mod 2): one-tap, no confirmation. Finalizes whatever's in-flight (same path
   // Finish uses for partials — finalizeDomain no-ops on nothing answered), then
   // returns to the picker. Setting sessionMode to "single" converts a "Play
@@ -4224,7 +4264,8 @@ function endGame(){
   // now-gone gameScreen after we've moved on to the results screen. Both are guarded by
   // `state.arcade.active` checks at their own top, so clearing it here (+ the timer) makes
   // every one of those a safe no-op instead of relying on nothing ever racing this.
-  state.arcade.active = false; cancelArcadeTimer();
+  state.arcade.active = false; cancelArcadeTimer(state.arcade);
+  state.everything.active = false; cancelArcadeTimer(state.everything); // v10.1: same reasoning as arcade above
   ttsCancel(); stopClip(); // v8: Finish is a sanctioned interrupt path — stop any playing recorded clip too
   $("quitBtn").style.display = "none";
   $("progressWrap").style.display = "none";
@@ -4564,17 +4605,34 @@ function mergeCompletions(a, b){
   for (const k of new Set([...Object.keys(au), ...Object.keys(bu)])) lockedUntil[k] = Math.max(au[k] || 0, bu[k] || 0);
   return { total, lockedUntil };
 }
+// v10.1: normalizes tg_arcade to the per-mode nested shape { mixitup:{...}, everything:{...} },
+// migrating the v10 flat shape (a single undifferentiated {totalPlays,bestStreak,introShown} —
+// back when only Mix-It-Up existed) into `.mixitup` on read, with `.everything` starting fresh.
+// Self-healing, same pattern tg_profile's bday/age fallback already uses elsewhere in this file:
+// the FIRST save after this lands rewrites storage in the new nested shape permanently, so this
+// migration path only ever matters for however many reads happen before that first write.
+function normalizeArcadeStats(raw){
+  raw = raw || {};
+  const norm = (m) => ({ totalPlays: (m && m.totalPlays) || 0, bestStreak: (m && m.bestStreak) || 0, introShown: !!(m && m.introShown) });
+  if (raw.mixitup || raw.everything) return { mixitup: norm(raw.mixitup), everything: norm(raw.everything) };
+  return { mixitup: norm(raw), everything: norm(null) };
+}
 function mergeArcade(a, b){
-  // v10: same "monotonic counters, take the max" reasoning as mergeVisits/mergeCompletions —
+  // v10.1: same "monotonic counters, take the max" reasoning as mergeVisits/mergeCompletions —
   // totalPlays only ever grows, bestStreak only ever grows within one device's history, and
   // introShown is a one-way flag (once true on EITHER side, stays true — never re-show the
-  // intro line just because the other storage tier hadn't recorded it yet).
-  a = a || {}; b = b || {};
-  return {
-    totalPlays: Math.max(a.totalPlays || 0, b.totalPlays || 0),
-    bestStreak: Math.max(a.bestStreak || 0, b.bestStreak || 0),
-    introShown: !!(a.introShown || b.introShown),
-  };
+  // intro line just because the other storage tier hadn't recorded it yet) — now applied PER
+  // MODE. Both sides are normalized first (via normalizeArcadeStats — handles the old flat shape
+  // transparently on either side, e.g. localStorage already migrated to nested while the
+  // IndexedDB mirror is still flat), so this is correct regardless of which shape either side is
+  // currently in.
+  const na = normalizeArcadeStats(a), nb = normalizeArcadeStats(b);
+  const mergeMode = (x, y) => ({
+    totalPlays: Math.max(x.totalPlays || 0, y.totalPlays || 0),
+    bestStreak: Math.max(x.bestStreak || 0, y.bestStreak || 0),
+    introShown: !!(x.introShown || y.introShown),
+  });
+  return { mixitup: mergeMode(na.mixitup, nb.mixitup), everything: mergeMode(na.everything, nb.everything) };
 }
 function mergeVisits(a, b){
   // Not a union (a single counter, not a list): take the HIGHER count (whichever side wasn't
@@ -4675,22 +4733,33 @@ function renderStorageDiagnostic(){
 }
 
 /* =====================================================================
-   v10: "MIX-IT-UP!" ARCADE — bonus free-play mode.
+   v10/v10.1: BONUS ARCADE MODES — "Mix-It-Up!" (v10) and "Everything Mix!" (v10.1),
+   two unscored free-play modes sharing one generalized engine.
 
-   Design summary (see NOTES.md v10 for the full write-up):
-   - UNSCORED, by construction: arcade never reads or writes state.domain/state.domainIdx/
+   Design summary (see NOTES.md v10/v10.1 for the full write-up):
+   - UNSCORED, by construction: neither mode ever reads or writes state.domain/state.domainIdx/
      state.finalDomains, so every scored-only mechanism (EAP/theta updates, session-history
-     entries, the rotation lock's recordDomainCompletion) simply never runs for arcade —
-     there's no guard to remember, it's structurally impossible to leak.
-   - Own state slot (state.arcade), own timer (never _answerTimer/#timerBtn/#timerBar), own
-     render/tap handlers (renderArcadeItem/tapArcadeTile/tapArcadeSeekObj) — NOT the scored
-     renderItem/tapTile/tapSeekObj, which all read/write state.domain directly and would (if
-     reused naively) risk exactly the kind of state-machine leakage this design avoids.
-   - Reuses PURE helpers freely where safe: makeVocabItem/makeFunctionItem (item builders),
-     renderSeekfindScene (now takes an optional tap-handler param — see its own comment),
-     seekfindSlots, priorFor (theta-or-age lookup), pickAmongTopN (mild top-N randomness),
+     entries, the rotation lock's recordDomainCompletion) simply never runs for either — there's
+     no guard to remember, it's structurally impossible to leak.
+   - Own state slot PER MODE (state.arcade for Mix-It-Up, state.everything for Everything Mix) —
+     never state.domain. v10.1 generalized every engine function (timer/streak/interlude/tap-
+     resolution/render) to take a `sess` (session object — either state.arcade or
+     state.everything) as its first argument, rather than duplicating ~350 near-identical lines
+     for a 2nd mode: one timer implementation, one streak implementation, one interlude
+     implementation, fixed once for both modes and half the surface to audit for the
+     structural-safety story above. NOT the scored renderItem/tapTile/tapSeekObj/tapBodyPart,
+     which all read/write state.domain directly and would (if reused naively) risk exactly the
+     kind of state-machine leakage this design avoids.
+   - Reuses PURE helpers freely where safe: every domain's own dom.make() item builder,
+     renderSeekfindScene/renderBodyFigure (each takes an optional tap-handler param — see their
+     own comments), seekfindSlots, resolveBodyTap, priorFor (theta-or-age lookup), shrinkToFit,
      shuffle/pick/speak/sayItem/confetti/chimeGood/chimeTry/fanfare/attachTap — none of these
      touch state.domain.
+   - What's genuinely mode-specific, via the ARCADE_MODES registry below: which content source(s)
+     a mode draws from (buildItem), and its own intro/interlude copy + interlude emoji. Timer
+     duration/interlude cadence/difficulty-window width (ARCADE_QUESTION_MS/ARCADE_REVEAL_MS/
+     ARCADE_INTERLUDE_EVERY/ARCADE_DIFFICULTY_WINDOW/ARCADE_MIN_BAG_POOL) are shared constants —
+     "same arcade mechanics exactly" per the task, not re-tunable per mode.
    ===================================================================== */
 
 const ARCADE_QUESTION_MS = 15000;      // 15s auto-advance timer, per item
@@ -4704,43 +4773,51 @@ const ARCADE_DIFFICULTY_WINDOW = 14;   // theta-or-age ± this many months, deli
                                         // items land all over a broad band instead of chasing
                                         // one adaptive point — "for variety", per the task.
 
-// v10: intro/interlude/streak-celebration lines — bundled via collectAllSayStrings() (see the
-// add() calls added there) and tools/gen_audio.sh, same as MASCOT_LINES. Kept short and in the
-// same warm, exclamation-forward voice as the rest of the fox's lines.
+// v10/v10.1: intro/interlude/streak-celebration lines — bundled via collectAllSayStrings() (see
+// the add() calls added there) and tools/gen_audio.sh, same as MASCOT_LINES. Kept short and in
+// the same warm, exclamation-forward voice as the rest of the fox's lines. Streak-celebration
+// lines are shared across BOTH modes (same "🔥 streak + celebrations" mechanic, per the task).
 const ARCADE_INTRO_LINE = "Bonus round! Let's just play!";
 const ARCADE_INTERLUDE_LINE = "Wow, we played a lot! Keep going?";
 const ARCADE_STREAK_LINES_3 = ["Three in a row!", "You're on fire!"];
 const ARCADE_STREAK_LINES_5 = ["Super streak!", "Look at you go!"];
 const ARCADE_STREAK_LINES_10PLUS = ["Ten in a row! Amazing!", "Wow, incredible streak!"];
+// v10.1: Everything Mix's own intro/interlude copy — every other spoken line it can produce
+// (per-item say/reveal text, streak lines) is already bundled by an existing add() call, since
+// it reuses each domain's own item text verbatim (see collectAllSayStrings()'s own v10.1 note).
+const EVERYTHING_INTRO_LINE = "Everything mix! Every game, all mixed up!";
+const EVERYTHING_INTERLUDE_LINE = "Wow, we played so many games! Keep going?";
 
 // References into the SAME defs the scored vocabulary/functions domains use (mapped shape:
-// {label, word/name, emoji, age, theme?}), so arcade's item text/audio is byte-identical to
+// {label, word/name, emoji, age, theme?}), so Mix-It-Up's item text/audio is byte-identical to
 // what collectAllSayStrings() already bundles for those domains — no separate bundling needed
-// for arcade's own vocab/functions picks, only for the lines above.
+// for its own vocab/functions picks, only for the lines above.
 const ARCADE_VOCAB_DEFS = DOMAINS.find(d => d.key === "vocabulary").defs;
 const ARCADE_FUNCTIONS_DEFS = DOMAINS.find(d => d.key === "functions").defs;
 
 // ---- tg_arcade stats (dual-write, same persistSet()/reconcileStorage() pattern as every
-// other persisted key): { totalPlays, bestStreak, introShown }. totalPlays counts every
-// RESOLVED arcade question (correct, missed, or timed out) — a simple, honest "how much has
-// this kid played" counter, not gated on getting anything right.
+// other persisted key): { mixitup:{totalPlays,bestStreak,introShown}, everything:{...} } — v10.1
+// nested-per-mode shape (see normalizeArcadeStats() above for the v10-flat-shape migration).
+// totalPlays counts every RESOLVED question (correct, missed, or timed out) — a simple, honest
+// "how much has this kid played" counter, not gated on getting anything right.
 function loadArcadeStats(){
-  try { return JSON.parse(localStorage.getItem("tg_arcade") || "{}"); } catch(e){ return {}; }
+  try { return normalizeArcadeStats(JSON.parse(localStorage.getItem("tg_arcade") || "{}")); }
+  catch(e){ return normalizeArcadeStats(null); }
 }
 function saveArcadeStats(s){ persistSet("tg_arcade", JSON.stringify(s)); }
-function recordArcadePlay(){
+function recordArcadePlay(mode){
   const s = loadArcadeStats();
-  s.totalPlays = (s.totalPlays || 0) + 1;
+  s[mode].totalPlays = (s[mode].totalPlays || 0) + 1;
   saveArcadeStats(s);
 }
-function persistArcadeBestStreakIfHigher(){
+function persistArcadeBestStreakIfHigher(sess){
   const s = loadArcadeStats();
-  if (state.arcade.streak > (s.bestStreak || 0)){ s.bestStreak = state.arcade.streak; saveArcadeStats(s); }
+  if (sess.streak > (s[sess.mode].bestStreak || 0)){ s[sess.mode].bestStreak = sess.streak; saveArcadeStats(s); }
 }
-function arcadeIntroShown(){ return !!loadArcadeStats().introShown; }
-function markArcadeIntroShown(){
+function arcadeIntroShown(mode){ return !!loadArcadeStats()[mode].introShown; }
+function markArcadeIntroShown(mode){
   const s = loadArcadeStats();
-  if (!s.introShown){ s.introShown = true; saveArcadeStats(s); }
+  if (!s[mode].introShown){ s[mode].introShown = true; saveArcadeStats(s); }
 }
 
 // ---- difficulty center: THIS session's just-finalized theta for the domain if it was
@@ -4767,12 +4844,14 @@ function arcadeWindowFilter(items, getB, center){
 }
 
 // ---- shuffle bags — one per content source, in-memory only (never persisted; a fresh
-// state.arcade object is created at module load, and startArcade() below explicitly resets
-// them too, so bags never survive a map-out/re-entry or a page reload). Recomputes the
-// difficulty window each refill (cheap — this only happens once per ~pool-size questions),
-// so a same-arcade-session change is impossible today (nothing updates theta while purely in
-// arcade) but the design doesn't rely on that staying true.
-function refillArcadeBag(source){
+// state.arcade/state.everything object is created at module load, and startArcade()/
+// startEverything() below explicitly reset them too, so bags never survive a map-out/re-entry or
+// a page reload). Recomputes the difficulty window each refill (cheap — this only happens once
+// per ~pool-size questions), so a same-session change is impossible today (nothing updates theta
+// while purely in arcade) but the design doesn't rely on that staying true. `sess` distinguishes
+// WHICH mode's bags to read/write (state.arcade.bags vs state.everything.bags) — see the v10.1
+// engine-generalization note at the top of this section.
+function refillArcadeBag(sess, source){
   let pool;
   if (source === "vocab"){
     pool = arcadeWindowFilter(ARCADE_VOCAB_DEFS, d => d.age, arcadeThetaCenter("vocabulary"));
@@ -4784,35 +4863,35 @@ function refillArcadeBag(source){
     for (const scene of SEEKFIND_SCENES) for (const w of scene.words) pairs.push({ sceneKey: scene.key, word: w, age: VOCAB_BY_WORD[w].age });
     pool = arcadeWindowFilter(pairs, p => p.age, center);
   }
-  state.arcade.bags[source] = shuffle(pool);
+  sess.bags[source] = shuffle(pool);
 }
-function drawFromArcadeBag(source){
-  if (!state.arcade.bags[source] || !state.arcade.bags[source].length) refillArcadeBag(source);
-  const bag = state.arcade.bags[source];
-  return bag.pop();
+function drawFromArcadeBag(sess, source){
+  if (!sess.bags[source] || !sess.bags[source].length) refillArcadeBag(sess, source);
+  return sess.bags[source].pop();
 }
 // 40% vocab / 30% functions / 30% seekfind, per the task — approximate by design (a weighted
-// random pick per question, not a fixed round-robin sequence).
+// random pick per question, not a fixed round-robin sequence). Mix-It-Up only.
 function pickArcadeSource(){
   const r = Math.random();
   if (r < 0.40) return "vocab";
   if (r < 0.70) return "functions";
   return "seekfind";
 }
-function buildArcadeItem(source){
+function buildMixItUpItem(sess){
+  const source = pickArcadeSource();
   if (source === "vocab"){
-    const d = drawFromArcadeBag("vocab");
+    const d = drawFromArcadeBag(sess, "vocab");
     const it = makeVocabItem(d, ARCADE_VOCAB_DEFS, 4); // full pool for distractor variety, same as scored mode's dom.make(raw, dom.defs, arity)
     it.arcadeSource = "vocab"; it.kind = "tile";
     return it;
   }
   if (source === "functions"){
-    const d = drawFromArcadeBag("functions");
+    const d = drawFromArcadeBag(sess, "functions");
     const it = makeFunctionItem(d, ARCADE_FUNCTIONS_DEFS, 4);
     it.arcadeSource = "functions"; it.kind = "tile";
     return it;
   }
-  const pair = drawFromArcadeBag("seekfind");
+  const pair = drawFromArcadeBag(sess, "seekfind");
   const info = VOCAB_BY_WORD[pair.word];
   return {
     label: pair.word, b: info.age,
@@ -4821,6 +4900,103 @@ function buildArcadeItem(source){
     sceneKey: pair.sceneKey, arcadeSource: "seekfind", kind: "seek",
   };
 }
+
+/* ---------- v10.1: "Everything Mix!" content — every DOMAINS[] source, round-robin ----------
+   Weighted so each of the 17 DOMAINS[] entries (every scored domain, including seek&find, which
+   is itself one of the 17) gets roughly equal airtime over a long run: `pickEverythingDomain`
+   round-robins over a shuffled `domainOrder`, reshuffled fresh every time a full lap completes —
+   so every domain is picked exactly once per 17-question lap (equal airtime, by construction),
+   with a different lap ORDER each time (variety). A per-domain-key shuffle bag of that domain's
+   OWN defs (`sess.bags[domainKey]`) means items don't repeat until that domain's bag empties,
+   same "shuffle bag" contract Mix-It-Up's vocab/functions/seekfind bags already use — reusing
+   the SAME arcadeWindowFilter/ARCADE_MIN_BAG_POOL/arcadeThetaCenter helpers Mix-It-Up's bags do,
+   just keyed by domain key instead of a fixed "vocab"/"functions"/"seekfind" name. */
+// Every DOMAINS[].defs entry (every domain except seekfind, which has an empty defs[] by design
+// — see its own DOMAINS[] comment) uses `.age` as its difficulty field — verified true for all
+// 16 non-seekfind domains by inspection of every *_DEFS array above, so this one lookup covers
+// every source uniformly with no per-domain special-casing needed.
+function everythingSourceItems(domainKey){
+  if (domainKey === "seekfind"){
+    const pairs = [];
+    for (const scene of SEEKFIND_SCENES) for (const w of scene.words)
+      pairs.push({ label: `${scene.key}:${w}`, word: w, sceneKey: scene.key, age: VOCAB_BY_WORD[w].age });
+    return pairs;
+  }
+  return DOMAINS.find(d => d.key === domainKey).defs;
+}
+function refillEverythingBag(sess, domainKey){
+  const items = everythingSourceItems(domainKey);
+  const center = domainKey === "seekfind" ? arcadeThetaCenter("vocabulary") : arcadeThetaCenter(domainKey);
+  sess.bags[domainKey] = shuffle(arcadeWindowFilter(items, x => x.age, center));
+}
+function drawFromEverythingBag(sess, domainKey){
+  if (!sess.bags[domainKey] || !sess.bags[domainKey].length) refillEverythingBag(sess, domainKey);
+  return sess.bags[domainKey].pop();
+}
+function pickEverythingDomain(sess){
+  if (!sess.domainOrder || sess.domainPos >= sess.domainOrder.length){
+    sess.domainOrder = shuffle(DOMAINS.map(d => d.key));
+    sess.domainPos = 0;
+  }
+  return sess.domainOrder[sess.domainPos++];
+}
+// Item shape mirrors buildMixItUpItem()'s: {label, b, prompt, say, revealText, arcadeSource,
+// kind}, plus {tiles, correct} for kind:"tile" (from dom.make(), reused verbatim so a mixed
+// item looks IDENTICAL to scored play — same tile renderer, same anchors/patternStrip/
+// saySegments/cueKey passthrough, all handled generically by renderArcadeItem() below) or
+// {sceneKey} for kind:"seek" (mybody's kind:"body" needs no extra fields — renderArcadeItem
+// resolves the figure/hit-regions from `it.label` alone via BODY_REGIONS, same as scored mode).
+function buildEverythingItem(sess){
+  const domainKey = pickEverythingDomain(sess);
+  if (domainKey === "seekfind"){
+    const pair = drawFromEverythingBag(sess, domainKey);
+    const info = VOCAB_BY_WORD[pair.word];
+    return {
+      label: pair.word, b: info.age,
+      prompt: `Find the ${pair.word}!`, say: `Can you find the ${pair.word}? Tap the ${pair.word}!`,
+      revealText: `This one is the ${pair.word}!`,
+      sceneKey: pair.sceneKey, arcadeSource: "seekfind", kind: "seek",
+    };
+  }
+  if (domainKey === "mybody"){
+    // v10.1 adversarial-review focus: mybody's SCORED render path (renderBodyRound/tapBodyPart)
+    // reads/writes state.domain directly (ds.used/computeTarget/applyFloorRule/recordResult) —
+    // never reused here. Only the pure figure-builder (renderBodyFigure, now taking an optional
+    // tap-handler param — see its own v10.1 comment) and the pure resolveBodyTap/BODY_REGIONS
+    // lookup are shared; the item shape and tap RESOLUTION are this arcade-owned copy
+    // (tapArcadeBodyPart below), which never calls recordResult/updatePosterior.
+    const d = drawFromEverythingBag(sess, domainKey);
+    return {
+      label: d.label, b: d.age,
+      prompt: `Tap the ${d.label}!`, say: `Can you find the ${d.label}? Tap it!`,
+      revealText: `This one is the ${d.label}!`,
+      arcadeSource: "mybody", kind: "body",
+    };
+  }
+  // every other domain: reuse its OWN dom.make(def, defs, arity) verbatim — the same builder
+  // scored play calls, so a mixed item's tiles/prompt/say/anchors/patternStrip/saySegments/
+  // cueKey are byte-identical to what that domain looks like in scored play. `arity` mirrors
+  // renderItem()'s own rule (opposites/time are always 2AFC binary concepts regardless of
+  // session arity; every other domain gets a fixed 4, same as Mix-It-Up's own vocab/functions
+  // picks — arcade doesn't read state.arity, since arcade content is unscored and has no
+  // adaptive-arity setting of its own).
+  const dom = DOMAINS.find(d => d.key === domainKey);
+  const d = drawFromEverythingBag(sess, domainKey);
+  const arity = (domainKey === "opposites" || domainKey === "time") ? 2 : 4;
+  const it = dom.make(d, dom.defs, arity);
+  it.arcadeSource = domainKey; it.kind = "tile";
+  return it;
+}
+
+// v10.1: mode registry — the ONE place that's genuinely per-mode (content source + intro/
+// interlude copy). Every other engine function below takes a `sess` and is otherwise mode-
+// agnostic; this is looked up via `sess.mode`. Defined after buildMixItUpItem/buildEverythingItem
+// so it can reference them directly (function DECLARATIONS are hoisted, so the ordering isn't
+// load-bearing — this placement is purely for reading order).
+const ARCADE_MODES = {
+  mixitup: { introLine: ARCADE_INTRO_LINE, interludeLine: ARCADE_INTERLUDE_LINE, interludeEmoji: "🎪", buildItem: buildMixItUpItem },
+  everything: { introLine: EVERYTHING_INTRO_LINE, interludeLine: EVERYTHING_INTERLUDE_LINE, interludeEmoji: "🎡", buildItem: buildEverythingItem },
+};
 
 /* ---------- arcade-owned answer timer (Feature 3) ----------
    Deliberately NOT _answerTimer/startAnswerTimer/cancelAnswerTimer (the v9.5 parent timer) —
@@ -4833,14 +5009,14 @@ function buildArcadeItem(source){
    15s timeout fires and the child never resolved it. A first WRONG tap (still on firstTry)
    also cancels it — once a child is actively engaged with a question at all, further time
    pressure serves no purpose; the retry proceeds at its own pace with no timeout re-armed. */
-function cancelArcadeTimer(){
-  if (state.arcade.timer){ clearTimeout(state.arcade.timer.timeoutId); state.arcade.timer = null; }
+function cancelArcadeTimer(sess){
+  if (sess.timer){ clearTimeout(sess.timer.timeoutId); sess.timer = null; }
   const bar = $("arcadeTimerBar");
   if (bar){ bar.classList.remove("running"); bar.style.transition = "none"; bar.style.width = "0%"; }
 }
-function startArcadeTimer(){
-  cancelArcadeTimer();
-  const it = state.arcade.currentItem;
+function startArcadeTimer(sess){
+  cancelArcadeTimer(sess);
+  const it = sess.currentItem;
   const bar = $("arcadeTimerBar");
   if (bar){
     bar.style.transition = "none"; bar.style.width = "100%"; bar.classList.add("running");
@@ -4850,23 +5026,23 @@ function startArcadeTimer(){
   }
   const timeoutId = setTimeout(() => {
     const firedFor = it;
-    cancelArcadeTimer();
+    cancelArcadeTimer(sess);
     // belt-and-braces, same style as startAnswerTimer()'s own guard: every resolution path
     // already cancels this timer itself, so this makes a resolution/expiry race harmless even
     // if a call site were ever missed, rather than actually relying on it.
-    if (state.arcade.active && state.arcade.currentItem === firedFor && !state.arcade.locked) arcadeTimeout();
+    if (sess.active && sess.currentItem === firedFor && !sess.locked) arcadeTimeout(sess);
   }, ARCADE_QUESTION_MS);
-  state.arcade.timer = { timeoutId, forItem: it };
+  sess.timer = { timeoutId, forItem: it };
 }
 
 /* ---------- resolution bookkeeping (shared by every "this question is over" path) ---------- */
-function scheduleArcadeAdvance(ms){
-  setTimeout(() => { if (state.arcade.active) advanceArcade(); }, ms);
+function scheduleArcadeAdvance(sess, ms){
+  setTimeout(() => { if (sess.active) advanceArcade(sess); }, ms);
 }
-function bumpArcadeStreakHUD(){
+function bumpArcadeStreakHUD(sess){
   const el = $("arcadeStreak"), count = $("arcadeStreakCount");
   if (!el) return;
-  count.textContent = state.arcade.streak;
+  count.textContent = sess.streak;
   el.classList.remove("fade");
   el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse");
 }
@@ -4891,45 +5067,52 @@ function arcadeCelebrationLevelFor(streak){
 // state.arcade.active before actually speaking — ttsCancel()/stopClip() (called by exitArcade())
 // synchronously fire an in-flight utterance's own finish callback, so a map-out mid-praise-line
 // would otherwise let a celebration line start speaking on the picker screen.
-function celebrateArcadeStreak(level, cb){
-  if (!state.arcade.active){ return; }
+function celebrateArcadeStreak(sess, level, cb){
+  if (!sess.active){ return; }
   if (level === 3){ confetti(6); speak(pick(ARCADE_STREAK_LINES_3), cb); }
   else if (level === 5){ confetti(24); fanfare(); speak(pick(ARCADE_STREAK_LINES_5), cb); }
   else { confetti(40); fanfare(); speak(pick(ARCADE_STREAK_LINES_10PLUS), cb); }
 }
-function finishArcadeQuestion(firstTryCorrect, missDelayMs){
-  state.arcade.answeredSinceInterlude++;
-  recordArcadePlay();
+function finishArcadeQuestion(sess, firstTryCorrect, missDelayMs){
+  sess.answeredSinceInterlude++;
+  recordArcadePlay(sess.mode);
   if (firstTryCorrect){
-    state.arcade.streak++;
-    bumpArcadeStreakHUD();
-    persistArcadeBestStreakIfHigher();
-    const level = arcadeCelebrationLevelFor(state.arcade.streak);
+    sess.streak++;
+    bumpArcadeStreakHUD(sess);
+    persistArcadeBestStreakIfHigher(sess);
+    const level = arcadeCelebrationLevelFor(sess.streak);
     if (level){
       speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]), () => {
-        if (!state.arcade.active) return; // exited while the praise line was still playing
-        celebrateArcadeStreak(level, () => scheduleArcadeAdvance(400));
+        if (!sess.active) return; // exited while the praise line was still playing
+        celebrateArcadeStreak(sess, level, () => scheduleArcadeAdvance(sess, 400));
       });
       return;
     }
     speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]));
-    scheduleArcadeAdvance(1300);
+    scheduleArcadeAdvance(sess, 1300);
   } else {
     // miss or timeout: silent reset (no sound, no shake) — the fade is the ONLY feedback.
-    state.arcade.streak = 0;
+    sess.streak = 0;
     resetArcadeStreakHUD();
-    scheduleArcadeAdvance(missDelayMs || 1600); // timeout passes ARCADE_REVEAL_MS (~2s, per the task); a manual second-miss uses the same 1600ms the scored engine's own reveal uses
+    scheduleArcadeAdvance(sess, missDelayMs || 1600); // timeout passes ARCADE_REVEAL_MS (~2s, per the task); a manual second-miss uses the same 1600ms the scored engine's own reveal uses
   }
 }
-function arcadeTimeout(){
-  state.arcade.locked = true;
-  const it = state.arcade.currentItem;
-  // v10 adversarial-review focus: timeout must still go through the SAME "resolved" bookkeeping
-  // (answeredSinceInterlude/totalPlays/streak) every tap-driven resolution uses — recordArcadePlay
-  // is what makes tg_arcade.totalPlays reflect actual play even when a question times out.
+function arcadeTimeout(sess){
+  sess.locked = true;
+  const it = sess.currentItem;
+  // v10/v10.1 adversarial-review focus: timeout must still go through the SAME "resolved"
+  // bookkeeping (answeredSinceInterlude/totalPlays/streak) every tap-driven resolution uses —
+  // recordArcadePlay is what makes tg_arcade[mode].totalPlays reflect actual play even when a
+  // question times out.
   if (it.kind === "seek"){
     const el = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
     if (el) el.classList.add("reveal","found");
+  } else if (it.kind === "body"){
+    // v10.1: mybody's reveal styling — same .body-hit.reveal class scored tapBodyPart's own
+    // second-miss reveal uses (green ring, see the CSS rule's own comment), applied to every
+    // hit-region sharing this part's `label` (bilateral parts highlight both sides, same as
+    // tapArcadeBodyPart's own highlightAll()).
+    $("seekBoard").querySelectorAll(`.body-hit[data-part="${it.label}"]`).forEach(e => e.classList.add("reveal"));
   } else {
     const board = $("board");
     const tiles = [...board.children];
@@ -4937,92 +5120,142 @@ function arcadeTimeout(){
     tiles.forEach((t,j) => { if (j !== it.correct) t.classList.add("dim"); });
   }
   speak(it.revealText || `This one is the ${it.label}!`);
-  finishArcadeQuestion(false, ARCADE_REVEAL_MS);
+  finishArcadeQuestion(sess, false, ARCADE_REVEAL_MS);
 }
 
-/* ---------- tap handlers (arcade-owned; NOT tapTile/tapSeekObj) ---------- */
-function tapArcadeTile(i, tileEl){
-  if (state.arcade.locked || !state.arcade.currentItem) return;
-  cancelArcadeTimer(); // ANY tap (right or wrong) cancels — see startArcadeTimer()'s own comment
-  const it = state.arcade.currentItem;
+/* ---------- tap handlers (arcade-owned; NOT tapTile/tapSeekObj/tapBodyPart) ---------- */
+function tapArcadeTile(sess, i, tileEl){
+  if (sess.locked || !sess.currentItem) return;
+  cancelArcadeTimer(sess); // ANY tap (right or wrong) cancels — see startArcadeTimer()'s own comment
+  const it = sess.currentItem;
   const tiles = [...$("board").children];
   if (i === it.correct){
-    state.arcade.locked = true;
+    sess.locked = true;
     tileEl.classList.add("correct");
     tiles.forEach((t,j) => { if (j !== i) t.classList.add("dim"); });
     chimeGood();
-    const firstTry = state.arcade.firstTry;
+    const firstTry = sess.firstTry;
     if (firstTry) confetti(8);
-    finishArcadeQuestion(firstTry);
+    finishArcadeQuestion(sess, firstTry);
   } else {
     chimeTry();
     tileEl.classList.add("wrong");
     setTimeout(() => tileEl.classList.remove("wrong"), 500);
-    if (state.arcade.firstTry){
-      state.arcade.firstTry = false;
+    if (sess.firstTry){
+      sess.firstTry = false;
       speak(pick(["Good try! Look again!","Hmm, try again!"]));
       // not resolved yet — no advance, no streak change, timer stays cancelled (no restart)
     } else {
-      state.arcade.locked = true;
+      sess.locked = true;
       tiles[it.correct].classList.add("reveal");
       tiles.forEach((t,j) => { if (j !== it.correct) t.classList.add("dim"); });
       speak(`This one is the ${it.label}!`);
-      finishArcadeQuestion(false);
+      finishArcadeQuestion(sess, false);
     }
   }
 }
-function tapArcadeSeekObj(word, el){
-  if (state.arcade.locked || !state.arcade.currentItem) return;
-  cancelArcadeTimer();
-  const it = state.arcade.currentItem;
+function tapArcadeSeekObj(sess, word, el){
+  if (sess.locked || !sess.currentItem) return;
+  cancelArcadeTimer(sess);
+  const it = sess.currentItem;
   if (word === it.label){
-    state.arcade.locked = true;
+    sess.locked = true;
     el.classList.add("correct","found");
     chimeGood();
-    const firstTry = state.arcade.firstTry;
+    const firstTry = sess.firstTry;
     if (firstTry) confetti(8);
-    finishArcadeQuestion(firstTry);
+    finishArcadeQuestion(sess, firstTry);
   } else {
     chimeTry();
     el.classList.add("wrong");
     setTimeout(() => el.classList.remove("wrong"), 500);
-    if (state.arcade.firstTry){
-      state.arcade.firstTry = false;
+    if (sess.firstTry){
+      sess.firstTry = false;
       speak(pick(["Good try! Look again!","Hmm, try again!"]));
     } else {
-      state.arcade.locked = true;
+      sess.locked = true;
       const targetEl = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
       if (targetEl) targetEl.classList.add("reveal","found");
       speak(it.revealText || `This one is the ${it.label}!`);
-      finishArcadeQuestion(false);
+      finishArcadeQuestion(sess, false);
+    }
+  }
+}
+// v10.1: arcade-owned copy of tapBodyPart — mirrors it exactly (highlight/chime/streak/reveal
+// logic) but NEVER calls recordResult/updatePosterior (the scored version's whole reason for
+// being) and reads/writes `sess`, not state.domain. Used only by Everything Mix today (Mix-It-Up
+// doesn't include mybody in its content mix), but takes `sess` like every other arcade tap
+// handler for consistency and in case a future mode wants it too.
+function tapArcadeBodyPart(sess, part, el){
+  if (sess.locked || !sess.currentItem) return;
+  cancelArcadeTimer(sess);
+  const it = sess.currentItem;
+  const highlightAll = (cls) => { $("seekBoard").querySelectorAll(`.body-hit[data-part="${it.label}"]`).forEach(e => e.classList.add(cls)); };
+  if (part === it.label){
+    sess.locked = true;
+    highlightAll("correct");
+    chimeGood();
+    const firstTry = sess.firstTry;
+    if (firstTry) confetti(8);
+    finishArcadeQuestion(sess, firstTry);
+  } else {
+    chimeTry();
+    el.classList.add("wrong");
+    setTimeout(() => el.classList.remove("wrong"), 500);
+    if (sess.firstTry){
+      sess.firstTry = false;
+      speak(pick(["Good try! Look again!","Hmm, try again!"]));
+    } else {
+      sess.locked = true;
+      highlightAll("reveal");
+      speak(it.revealText || `This one is the ${it.label}!`);
+      finishArcadeQuestion(sess, false);
     }
   }
 }
 
 /* ---------- render ---------- */
-function renderArcadeSeekfindBoard(it){
-  // v10: unlike scored seek&find (one scene persists across several consecutive rounds, via
-  // ds.sf), arcade picks "random scene, random target" independently every seekfind turn —
+function renderArcadeSeekfindBoard(sess, it){
+  // v10/v10.1: unlike scored seek&find (one scene persists across several consecutive rounds,
+  // via ds.sf), arcade picks "random scene, random target" independently every seekfind turn —
   // simpler and correct-by-construction (no cross-turn "found" state to carry between
-  // non-consecutive seekfind picks, since vocab/functions turns interleave in between). Minor
+  // non-consecutive seekfind picks, since other domains' turns interleave in between). Minor
   // cost: consecutive bag draws that happen to land in the same scene just re-render it fresh
   // (harmless — a brief re-layout, not a bug) rather than visually "continuing" the same board.
   const sceneDef = SEEKFIND_SCENES.find(s => s.key === it.sceneKey);
   const scene = { def: sceneDef, slots: seekfindSlots(sceneDef.words.length) };
-  renderSeekfindScene(scene, tapArcadeSeekObj); // v10: 2nd-arg override — see that function's own comment
+  renderSeekfindScene(scene, (word, el) => tapArcadeSeekObj(sess, word, el)); // v10: 2nd-arg override — see that function's own comment
 }
-function renderArcadeItem(){
-  if (!state.arcade.active) return; // stale callback after exitArcade()/endGame() — see their own comments
-  state.arcade.firstTry = true; state.arcade.locked = false;
-  $("categoryAnchors").style.display = "none"; // arcade never uses this (categories/patterns aren't in the mix)
-  const source = pickArcadeSource();
-  const it = buildArcadeItem(source);
-  state.arcade.currentItem = it;
+function renderArcadeItem(sess){
+  if (!sess.active) return; // stale callback after exitArcade()/exitEverything()/endGame() — see their own comments
+  sess.firstTry = true; sess.locked = false;
+  $("categoryAnchors").style.display = "none"; // reset every render — re-shown below only for anchors/patternStrip items (Everything Mix only; Mix-It-Up's vocab/functions/seekfind items never set these)
+  const it = ARCADE_MODES[sess.mode].buildItem(sess);
+  sess.currentItem = it;
   $("promptText").textContent = it.prompt;
+  // v10.1: categories/patterns anchors-strip rendering — identical markup to scored renderItem()'s
+  // own it.anchors/it.patternStrip branches (same #categoryAnchors element, same shrinkToFit call
+  // for patterns' variable-width dot strip). Mix-It-Up items never set either field, so this is a
+  // no-op for that mode.
+  if (it.anchors){
+    $("categoryAnchors").innerHTML = `<div class="anchor-label">These go together!</div><div class="anchor-row">${it.anchors.map(e => `<span>${e}</span>`).join("")}</div>`;
+    $("categoryAnchors").style.display = "block";
+  } else if (it.patternStrip){
+    $("categoryAnchors").innerHTML = `<div class="anchor-label">What comes next?</div><div class="anchor-row">${it.patternStrip}<span style="opacity:.4">❓</span></div>`;
+    $("categoryAnchors").style.display = "block";
+    shrinkToFit([$("categoryAnchors").querySelector(".anchor-row")], 58, 26);
+  }
   if (it.kind === "seek"){
     $("board").style.display = "none";
     $("seekBoard").style.display = "block";
-    renderArcadeSeekfindBoard(it);
+    renderArcadeSeekfindBoard(sess, it);
+  } else if (it.kind === "body"){
+    // v10.1: mybody — reuses the pure renderBodyFigure() figure-builder with an arcade-owned tap
+    // handler (tapArcadeBodyPart), never renderBodyRound/tapBodyPart (which read/write
+    // state.domain). See buildEverythingItem()'s own comment on this domain.
+    $("board").style.display = "none";
+    $("seekBoard").style.display = "block";
+    renderBodyFigure((part, el) => tapArcadeBodyPart(sess, part, el));
   } else {
     $("seekBoard").style.display = "none";
     $("board").style.display = "grid";
@@ -5035,67 +5268,89 @@ function renderArcadeItem(){
       const tile = document.createElement("div");
       tile.className = "tile";
       tile.innerHTML = html;
-      attachTap(tile, () => tapArcadeTile(i, tile));
+      attachTap(tile, () => tapArcadeTile(sess, i, tile));
       board.appendChild(tile);
     });
+    // v10.1: patterns' growing-dot-cluster tiles can overflow a tile's own clamp()'d font-size,
+    // same shrinkToFit() call scored renderItem() makes for this domain — see its own comment.
+    if (it.arcadeSource === "patterns"){
+      const tileEls = [...board.children];
+      const base = tileEls.length ? (parseFloat(getComputedStyle(tileEls[0]).fontSize) || 90) : 90;
+      shrinkToFit(tileEls, base, 26);
+    }
   }
-  sayItem(it);
-  startArcadeTimer();
+  sayItem(it); // handles saySegments (phono rhymes) and cueKey (phono letter-sounds, incl. parent recordings) generically — no arcade-specific change needed, see NOTES.md v10.1
+  startArcadeTimer(sess);
 }
-function advanceArcade(){
-  if (!state.arcade.active) return;
-  if (state.arcade.answeredSinceInterlude >= ARCADE_INTERLUDE_EVERY){
-    state.arcade.answeredSinceInterlude = 0;
-    showArcadeInterlude();
+function advanceArcade(sess){
+  if (!sess.active) return;
+  if (sess.answeredSinceInterlude >= ARCADE_INTERLUDE_EVERY){
+    sess.answeredSinceInterlude = 0;
+    showArcadeInterlude(sess);
     return;
   }
-  renderArcadeItem();
+  renderArcadeItem(sess);
 }
-function showArcadeInterlude(){
-  $("interludeEmoji").textContent = "🎪";
-  $("interludeText").textContent = ARCADE_INTERLUDE_LINE;
+function showArcadeInterlude(sess){
+  const cfg = ARCADE_MODES[sess.mode];
+  $("interludeEmoji").textContent = cfg.interludeEmoji;
+  $("interludeText").textContent = cfg.interludeLine;
   $("interludeBtn").textContent = "Keep going! →";
-  $("interludeBtn").onclick = () => { if (state.arcade.active){ show("gameScreen"); renderArcadeItem(); } };
+  $("interludeBtn").onclick = () => { if (sess.active){ show("gameScreen"); renderArcadeItem(sess); } };
   show("interlude");
-  speak(ARCADE_INTERLUDE_LINE);
+  speak(cfg.interludeLine);
   // note: the interlude screen's OTHER button ("We're done for now — see results") is static
-  // HTML wired to the existing onclick="endGame()" — already arcade-safe (see endGame()'s own
-  // v10 comment), no override needed.
+  // HTML wired to the existing onclick="endGame()" — already arcade-safe for BOTH modes (see
+  // endGame()'s own v10/v10.1 comment), no override needed.
 }
 
 /* ---------- entry / exit ---------- */
-function startArcade(){
-  state.arcade.active = true;
-  state.arcade.streak = 0;
-  state.arcade.answeredSinceInterlude = 0;
-  state.arcade.bags = { vocab: [], functions: [], seekfind: [] }; // fresh bags every entry, per the task
-  state.arcade.currentItem = null; state.arcade.locked = true; state.arcade.firstTry = true;
+// v10.1: generalized entry/exit, shared by both modes — every mode-specific bit (which content
+// source(s), intro/interlude copy) is looked up via ARCADE_MODES[sess.mode]; everything else
+// (active/streak/timer/HUD reset, showing gameScreen, the once-ever intro line) is identical
+// between Mix-It-Up and Everything Mix, per the task's "same arcade mechanics exactly".
+function startArcadeSession(sess){
+  sess.active = true;
+  sess.streak = 0;
+  sess.answeredSinceInterlude = 0;
+  sess.currentItem = null; sess.locked = true; sess.firstTry = true;
   state.domain = null; state.domainIdx = -1; // belt-and-braces — should already be null (only reachable from the picker)
-  clearBoardUI(); // reuse as-is: wipes #board/#seekBoard/#promptText, hides skip/dk/timerBtn+cancels the SCORED timer — all correct for arcade too
+  clearBoardUI(); // reuse as-is: wipes #board/#seekBoard/#promptText, hides skip/dk/timerBtn+cancels the SCORED timer — all correct for either arcade mode too
   $("progressWrap").style.display = "none"; // arcade is endless — no meaningful "progress" bar
   $("mapBtn").style.display = "inline-block";
   const streakEl = $("arcadeStreak");
   if (streakEl){ streakEl.style.display = "inline-flex"; streakEl.classList.remove("fade"); }
   $("arcadeStreakCount").textContent = "0";
   show("gameScreen");
-  if (!arcadeIntroShown()){
-    markArcadeIntroShown();
-    speak(ARCADE_INTRO_LINE, () => { if (state.arcade.active) renderArcadeItem(); });
+  const cfg = ARCADE_MODES[sess.mode];
+  if (!arcadeIntroShown(sess.mode)){
+    markArcadeIntroShown(sess.mode);
+    speak(cfg.introLine, () => { if (sess.active) renderArcadeItem(sess); });
   } else {
-    renderArcadeItem();
+    renderArcadeItem(sess);
   }
 }
-function exitArcade(){
-  state.arcade.active = false;
-  cancelArcadeTimer();
-  state.arcade.bags = { vocab: [], functions: [], seekfind: [] }; // reset — bags are session-scoped, per the task
-  state.arcade.currentItem = null;
+function exitArcadeSession(sess){
+  sess.active = false;
+  cancelArcadeTimer(sess);
+  sess.currentItem = null;
   const streakEl = $("arcadeStreak");
   if (streakEl) streakEl.style.display = "none";
   ttsCancel(); stopClip(); // v8-style sanctioned interrupt path
   state.sessionMode = "single";
   showPicker();
 }
+function startArcade(){ // Mix-It-Up — picker tile onclick target, name unchanged from v10
+  state.arcade.bags = { vocab: [], functions: [], seekfind: [] }; // fresh bags every entry, per the task
+  startArcadeSession(state.arcade);
+}
+function exitArcade(){ exitArcadeSession(state.arcade); } // name unchanged from v10 — backToMap()/endGame() call this directly
+function startEverything(){ // v10.1: Everything Mix — picker tile onclick target
+  state.everything.bags = {};
+  state.everything.domainOrder = null; state.everything.domainPos = 0; // fresh round-robin order every entry, same "fresh bags every entry" reasoning as Mix-It-Up
+  startArcadeSession(state.everything);
+}
+function exitEverything(){ exitArcadeSession(state.everything); } // v10.1
 
 /* ---------- init ---------- */
 (function init(){
