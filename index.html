@@ -946,7 +946,7 @@ const $ = id => document.getElementById(id);
    is deliberately NOT documented to end users so the committed default (empty => disabled)
    stays authoritative for the real deploy.
    ===================================================================== */
-const SYNC_URL = "";
+const SYNC_URL = "https://toddler-game-sync.shanemoriah.workers.dev";
 function syncUrl(){ return (typeof window !== "undefined" && window.__SYNC_URL_OVERRIDE) || SYNC_URL; }
 function syncEnabled(){ return !!syncUrl(); }
 

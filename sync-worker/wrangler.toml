@@ -9,4 +9,4 @@ compatibility_date = "2026-08-15"
 # src/index.js reads `env.SYNC`).
 [[kv_namespaces]]
 binding = "SYNC"
-id = "REPLACE_ME_WITH_KV_NAMESPACE_ID"
+id = "475d50e86330436081755a2a579655f1"
