@@ -7,10 +7,12 @@ cd "$(dirname "$0")"
 W=./node_modules/.bin/wrangler
 [ -x "$W" ] || npm i --silent wrangler@4
 
-# 1) login (opens a browser tab once; no-op if already logged in)
-if ! $W whoami >/dev/null 2>&1; then
+# 1) login (opens a browser tab once; no-op if already logged in).
+#    `whoami` exits 0 even when unauthenticated, so check its OUTPUT.
+if ! $W whoami 2>&1 | grep -q "You are logged in"; then
   echo "→ Opening Cloudflare login in your browser (free account is fine)…"
-  $W login
+  $W login < /dev/tty
+  $W whoami 2>&1 | grep -q "You are logged in" || { echo "!! login did not complete"; exit 1; }
 fi
 
 # 2) KV namespace (create once, then reuse)
