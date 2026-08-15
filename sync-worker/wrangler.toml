@@ -1,0 +1,12 @@
+name = "toddler-game-sync"
+main = "src/index.js"
+compatibility_date = "2026-08-15"
+
+# TODO(deploy step 2 of README.md): replace this placeholder with the real namespace id.
+# Create it with:
+#   wrangler kv namespace create SYNC
+# then paste the `id = "..."` it prints below (keep the binding name "SYNC" unchanged —
+# src/index.js reads `env.SYNC`).
+[[kv_namespaces]]
+binding = "SYNC"
+id = "REPLACE_ME_WITH_KV_NAMESPACE_ID"

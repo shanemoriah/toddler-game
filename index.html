@@ -299,16 +299,26 @@
     </div>
     <div id="stars"></div>
     <div id="arcadeStreak">🔥 <span id="arcadeStreakCount">0</span></div>
+    <span id="syncGlyph" style="font-size:11px;color:#a99;white-space:nowrap"></span>
     <button id="muteBtn" onclick="toggleMute()" aria-label="Mute">🔊</button>
     <button id="quitBtn" onclick="endGame()" style="display:none">Finish</button>
   </div>
   <div id="progressWrap" style="display:none"><div id="progressBar"></div></div>
+
+  <!-- WHO'S PLAYING (v11: child profile chooser — shown first whenever >=1 profile exists) -->
+  <div id="whoScreen" class="screen">
+    <div style="font-size:70px">🦊</div>
+    <h2>Who's playing?</h2>
+    <p class="subtitle">Tap a card, or add a new player.</p>
+    <div id="whoGrid" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(130px, 1fr));gap:14px;width:100%;max-width:760px;padding:8px"></div>
+  </div>
 
   <!-- START -->
   <div id="startScreen" class="screen active">
     <div style="font-size:80px">🦊</div>
     <h1>Milo's Learning Adventure</h1>
     <p class="subtitle">A play-based look at words and concepts — colors, shapes, letters, numbers, positions, opposites — with a gentle developmental-age estimate. A grown-up plays along!</p>
+    <p id="switchChildLink" style="display:none;font-size:13px;cursor:pointer;color:var(--accent2);text-decoration:underline;margin:-8px 0 0" onclick="showWhoScreen()">🔀 Switch child</p>
     <div>
       <label>Child's name</label>
       <input type="text" id="childName" placeholder="Name" value="">
@@ -329,6 +339,28 @@
     <div id="voiceDiag" style="display:none;font-size:12px;color:#8a7d66;max-width:520px;text-align:left;background:#fff;border:1px solid #f0e0c0;border-radius:10px;padding:8px 12px;white-space:pre-wrap"></div>
     <button class="smallbtn" onclick="showBooth()">🎙 Grown-up recording booth</button>
     <p id="storageDiagFooter" class="subtitle" style="display:none;font-size:12px"></p>
+
+    <!-- v11: family sync setup card — see renderFamilyCard()/createFamilyCode()/submitFamilyCode() -->
+    <div class="res-card" style="max-width:480px">
+      <h3>👨‍👩‍👦 Family sync</h3>
+      <p class="subtitle" style="font-size:13px;margin:0 0 8px">Bookmark the link on the tablet — it remembers everything even if the tablet forgets.</p>
+      <p id="familySyncNote" style="display:none;font-size:12px;color:#a99">Sync isn't set up for this copy of the game yet.</p>
+      <div id="familyNoCode" style="display:none">
+        <button class="smallbtn" onclick="createFamilyCode()">Create family code</button>
+      </div>
+      <div id="familyHasCode" style="display:none">
+        <div id="familyCodeText" style="font-family:monospace;font-size:15px;color:#a99;letter-spacing:1px"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:6px">
+          <button class="smallbtn" onclick="copyFamilyLink()">🔗 Copy link for other devices</button>
+          <button class="smallbtn" onclick="showFamilyCodeEntry()">Use a different code</button>
+        </div>
+        <p id="familyLinkPlain" style="font-size:11px;color:#a99;word-break:break-all;margin-top:6px"></p>
+      </div>
+      <div id="familyCodeEntry" style="display:none">
+        <input type="text" id="familyCodeInput" placeholder="xxxx-xxxx" style="text-align:center;font-family:monospace">
+        <div style="margin-top:6px"><button class="smallbtn" onclick="submitFamilyCode()">Use this code</button></div>
+      </div>
+    </div>
   </div>
 
   <!-- PICKER -->
@@ -403,7 +435,7 @@
 
   <!-- PROGRESS -->
   <div id="progressScreen" class="screen">
-    <h2>📈 Progress over time</h2>
+    <h2 id="progressTitle">📈 Progress over time</h2>
     <div id="storageDiag" style="font-size:12px;color:#8a7d66"></div>
     <div class="res-card" style="max-width:760px">
       <h3>🧠 Concept domains — age-equivalent vs chronological age</h3>
@@ -901,6 +933,24 @@ const VOCAB_NORMS = [ [12,6],[14,20],[16,45],[18,90],[20,170],[22,260],[24,310],
 const $ = id => document.getElementById(id);
 
 /* =====================================================================
+   v11: FAMILY SYNC — client-side wiring. See sync-worker/ (a separate Cloudflare Worker +
+   KV, not deployed by this file) for the server half, and the big comment block near
+   mergeState() below for the shared merge semantics.
+
+   SYNC_URL is "" until the worker is deployed (see sync-worker/README.md) — every sync
+   function below no-ops silently (no errors, no UI noise beyond the setup card staying in
+   "not set up" state) whenever it's empty, so this file works standalone exactly as before
+   with zero behavior change until a URL is pasted in here and committed.
+   window.__SYNC_URL_OVERRIDE exists ONLY for local testing (pointing at `wrangler dev`) — it
+   is never set by any code in this file, only by a test harness reaching in from outside, and
+   is deliberately NOT documented to end users so the committed default (empty => disabled)
+   stays authoritative for the real deploy.
+   ===================================================================== */
+const SYNC_URL = "";
+function syncUrl(){ return (typeof window !== "undefined" && window.__SYNC_URL_OVERRIDE) || SYNC_URL; }
+function syncEnabled(){ return !!syncUrl(); }
+
+/* =====================================================================
    v9.4: attachTap(el, handler) — generic tap wiring for anything the CHILD
    taps (choice tiles, seek&find objects, the body figure, picker tiles, the
    mascot). Replaces plain `onclick` on those surfaces because `click` alone
@@ -993,6 +1043,17 @@ const state = {
   sessionMode: null, // "single" (picker: one domain, return to picker) | "all" (Play everything!)
   mascotSpeaking: false, // v9.3: tapMascot() debounce — see its own comment
   visits: null, // v9.3: {first, count} — see stampVisit()/renderStorageDiagnostic()
+  // v11: child profiles — see migrateLegacyProfile()/loadProfiles()/pk() below. activeProfileId
+  // is the ONLY thing that decides which namespaced tg_sessions:<id>/tg_checklist:<id>/
+  // tg_completions:<id>/tg_arcade:<id> every read/write in this file touches (via pk()).
+  // pendingNewProfile is true only while the setup form (#startScreen's name/bday/age inputs)
+  // is being used to CREATE a new profile ("Add a child", or the very first bootstrap) rather
+  // than to edit the currently-active one — see startGame()/showAddChildForm().
+  activeProfileId: null,
+  pendingNewProfile: false,
+  // v11: family sync status, purely for the HUD/Progress glyph — see renderSyncStatus(). Never
+  // read by any merge/persistence logic, which all go through syncUrl()/loadFamily() directly.
+  syncStatus: { state: "idle", lastSyncedAt: null }, // state: "idle"|"syncing"|"synced"|"offline"
   // v10: Mix-It-Up arcade — deliberately its OWN state slot, never state.domain/domainIdx/
   // finalDomains. This is the whole safety story for "arcade is unscored and never trips the
   // rotation lock": every scored code path (finalizeDomain/domainDone/recordDomainCompletion/
@@ -3472,16 +3533,28 @@ function monthsFromBday(iso){
   return (now.getFullYear()-b.getFullYear())*12 + (now.getMonth()-b.getMonth()) - (now.getDate()<b.getDate()?1:0);
 }
 
+// v11: the name/bday/age form (#startScreen inputs) now serves TWO purposes depending on
+// state.pendingNewProfile — editing the already-active profile (chooser card tap prefilled the
+// inputs, see selectProfile()) vs creating a brand-new one ("Add a child", see
+// showAddChildForm(), or the very first ever session when profiles.length===0, which init()
+// leaves pendingNewProfile=true for by construction). Either way this is the single function
+// that turns the form into a concrete profile + kicks off play — matches the pre-v11 shape
+// (fill form -> Play -> picker) exactly, just with a profile-create/update step spliced in.
 function startGame(){
   const bdayM = monthsFromBday($("childBday").value);
   const age = parseInt($("childAge").value) || bdayM;
   if (!age || age < 12 || age > 72){ alert("Enter an age between 12 and 72 months (or a birthday)."); return; }
+  const name = $("childName").value.trim() || "friend";
+  const bday = $("childBday").value;
+  const creating = state.pendingNewProfile || !state.activeProfileId;
+  const p = creating ? createProfile(name, bday, age) : updateProfileFields(state.activeProfileId, name, bday, age);
+  state.activeProfileId = p.id;
+  state.pendingNewProfile = false;
   state.age = age;
-  state.name = $("childName").value.trim() || "friend";
+  state.name = name;
   state.arity = age < 30 ? 2 : (age <= 41 ? 3 : 4); // 2AFC <30mo, 3AFC 30-41, 4AFC 42+
   state.finalDomains = {};
   state.stars = 0; state.domainIdx = -1; state.domain = null; state.sessionMode = null;
-  persistSet("tg_profile", JSON.stringify({name: state.name, age, bday: $("childBday").value})); // v9.3: dual-write
   $("quitBtn").style.display = "block";
   // v9: name-free greeting so it's cacheable as one bundled clip regardless
   // of which child is playing — see collectAllSayStrings()'s doc comment.
@@ -3500,14 +3573,15 @@ function startGame(){
    Rule: on completing domain X, total++ then lockedUntil[X] = total + 5 — X stays locked while
    total < lockedUntil[X], i.e. for the next 5 completions of ANY domain. */
 function loadCompletions(){
-  try { return JSON.parse(localStorage.getItem("tg_completions") || "{}"); } catch(e){ return {}; }
+  try { return JSON.parse(localStorage.getItem(pk("tg_completions")) || "{}"); } catch(e){ return {}; } // v11: per-profile
 }
 function recordDomainCompletion(domainKey){
   const c = loadCompletions();
   c.total = (c.total || 0) + 1;
   c.lockedUntil = c.lockedUntil || {};
   c.lockedUntil[domainKey] = c.total + 5;
-  persistSet("tg_completions", JSON.stringify(c)); // v9.3-style dual-write, see persistSet()
+  persistSet(pk("tg_completions"), JSON.stringify(c)); // v9.3-style dual-write, see persistSet(); v11: per-profile
+  scheduleSyncPut(); // v11: rotation-lock progress is sync-worthy
 }
 // Every DOMAINS[] key currently locked under completions object `c` — a plain array (not a
 // Set) since every call site immediately wraps it in one or just needs .length/.includes.
@@ -3541,6 +3615,61 @@ function lockedTileTap(tile){
   tile.classList.remove("wobble"); void tile.offsetWidth; tile.classList.add("wobble");
   if (isAnyAudioPlaying()) return;
   speak(LOCKED_DOMAIN_LINE);
+}
+
+/* ---------- v11: "Who's playing?" child-profile chooser ---------- */
+function renderWhoScreen(){
+  const d = loadProfiles();
+  const grid = $("whoGrid");
+  grid.innerHTML = "";
+  for (const p of d.profiles){
+    const age = (typeof p.ageMonths === "number" && p.ageMonths) || monthsFromBday(p.bday) || null;
+    const isActive = p.id === d.activeProfileId;
+    const tile = document.createElement("div");
+    tile.className = "picker-tile";
+    tile.innerHTML = `${isActive ? '<div class="picker-badge">⭐</div>' : ""}<div class="picker-emoji">${p.emoji || "🦊"}</div><div class="picker-label">${p.name || "friend"}</div>${age ? `<div class="picker-caption">age ${age}</div>` : ""}${isActive ? '<div class="picker-caption">last played</div>' : ""}`;
+    attachTap(tile, () => selectProfile(p.id)); // v9.4-style child-tappable, matches every other picker tile
+    grid.appendChild(tile);
+  }
+  const addTile = document.createElement("div");
+  addTile.className = "picker-tile picker-tile-all";
+  addTile.innerHTML = `<div class="picker-emoji">➕</div><div class="picker-label">Add a child</div>`;
+  attachTap(addTile, () => showAddChildForm());
+  grid.appendChild(addTile);
+}
+function showWhoScreen(){ renderWhoScreen(); show("whoScreen"); }
+// Tapping a chooser card: set it active, prefill the existing name/bday/age inputs from that
+// profile (so #startScreen's unchanged "▶ Play!" button reads them back exactly as before —
+// see startGame()'s own comment on why this needed no new "ready" screen), then land on
+// #startScreen per the task ("the normal start/Play screen with that child's name shown").
+function selectProfile(id){
+  const d = loadProfiles();
+  const p = d.profiles.find(x => x.id === id);
+  if (!p) return;
+  d.activeProfileId = id;
+  saveProfiles(d);
+  state.activeProfileId = id;
+  state.pendingNewProfile = false;
+  $("childName").value = p.name || "";
+  if (p.bday){ $("childBday").value = p.bday; $("childAge").value = ""; }
+  else { $("childBday").value = ""; $("childAge").value = p.ageMonths || ""; }
+  refreshSwitchChildLink();
+  refreshProgressBtn();
+  renderStorageDiagnostic();
+  show("startScreen");
+}
+// "Add a child": clears activeProfileId's grip on the form (pendingNewProfile=true tells
+// startGame() to CREATE rather than update — see its own comment) and blanks the inputs so a
+// parent doesn't accidentally save a new sibling under the previous child's name.
+function showAddChildForm(){
+  state.pendingNewProfile = true;
+  $("childName").value = ""; $("childBday").value = ""; $("childAge").value = "";
+  refreshSwitchChildLink();
+  show("startScreen");
+}
+function refreshSwitchChildLink(){
+  const link = $("switchChildLink");
+  if (link) link.style.display = loadProfiles().profiles.length > 1 ? "block" : "none";
 }
 
 /* ---------- picker (Feature 1) ---------- */
@@ -4187,7 +4316,7 @@ function pick(a){ return a[Math.floor(Math.random()*a.length)]; }
 
 /* ---------- checklist ---------- */
 function showChecklist(){
-  const saved = JSON.parse(localStorage.getItem("tg_checklist") || "[]");
+  const saved = JSON.parse(localStorage.getItem(pk("tg_checklist")) || "[]"); // v11: per-profile
   state.checklist = new Set(saved);
   const grid = $("checklistGrid");
   grid.innerHTML = "";
@@ -4212,7 +4341,8 @@ function showChecklist(){
 function updateCheckCount(){ $("checkCount").textContent = state.checklist.size; }
 function checklistTotal(){ return Object.values(CHECKLIST).reduce((s,w)=>s+w.length,0); }
 function finishChecklist(){
-  persistSet("tg_checklist", JSON.stringify([...state.checklist])); // v9.3: dual-write
+  persistSet(pk("tg_checklist"), JSON.stringify([...state.checklist])); // v9.3: dual-write; v11: per-profile
+  scheduleSyncPut();
   show("startScreen");
 }
 
@@ -4272,13 +4402,13 @@ function endGame(){
   $("mapBtn").style.display = "none"; // v4 (mod 2)
   fanfare(); confetti(40);
 
-  const profile = JSON.parse(localStorage.getItem("tg_profile") || "{}");
-  const age = state.age || profile.age || 30;
+  const profile = activeProfile() || {}; // v11: was tg_profile — now the active child profile
+  const age = state.age || profile.ageMonths || 30;
   const name = state.name || profile.name || "Kiddo";
   $("resultsTitle").textContent = `${name}'s results (age ${age} mo)`;
 
   // vocabulary estimate from checklist
-  const saved = JSON.parse(localStorage.getItem("tg_checklist") || "[]");
+  const saved = JSON.parse(localStorage.getItem(pk("tg_checklist")) || "[]"); // v11: per-profile
   let vocabEstimate = null;
   if (saved.length){
     const total = checklistTotal();
@@ -4357,10 +4487,10 @@ function endGame(){
   show("resultsScreen");
 }
 
-/* ---------- session history (localStorage "tg_sessions") ---------- */
+/* ---------- session history (localStorage "tg_sessions:<profileId>", v11) ---------- */
 function loadSessions(){
   try {
-    const arr = JSON.parse(localStorage.getItem("tg_sessions") || "[]");
+    const arr = JSON.parse(localStorage.getItem(pk("tg_sessions")) || "[]"); // v11: per-profile
     return Array.isArray(arr) ? arr : [];
   } catch(e){ return []; }
 }
@@ -4373,8 +4503,9 @@ function saveSession(ageMonths, name, vocabEstimate, vocabChecked){
   if (!Object.keys(domains).length && vocabEstimate === null) return; // nothing scored this session
   const sessions = loadSessions();
   sessions.push({ v: 1, date: new Date().toISOString(), ageMonths, name, domains, vocabChecked, vocabEstimate });
-  persistSet("tg_sessions", JSON.stringify(sessions)); // v9.3: dual-write
+  persistSet(pk("tg_sessions"), JSON.stringify(sessions)); // v9.3: dual-write; v11: per-profile
   renderStorageDiagnostic(); // keep the "n sessions saved" readout current if it's on screen
+  scheduleSyncPut(); // v11: debounced full-state PUT after every save point
 }
 function refreshProgressBtn(){
   const has = loadSessions().length > 0;
@@ -4384,6 +4515,8 @@ function refreshProgressBtn(){
 
 /* ---------- progress screen ---------- */
 function showProgress(){
+  const p = activeProfile(); // v11: title shows the active child's name
+  $("progressTitle").textContent = p && p.name ? `📈 ${p.name}'s progress over time` : "📈 Progress over time";
   renderDomainCharts();
   renderVocabChart();
   renderSessionList();
@@ -4477,7 +4610,7 @@ function base64ToBlob(b64, type){
   return new Blob([arr], { type: type || "audio/webm" });
 }
 async function exportData(){
-  const payload = { exportedAt: new Date().toISOString(), tg_sessions: loadSessions(), tg_checklist: JSON.parse(localStorage.getItem("tg_checklist") || "[]") };
+  const payload = { exportedAt: new Date().toISOString(), tg_sessions: loadSessions(), tg_checklist: JSON.parse(localStorage.getItem(pk("tg_checklist")) || "[]") }; // v11: active profile's data
   // v8: voice recordings are OPT-IN (checkbox on the Progress screen) — plain
   // sessions-only export stays the default, unaffected by this addition.
   const includeAudio = $("exportIncludeAudio") && $("exportIncludeAudio").checked;
@@ -4539,12 +4672,13 @@ function importData(evt){
       evt.target.value = ""; return;
     }
     const merged = [...byDate.values()].sort((a,b) => new Date(a.date) - new Date(b.date));
-    persistSet("tg_sessions", JSON.stringify(merged)); // v9.3: dual-write
+    persistSet(pk("tg_sessions"), JSON.stringify(merged)); // v9.3: dual-write; v11: active profile
     if (Array.isArray(data.tg_checklist) && data.tg_checklist.length){
-      const cur = new Set(JSON.parse(localStorage.getItem("tg_checklist") || "[]"));
+      const cur = new Set(JSON.parse(localStorage.getItem(pk("tg_checklist")) || "[]"));
       data.tg_checklist.forEach(w => cur.add(w));
-      persistSet("tg_checklist", JSON.stringify([...cur])); // v9.3: dual-write
+      persistSet(pk("tg_checklist"), JSON.stringify([...cur])); // v9.3: dual-write; v11: active profile
     }
+    scheduleSyncPut();
     if (audioCount){
       let imported = 0, failed = 0;
       for (const [key, rec] of Object.entries(data.tg_audio)){
@@ -4634,6 +4768,348 @@ function mergeArcade(a, b){
   });
   return { mixitup: mergeMode(na.mixitup, nb.mixitup), everything: mergeMode(na.everything, nb.everything) };
 }
+
+/* =====================================================================
+   v11: CHILD PROFILES + FAMILY SYNC — shared mergeState (see sync-worker/src/merge.js, kept
+   TEXTUALLY IDENTICAL to that file's function bodies — any change here must be mirrored there
+   and vice versa, see that file's own top comment for why: the client's pre-merge on load and
+   the server's authoritative merge on PUT must always agree).
+
+   Data model: a family (one family code, see tg_family below) holds N child profiles.
+   tg_profiles = { profiles: [ {id,name,bday,ageMonths,createdAt,updatedAt,emoji} ],
+                    activeProfileId }. ALL per-child game state (sessions/checklist/
+   completions/arcade) stays in the SAME keys every previous version used
+   (tg_sessions/tg_checklist/tg_completions/tg_arcade) but NAMESPACED by profile id via pk()
+   below (e.g. "tg_sessions:ab12cd34") — this is deliberately a thin layer over the existing
+   dual-write persistence (persistSet/kvGet/reconcileStorage) rather than a new storage
+   mechanism, so every existing per-key merge function (mergeSessionsArr/mergeChecklistArr/
+   mergeCompletions/mergeArcade, all above) is reused UNCHANGED, just applied once per profile
+   id (see mergeProfileBundle) instead of once globally. The sync blob mirrors this exactly:
+   { v:1, updatedAt, profiles:[...], perProfile:{ [id]: {sessions,checklist,completions,arcade} } }
+   — see PART A's sync-worker/src/index.js PUT handler, which stores mergeState(existing, body).
+   ===================================================================== */
+function mergeProfileBundle(a, b){
+  a = a || {}; b = b || {};
+  return {
+    sessions: mergeSessionsArr(a.sessions, b.sessions),
+    checklist: mergeChecklistArr(a.checklist, b.checklist),
+    completions: mergeCompletions(a.completions, b.completions),
+    arcade: mergeArcade(a.arcade, b.arcade),
+  };
+}
+function mergeProfiles(a, b){
+  const byId = new Map();
+  for (const p of (a || [])) if (p && p.id) byId.set(p.id, p);
+  for (const p of (b || [])){
+    if (!p || !p.id) continue;
+    const existing = byId.get(p.id);
+    if (!existing){ byId.set(p.id, p); continue; }
+    const tExisting = Date.parse(existing.updatedAt || "") || 0;
+    const tIncoming = Date.parse(p.updatedAt || "") || 0;
+    if (tIncoming > tExisting) byId.set(p.id, p);
+  }
+  return [...byId.values()].sort((x,y) => (Date.parse(x.createdAt||"")||0) - (Date.parse(y.createdAt||"")||0));
+}
+function mergePerProfile(a, b){
+  a = a || {}; b = b || {};
+  const out = {};
+  for (const id of new Set([...Object.keys(a), ...Object.keys(b)])){
+    out[id] = mergeProfileBundle(a[id], b[id]);
+  }
+  return out;
+}
+function mergeState(local, remote){
+  local = local || {}; remote = remote || {};
+  return {
+    v: 1,
+    updatedAt: new Date().toISOString(),
+    profiles: mergeProfiles(local.profiles, remote.profiles),
+    perProfile: mergePerProfile(local.perProfile, remote.perProfile),
+  };
+}
+
+// ---------- profile storage helpers ----------
+const AVATAR_EMOJIS = ["🦁","🐸","🐼","🦊","🐨","🐵","🦄","🐯","🐰","🐻","🦉","🐢"];
+function genProfileId(){
+  // 8 lowercase-base36 chars — short enough to read in a URL fragment (#p=...), long enough
+  // that two profiles created a second apart never collide (this is a per-family id, not a
+  // global one, so the collision space only needs to cover a handful of siblings).
+  return Math.random().toString(36).slice(2, 10).padEnd(8, "0");
+}
+function pickAvatarEmoji(id){
+  // Deterministic-from-id but effectively arbitrary — chosen ONCE at profile creation and
+  // stored on the profile object, so it stays stable across re-renders/devices without needing
+  // its own merge rule (it just rides along with whichever profile object wins mergeProfiles).
+  let h = 0; for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return AVATAR_EMOJIS[h % AVATAR_EMOJIS.length];
+}
+function loadProfiles(){
+  try {
+    const d = JSON.parse(localStorage.getItem("tg_profiles") || "null");
+    if (d && Array.isArray(d.profiles)) return d;
+  } catch(e){}
+  return { profiles: [], activeProfileId: null };
+}
+function saveProfiles(data){ persistSet("tg_profiles", JSON.stringify(data)); } // v9.3-style dual-write
+function activeProfile(){
+  const d = loadProfiles();
+  return d.profiles.find(p => p.id === state.activeProfileId) || null;
+}
+// pk() — the ONE function every per-child storage key goes through. Every existing call site
+// that used to read/write the literal "tg_sessions"/"tg_checklist"/"tg_completions"/"tg_arcade"
+// now calls pk("tg_sessions") etc instead — see NOTES.md v11 for the full list of call sites
+// this touched. Falls back to the UNNAMESPACED base key when no profile is active yet (should
+// only happen transiently during the zero-profile bootstrap form, before the first
+// createProfile() call sets activeProfileId — see startGame()).
+function pk(base){ return state.activeProfileId ? `${base}:${state.activeProfileId}` : base; }
+function createProfile(name, bday, ageMonths){
+  const d = loadProfiles();
+  const id = genProfileId();
+  const now = new Date().toISOString();
+  const p = { id, name: name || "friend", bday: bday || "", ageMonths: (typeof ageMonths === "number" && ageMonths) || null, createdAt: now, updatedAt: now, emoji: pickAvatarEmoji(id) };
+  d.profiles.push(p);
+  d.activeProfileId = id;
+  saveProfiles(d);
+  state.activeProfileId = id;
+  scheduleSyncPut(); // v11: a new profile is sync-worthy on its own, don't wait for the first session
+  return p;
+}
+function updateProfileFields(id, name, bday, ageMonths){
+  const d = loadProfiles();
+  const p = d.profiles.find(x => x.id === id);
+  if (!p) return null;
+  p.name = name || p.name; p.bday = bday || ""; p.ageMonths = (typeof ageMonths === "number" && ageMonths) || p.ageMonths;
+  p.updatedAt = new Date().toISOString();
+  saveProfiles(d);
+  scheduleSyncPut();
+  return p;
+}
+// v11: one-time, synchronous (localStorage only — matches init()'s existing "fast baseline"
+// pattern, see reconcileStorage()'s own comment on why the async IDB correction happens
+// separately/later), idempotent migration of a pre-v11 single-child install into profile #1.
+// Idempotent because it only ever acts when tg_profiles is missing/empty — once it creates one,
+// every future call (including on THIS same load, since callers should call this at most once)
+// is a no-op fast-return. The legacy tg_sessions/tg_checklist/tg_completions/tg_arcade keys are
+// left in place (untouched, not deleted) after being copied to their namespaced form — same
+// "additive migration, never delete the old thing" pattern AUDIO_DB_VERSION's onupgradeneeded
+// already established elsewhere in this file.
+function migrateLegacyProfile(){
+  const existing = loadProfiles();
+  if (existing.profiles.length) return existing;
+  let legacy = null;
+  try { legacy = JSON.parse(localStorage.getItem("tg_profile") || "null"); } catch(e){}
+  if (!legacy || (!legacy.name && !legacy.age && !legacy.bday)) return existing;
+  // v11 adversarial-review fix: narrows (does not fully eliminate — see NOTES.md v11 for why a
+  // full cross-tab lock wasn't worth it here) the window for two tabs opened at nearly the same
+  // moment on the SAME pre-v11 device to both pass the read-check above and each mint a
+  // DIFFERENT profile id from the same legacy data, permanently splitting one child's history
+  // into two "siblings" once reconcileStorage()'s mergeProfiles() unions them. Re-checking
+  // immediately before the write below shrinks the race window from "this whole function" to
+  // the couple of synchronous statements between here and the write.
+  const recheck = loadProfiles();
+  if (recheck.profiles.length) return recheck;
+  const id = genProfileId();
+  const now = new Date().toISOString();
+  const p = { id, name: legacy.name || "friend", bday: legacy.bday || "", ageMonths: legacy.age || null, createdAt: now, updatedAt: now, emoji: pickAvatarEmoji(id) };
+  for (const base of ["tg_sessions", "tg_checklist", "tg_completions", "tg_arcade"]){
+    const raw = localStorage.getItem(base);
+    if (raw !== null) persistSet(`${base}:${id}`, raw);
+  }
+  const data = { profiles: [p], activeProfileId: id };
+  saveProfiles(data);
+  return data;
+}
+
+/* =====================================================================
+   v11: FAMILY SYNC — client wiring around SYNC_URL/mergeState above.
+   Family code lives in the URL fragment (#f=xxxx-xxxx, optionally &p=<profileId> to also
+   preselect a child), per the task's motivation: the Amazon Fire kids-profile browser wipes
+   ALL web storage between launches, so on-device persistence alone can't survive there — the
+   code has to be reconstructible from the bookmarked link itself, with local storage (tg_family)
+   only as a same-device convenience fallback for browsers that DO keep storage. Precedence:
+   hash wins over stored whenever both are present and differ (see parseFamilyHash()'s call site
+   in init()) — a parent following a fresh invite link is always trusted over a stale local
+   value.
+   ===================================================================== */
+const FAMILY_CODE_RE = /^[a-z0-9]{4}-[a-z0-9]{4}$/;
+function parseFamilyHash(){
+  const m = location.hash.match(/(?:^|[#&])f=([a-z0-9]{4}-[a-z0-9]{4})/i);
+  const p = location.hash.match(/(?:^|[#&])p=([a-z0-9]+)/i);
+  return { code: m ? m[1].toLowerCase() : null, profileId: p ? p[1] : null };
+}
+function loadFamilyCode(){
+  try { return localStorage.getItem("tg_family") || null; } catch(e){ return null; }
+}
+function saveFamilyCode(code){ persistSet("tg_family", code); } // v9.3-style dual-write, same as every other persisted key
+function familyLinkFor(code){ return `${location.origin}${location.pathname}#f=${code}`; }
+
+// ---- full local state <-> sync blob, using the SAME namespaced keys pk() already established ----
+function buildLocalSyncBlob(){
+  const d = loadProfiles();
+  const perProfile = {};
+  for (const p of d.profiles){
+    let sessions = [], checklist = [], completions = { total: 0, lockedUntil: {} }, arcade = {};
+    try { sessions = JSON.parse(localStorage.getItem(`tg_sessions:${p.id}`) || "[]"); } catch(e){}
+    try { checklist = JSON.parse(localStorage.getItem(`tg_checklist:${p.id}`) || "[]"); } catch(e){}
+    try { completions = JSON.parse(localStorage.getItem(`tg_completions:${p.id}`) || "{}") || completions; } catch(e){}
+    try { arcade = JSON.parse(localStorage.getItem(`tg_arcade:${p.id}`) || "{}") || {}; } catch(e){}
+    perProfile[p.id] = { sessions, checklist, completions, arcade: normalizeArcadeStats(arcade) };
+  }
+  return { v: 1, updatedAt: new Date().toISOString(), profiles: d.profiles, perProfile };
+}
+// Applies a (merged) sync blob back onto local storage — every key it touches goes through
+// persistSet(), so this also keeps the IndexedDB mirror in sync exactly like every other write
+// in this file. Recomputes tg_profiles too (profiles array from the blob), preserving whichever
+// activeProfileId this DEVICE already had (a device's choice of "who's playing right now" is
+// local UI state, not something the family blob should override — see the blob's own shape,
+// which deliberately has no activeProfileId field).
+function applySyncBlobLocally(blob){
+  if (!blob || !Array.isArray(blob.profiles)) return;
+  const d = loadProfiles();
+  const stillActive = blob.profiles.some(p => p.id === d.activeProfileId);
+  saveProfiles({ profiles: blob.profiles, activeProfileId: stillActive ? d.activeProfileId : (blob.profiles[0] ? blob.profiles[0].id : null) });
+  for (const [id, bundle] of Object.entries(blob.perProfile || {})){
+    persistSet(`tg_sessions:${id}`, JSON.stringify(bundle.sessions || []));
+    persistSet(`tg_checklist:${id}`, JSON.stringify(bundle.checklist || []));
+    persistSet(`tg_completions:${id}`, JSON.stringify(bundle.completions || {}));
+    persistSet(`tg_arcade:${id}`, JSON.stringify(normalizeArcadeStats(bundle.arcade)));
+  }
+}
+function setSyncStatus(s){ state.syncStatus = { state: s, lastSyncedAt: s === "synced" ? Date.now() : state.syncStatus.lastSyncedAt }; renderSyncStatus(); }
+// On-load pull: GET the family blob, merge it into local (same mergeState() the server itself
+// uses — see that function's own comment for why client and server must compute identical
+// merges), apply the merged result locally, THEN re-render whichever screen is showing. A
+// device with EMPTY local state + a valid code is exactly the case mergeState/mergeProfiles/
+// mergePerProfile are written to handle safely: buildLocalSyncBlob() on an empty device returns
+// {profiles:[],perProfile:{}}, and mergeState(remote, thatEmptyBlob) — note argument order
+// below, remote first — just returns `remote` untouched (see mergeProfiles/mergePerProfile: a
+// side with nothing contributes nothing). Never blocks first paint (fire-and-forget from init()).
+async function syncPullAndMerge(){
+  const code = loadFamilyCode();
+  if (!syncEnabled() || !code) { setSyncStatus(code ? "offline" : "idle"); return; }
+  setSyncStatus("syncing");
+  try {
+    const res = await fetch(`${syncUrl()}/v1/state/${code}`, { method: "GET" });
+    if (res.status === 404){ setSyncStatus("synced"); return; } // brand-new code, nothing to pull yet — not an error
+    if (!res.ok) throw new Error(`GET ${res.status}`);
+    const remote = await res.json();
+    const local = buildLocalSyncBlob();
+    const merged = mergeState(remote, local); // server's copy first — matches src/index.js's mergeState(existing, incoming) argument order for identical output
+    applySyncBlobLocally(merged);
+    setSyncStatus("synced");
+  } catch(e){ setSyncStatus("offline"); }
+}
+let _syncPutTimer = null, _syncPutQueued = false, _syncPutInFlight = false;
+// Debounced (2s) full-state PUT — called from every save point per the task (saveSession/
+// endGame, checklist finish, completion increments, arcade stats, profile save). Coalesces a
+// burst of rapid saves (e.g. several quick answers) into one PUT instead of a storm; if a PUT
+// is already in flight when the debounce fires, queues exactly one follow-up rather than
+// piling up concurrent requests (see the recursive settle-then-retry below).
+function scheduleSyncPut(){
+  if (!syncEnabled() || !loadFamilyCode()) return; // silently disabled — no code yet, or sync not configured
+  clearTimeout(_syncPutTimer);
+  _syncPutTimer = setTimeout(() => { doSyncPut(); }, 2000);
+}
+async function doSyncPut(){
+  const code = loadFamilyCode();
+  if (!syncEnabled() || !code) return;
+  if (_syncPutInFlight){ _syncPutQueued = true; return; }
+  _syncPutInFlight = true;
+  setSyncStatus("syncing");
+  try {
+    const body = JSON.stringify(buildLocalSyncBlob());
+    const res = await fetch(`${syncUrl()}/v1/state/${code}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body });
+    if (!res.ok) throw new Error(`PUT ${res.status}`);
+    const merged = await res.json();
+    applySyncBlobLocally(merged); // server is authoritative — adopt whatever it merged back (may include another device's concurrent writes)
+    setSyncStatus("synced");
+  } catch(e){
+    // v11 adversarial-review fix: this used to also set _syncPutQueued=true here, which made
+    // the finally{} below immediately reschedule itself — an unbounded retry loop hammering the
+    // worker (and battery) every 2s for as long as the tab stayed open while offline/misconfigured,
+    // with no backoff and no way to stop short of closing the tab. Per the task's own spec
+    // ("queue and retry on NEXT save/load"), a failed PUT now just leaves syncStatus=offline and
+    // stops — the next real scheduleSyncPut() call (any save point) or the next page load
+    // (syncPullAndMerge()) naturally retries. _syncPutQueued below is reserved for the genuinely
+    // different case of a PUT arriving WHILE this one was in flight (see the check at this
+    // function's top) — that's a real queued write, not a timer-driven retry.
+    setSyncStatus("offline");
+  } finally {
+    _syncPutInFlight = false;
+    if (_syncPutQueued){ _syncPutQueued = false; scheduleSyncPut(); }
+  }
+}
+function renderSyncStatus(){
+  const glyphs = {
+    idle: "", syncing: "☁️ syncing…", offline: "☁️ offline, saved locally",
+    synced: state.syncStatus.lastSyncedAt ? `☁️ synced ${syncAgo(state.syncStatus.lastSyncedAt)}` : "☁️ synced",
+  };
+  const text = syncEnabled() ? (glyphs[state.syncStatus.state] || "") : "";
+  const hud = $("syncGlyph");
+  if (hud) hud.textContent = text;
+}
+function syncAgo(ts){
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  return `${Math.round(m / 60)}h ago`;
+}
+// refreshes the sync "N minutes ago" text on a slow interval so it doesn't feel stale while a
+// screen is left open — purely cosmetic, never touches storage/network.
+setInterval(() => { if (state.syncStatus.state === "synced") renderSyncStatus(); }, 30000);
+
+/* ---------- v11: "Family sync" setup card (start screen) ---------- */
+async function createFamilyCode(){
+  if (!syncEnabled()) return;
+  try {
+    const res = await fetch(`${syncUrl()}/v1/new`, { method: "POST" });
+    if (!res.ok) throw new Error(`POST ${res.status}`);
+    const { code } = await res.json();
+    saveFamilyCode(code);
+    location.hash = `f=${code}`; // keeps the bookmarkable link in sync with what's now stored locally
+    renderFamilyCard();
+    doSyncPut(); // push this device's current state to the brand-new code right away
+  } catch(e){ alert("Couldn't reach the sync server — check the connection and try again."); }
+}
+function copyFamilyLink(){
+  const code = loadFamilyCode();
+  if (!code) return;
+  const link = familyLinkFor(code);
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(link).catch(() => {});
+  const plain = $("familyLinkPlain");
+  if (plain) plain.textContent = link; // shown as plain text to type regardless of clipboard support, per the task
+}
+function showFamilyCodeEntry(){
+  $("familyHasCode").style.display = "none";
+  $("familyCodeEntry").style.display = "block";
+  $("familyCodeInput").value = "";
+}
+function submitFamilyCode(){
+  const raw = $("familyCodeInput").value.trim().toLowerCase();
+  if (!FAMILY_CODE_RE.test(raw)){ alert("A family code looks like xxxx-xxxx (letters and numbers)."); return; }
+  saveFamilyCode(raw);
+  location.hash = `f=${raw}`;
+  $("familyCodeEntry").style.display = "none";
+  renderFamilyCard();
+  syncPullAndMerge().then(() => {
+    renderFamilyCard(); refreshProgressBtn(); renderStorageDiagnostic(); refreshSwitchChildLink();
+    if (document.getElementById("whoScreen").classList.contains("active")) renderWhoScreen();
+  });
+}
+function renderFamilyCard(){
+  const enabled = syncEnabled();
+  const code = loadFamilyCode();
+  $("familySyncNote").style.display = enabled ? "none" : "block";
+  $("familyNoCode").style.display = (enabled && !code) ? "block" : "none";
+  $("familyHasCode").style.display = (enabled && code) ? "block" : "none";
+  if (!(enabled && code)) $("familyCodeEntry").style.display = "none";
+  if (code){
+    $("familyCodeText").textContent = code;
+    $("familyLinkPlain").textContent = familyLinkFor(code);
+  }
+}
+
 function mergeVisits(a, b){
   // Not a union (a single counter, not a list): take the HIGHER count (whichever side wasn't
   // wiped has the true, larger count) and the EARLIER `first` (the more historically
@@ -4643,60 +5119,107 @@ function mergeVisits(a, b){
   const firsts = [a.first, b.first].filter(Boolean).sort();
   return { first: firsts.length ? firsts[0] : new Date().toISOString(), count: Math.max(a.count || 0, b.count || 0) };
 }
+// v11: reads+merges ONE profile's namespaced tg_sessions:<id>/tg_checklist:<id>/
+// tg_completions:<id>/tg_arcade:<id> between localStorage and IndexedDB — the exact same
+// per-key merge logic every prior version applied globally (see mergeSessionsArr/
+// mergeChecklistArr/mergeCompletions/mergeArcade above), just parameterized by profile id so
+// reconcileStorage() below can loop it once per child instead of duplicating the block 4x.
+async function reconcileProfileKeys(id, idbOk){
+  let sessionsChanged = false, checklistChanged = false;
+
+  const idbSessionsRaw = idbOk ? await kvGet(`tg_sessions:${id}`) : null;
+  let idbSessions = []; if (idbSessionsRaw){ try { idbSessions = JSON.parse(idbSessionsRaw) || []; } catch(e){} }
+  let lsSessions = []; try { lsSessions = JSON.parse(localStorage.getItem(`tg_sessions:${id}`) || "[]"); } catch(e){}
+  const mergedSessions = mergeSessionsArr(lsSessions, idbSessions);
+  sessionsChanged = mergedSessions.length !== lsSessions.length;
+  if (sessionsChanged) persistSet(`tg_sessions:${id}`, JSON.stringify(mergedSessions));
+  else if (idbOk) kvSet(`tg_sessions:${id}`, JSON.stringify(lsSessions));
+
+  const idbChecklistRaw = idbOk ? await kvGet(`tg_checklist:${id}`) : null;
+  let idbChecklist = []; if (idbChecklistRaw){ try { idbChecklist = JSON.parse(idbChecklistRaw) || []; } catch(e){} }
+  let lsChecklist = []; try { lsChecklist = JSON.parse(localStorage.getItem(`tg_checklist:${id}`) || "[]"); } catch(e){}
+  const mergedChecklist = mergeChecklistArr(lsChecklist, idbChecklist);
+  checklistChanged = mergedChecklist.length !== lsChecklist.length;
+  if (checklistChanged) persistSet(`tg_checklist:${id}`, JSON.stringify(mergedChecklist));
+  else if (idbOk) kvSet(`tg_checklist:${id}`, JSON.stringify(lsChecklist));
+
+  const idbCompletionsRaw = idbOk ? await kvGet(`tg_completions:${id}`) : null;
+  let idbCompletions = null; if (idbCompletionsRaw){ try { idbCompletions = JSON.parse(idbCompletionsRaw); } catch(e){} }
+  let lsCompletions = null; try { const r = localStorage.getItem(`tg_completions:${id}`); lsCompletions = r ? JSON.parse(r) : null; } catch(e){}
+  persistSet(`tg_completions:${id}`, JSON.stringify(mergeCompletions(lsCompletions, idbCompletions)));
+
+  const idbArcadeRaw = idbOk ? await kvGet(`tg_arcade:${id}`) : null;
+  let idbArcade = null; if (idbArcadeRaw){ try { idbArcade = JSON.parse(idbArcadeRaw); } catch(e){} }
+  let lsArcade = null; try { const r = localStorage.getItem(`tg_arcade:${id}`); lsArcade = r ? JSON.parse(r) : null; } catch(e){}
+  persistSet(`tg_arcade:${id}`, JSON.stringify(mergeArcade(lsArcade, idbArcade)));
+
+  return { sessionsChanged, checklistChanged };
+}
 async function reconcileStorage(){
   const idbOk = await audioDBAvailable();
 
-  // tg_sessions: merge (union by date). IndexedDB is read FIRST (the slow/async part) and
-  // localStorage is read fresh right before the merge/write decision below with no further
-  // await in between — narrows the window for a concurrent saveSession() write (same tab) to
-  // get clobbered down to zero, since nothing else can run between that read and this write
-  // in single-threaded JS.
-  const idbSessionsRaw = idbOk ? await kvGet("tg_sessions") : null;
-  let idbSessions = []; if (idbSessionsRaw){ try { idbSessions = JSON.parse(idbSessionsRaw) || []; } catch(e){} }
-  let lsSessions = []; try { lsSessions = JSON.parse(localStorage.getItem("tg_sessions") || "[]"); } catch(e){}
-  const mergedSessions = mergeSessionsArr(lsSessions, idbSessions);
-  const sessionsChanged = mergedSessions.length !== lsSessions.length;
-  if (sessionsChanged) persistSet("tg_sessions", JSON.stringify(mergedSessions));
-  else if (idbOk) kvSet("tg_sessions", JSON.stringify(lsSessions)); // nothing to merge — still keep IDB caught up
+  // v11: tg_profiles FIRST (via mergeProfiles — a real union-by-id merge, not just "backfill
+  // whichever side is empty", since two devices can each have created a DIFFERENT sibling
+  // profile while offline and both must survive) — every per-profile key reconciliation below
+  // depends on knowing the full profile id list, so this has to resolve before the per-id loop.
+  const idbProfilesRaw = idbOk ? await kvGet("tg_profiles") : null;
+  let idbProfiles = null; if (idbProfilesRaw){ try { idbProfiles = JSON.parse(idbProfilesRaw); } catch(e){} }
+  let lsProfilesData = loadProfiles(); // read fresh, right after the awaits above — matches the read-order discipline every other block in this function already follows
+  const mergedProfileList = mergeProfiles(lsProfilesData.profiles, (idbProfiles && idbProfiles.profiles) || []);
+  const profilesChanged = mergedProfileList.length !== lsProfilesData.profiles.length;
+  if (profilesChanged){
+    // re-read activeProfileId fresh (rather than trusting the possibly-microtask-old
+    // lsProfilesData above) right at the point of writing — cheap belt-and-suspenders so a
+    // profile switch can never be silently reverted by this reconciliation, even though nothing
+    // async happens between the two reads today.
+    const freshActiveId = loadProfiles().activeProfileId;
+    const stillActive = mergedProfileList.some(p => p.id === freshActiveId);
+    saveProfiles({ profiles: mergedProfileList, activeProfileId: stillActive ? freshActiveId : (mergedProfileList[0] ? mergedProfileList[0].id : null) });
+  } else if (idbOk){
+    kvSet("tg_profiles", JSON.stringify(lsProfilesData));
+  }
+  const profileIds = mergedProfileList.map(p => p.id);
 
-  // tg_checklist: merge (union of words) — same read-order/race-window discipline as sessions.
-  const idbChecklistRaw = idbOk ? await kvGet("tg_checklist") : null;
-  let idbChecklist = []; if (idbChecklistRaw){ try { idbChecklist = JSON.parse(idbChecklistRaw) || []; } catch(e){} }
-  let lsChecklist = []; try { lsChecklist = JSON.parse(localStorage.getItem("tg_checklist") || "[]"); } catch(e){}
-  const mergedChecklist = mergeChecklistArr(lsChecklist, idbChecklist);
-  const checklistChanged = mergedChecklist.length !== lsChecklist.length;
-  if (checklistChanged) persistSet("tg_checklist", JSON.stringify(mergedChecklist));
-  else if (idbOk) kvSet("tg_checklist", JSON.stringify(lsChecklist));
-
-  // tg_profile / tg_muted: no meaningful "merge" for a single profile object / one boolean —
-  // just backfill whichever side is empty from the other, else keep IDB in sync.
-  for (const key of ["tg_profile","tg_muted"]){
+  // tg_muted / tg_family: single-value keys, no meaningful "merge" — just backfill whichever
+  // side is empty from the other, else keep IDB in sync. Same pattern as pre-v11's tg_profile
+  // backfill (kept below, now used only to feed a late migrateLegacyProfile() retry — see after
+  // this loop — since tg_profile itself is no longer the source of truth once tg_profiles exists).
+  for (const key of ["tg_profile","tg_muted","tg_family"]){
     const idbVal = idbOk ? await kvGet(key) : null;
     const lsVal = localStorage.getItem(key); // fresh read, right before acting
     if (!lsVal && idbVal){ try { localStorage.setItem(key, idbVal); } catch(e){} }
     else if (lsVal && idbOk){ kvSet(key, lsVal); }
   }
+  // v11: closes the one edge case migrateLegacyProfile()'s own comment calls out — a device
+  // whose localStorage was wiped BEFORE ever seeing v11 (so init()'s synchronous, LS-only
+  // migration attempt above found nothing) but whose IndexedDB mirror still has the pre-v11
+  // tg_profile from before the wipe. The backfill loop just above may have just recovered that
+  // tg_profile into localStorage — if so, and no profile exists yet, retry the migration now
+  // that there's something to migrate from.
+  if (!profileIds.length){
+    const retried = migrateLegacyProfile();
+    if (retried.profiles.length) profileIds.push(...retried.profiles.map(p => p.id));
+  }
 
-  // tg_visits: merged via mergeVisits (max count / min first) — see its own comment.
+  // tg_visits: merged via mergeVisits (max count / min first) — see its own comment. Stays
+  // GLOBAL (device-level, not per-child) — it's answering "does this BROWSER wipe storage",
+  // independent of which child profile is active.
   const idbVisitsRaw = idbOk ? await kvGet("tg_visits") : null;
   let idbVisits = null; if (idbVisitsRaw){ try { idbVisits = JSON.parse(idbVisitsRaw); } catch(e){} }
   let lsVisits = null; try { const r = localStorage.getItem("tg_visits"); lsVisits = r ? JSON.parse(r) : null; } catch(e){}
   persistSet("tg_visits", JSON.stringify(mergeVisits(lsVisits, idbVisits)));
 
-  // tg_completions: merged via mergeCompletions (max total, max per-domain lockedUntil) — see
-  // its own comment. v9.5 (Feature 2, rotation lock).
-  const idbCompletionsRaw = idbOk ? await kvGet("tg_completions") : null;
-  let idbCompletions = null; if (idbCompletionsRaw){ try { idbCompletions = JSON.parse(idbCompletionsRaw); } catch(e){} }
-  let lsCompletions = null; try { const r = localStorage.getItem("tg_completions"); lsCompletions = r ? JSON.parse(r) : null; } catch(e){}
-  persistSet("tg_completions", JSON.stringify(mergeCompletions(lsCompletions, idbCompletions)));
+  // v11: per-profile keys — one reconcileProfileKeys() pass per child. sessionsChanged/
+  // checklistChanged returned to init() are true if ANY profile changed (drives a single
+  // refreshProgressBtn() call regardless of which child it was for).
+  let sessionsChanged = false, checklistChanged = false;
+  for (const id of profileIds){
+    const r = await reconcileProfileKeys(id, idbOk);
+    sessionsChanged = sessionsChanged || r.sessionsChanged;
+    checklistChanged = checklistChanged || r.checklistChanged;
+  }
 
-  // tg_arcade: merged via mergeArcade (max totalPlays, max bestStreak, OR'd introShown) — v10.
-  const idbArcadeRaw = idbOk ? await kvGet("tg_arcade") : null;
-  let idbArcade = null; if (idbArcadeRaw){ try { idbArcade = JSON.parse(idbArcadeRaw); } catch(e){} }
-  let lsArcade = null; try { const r = localStorage.getItem("tg_arcade"); lsArcade = r ? JSON.parse(r) : null; } catch(e){}
-  persistSet("tg_arcade", JSON.stringify(mergeArcade(lsArcade, idbArcade)));
-
-  return { sessionsChanged, checklistChanged };
+  return { sessionsChanged, checklistChanged, profilesChanged };
 }
 // Stamped once per page load, AFTER reconcileStorage() has restored localStorage's tg_visits
 // from IndexedDB if it was missing/behind — reading the RECONCILED value here (not the raw,
@@ -4719,9 +5242,14 @@ function stampVisit(){
 // the Progress screen yet still sees it).
 function renderStorageDiagnostic(){
   const v = state.visits;
-  const sessions = loadSessions();
+  const sessions = loadSessions(); // v11: active profile's sessions — see loadSessions()'s own pk() comment
+  // v11: sync suffix — "☁️ synced"/"☁️ off" + the family code, per the task. Purely informational
+  // (renderSyncStatus() drives the separate HUD glyph); this just appends the same idea to the
+  // existing "Storage check" line since that's the parent-facing "is my data safe" readout.
+  const code = loadFamilyCode();
+  const syncSuffix = !syncEnabled() ? " · ☁️ off" : (code ? ` · ☁️ synced (family ${code})` : " · ☁️ off (no family code yet)");
   const text = (v && v.first)
-    ? `Storage check: first seen ${new Date(v.first).toLocaleDateString()}, ${v.count} visit${v.count === 1 ? "" : "s"}, ${sessions.length} session${sessions.length === 1 ? "" : "s"} saved`
+    ? `Storage check: first seen ${new Date(v.first).toLocaleDateString()}, ${v.count} visit${v.count === 1 ? "" : "s"}, ${sessions.length} session${sessions.length === 1 ? "" : "s"} saved${syncSuffix}`
     : "Storage check: still checking…";
   const prog = $("storageDiag");
   if (prog) prog.textContent = text;
@@ -4730,6 +5258,7 @@ function renderStorageDiagnostic(){
     footer.textContent = text;
     footer.style.display = sessions.length ? "none" : "block";
   }
+  renderSyncStatus();
 }
 
 /* =====================================================================
@@ -4801,10 +5330,10 @@ const ARCADE_FUNCTIONS_DEFS = DOMAINS.find(d => d.key === "functions").defs;
 // totalPlays counts every RESOLVED question (correct, missed, or timed out) — a simple, honest
 // "how much has this kid played" counter, not gated on getting anything right.
 function loadArcadeStats(){
-  try { return normalizeArcadeStats(JSON.parse(localStorage.getItem("tg_arcade") || "{}")); }
+  try { return normalizeArcadeStats(JSON.parse(localStorage.getItem(pk("tg_arcade")) || "{}")); } // v11: per-profile
   catch(e){ return normalizeArcadeStats(null); }
 }
-function saveArcadeStats(s){ persistSet("tg_arcade", JSON.stringify(s)); }
+function saveArcadeStats(s){ persistSet(pk("tg_arcade"), JSON.stringify(s)); scheduleSyncPut(); } // v11: per-profile + sync
 function recordArcadePlay(mode){
   const s = loadArcadeStats();
   s[mode].totalPlays = (s[mode].totalPlays || 0) + 1;
@@ -5353,17 +5882,53 @@ function startEverything(){ // v10.1: Everything Mix — picker tile onclick tar
 function exitEverything(){ exitArcadeSession(state.everything); } // v10.1
 
 /* ---------- init ---------- */
+// v11: true only while the user is still looking at the entry screens this init() function
+// itself chose (the chooser, or a not-yet-submitted "add a child" form) — the async
+// reconcileStorage()/syncPullAndMerge() callbacks below only auto-navigate when this is still
+// true, so a parent who has already moved on to picking a game / mid-play / results by the time
+// a slow IndexedDB read or network round-trip resolves is never yanked back to the start.
+function stillOnEntryScreen(){
+  if ($("whoScreen").classList.contains("active")) return true;
+  if ($("startScreen").classList.contains("active") && state.pendingNewProfile) return true;
+  return false;
+}
 (function init(){
-  // ---- synchronous baseline (unchanged from pre-v9.3 behavior) — fast first paint that
-  // doesn't wait on IndexedDB; reconcileStorage() below patches this up shortly after if it
-  // finds localStorage was missing something IndexedDB still had.
-  const profile = JSON.parse(localStorage.getItem("tg_profile") || "{}");
-  if (profile.name) $("childName").value = profile.name;
-  if (profile.bday) $("childBday").value = profile.bday;
-  else if (profile.age) $("childAge").value = profile.age;
+  // ---- v11: family code / profile-preselect from the URL fragment (#f=xxxx-xxxx&p=<id>).
+  // Hash wins over the locally-stored fallback whenever both are present and differ — a parent
+  // following a fresh invite link is always trusted over a stale local value (see
+  // parseFamilyHash()'s own comment). If there's no hash but a stored code exists, the visible
+  // URL is brought back in sync with it (so a manual bookmark/share from THIS load still
+  // carries the code forward).
+  const hashInfo = parseFamilyHash();
+  const storedCode = loadFamilyCode();
+  if (hashInfo.code && hashInfo.code !== storedCode) saveFamilyCode(hashInfo.code);
+  else if (!hashInfo.code && storedCode) location.hash = `f=${storedCode}`;
+
+  // ---- v11: one-time, synchronous, localStorage-only profile migration — see
+  // migrateLegacyProfile()'s own comment for why this runs before the async IDB-aware pass
+  // below, matching this file's pre-existing "fast synchronous baseline, then async correction"
+  // pattern (previously used for tg_profile/tg_muted alone).
+  migrateLegacyProfile();
+  let profilesData = loadProfiles();
+  state.activeProfileId = (hashInfo.profileId && profilesData.profiles.some(p => p.id === hashInfo.profileId))
+    ? hashInfo.profileId
+    : profilesData.activeProfileId;
+  if (state.activeProfileId && state.activeProfileId !== profilesData.activeProfileId){
+    saveProfiles({ profiles: profilesData.profiles, activeProfileId: state.activeProfileId });
+  }
+  const activeP = profilesData.profiles.find(p => p.id === state.activeProfileId) || null;
+  if (activeP){
+    $("childName").value = activeP.name || "";
+    if (activeP.bday) $("childBday").value = activeP.bday;
+    else if (activeP.ageMonths) $("childAge").value = activeP.ageMonths;
+  } else {
+    state.pendingNewProfile = true; // zero profiles yet — the form will CREATE profile #1 on Play
+  }
   state.muted = localStorage.getItem("tg_muted") === "1";
   updateMuteBtn();
   refreshProgressBtn();
+  refreshSwitchChildLink();
+  renderFamilyCard();
   $("importFile").addEventListener("change", importData);
   attachTap($("mascot"), tapMascot); // v9.4: child-tappable — see attachTap()'s own comment
   runCategorySelfTest(); // v6 (fix 4a): dev-time assertion sweep, see its own comment above
@@ -5373,26 +5938,50 @@ function exitEverything(){ exitArcadeSession(state.everything); } // v10.1
   runFunctionOverlapSelfTest(); // v10: see its own comment above
   loadAudioManifest(); // v9: fire-and-forget fetch of audio/manifest.json — see its own comment above
 
+  // ---- v11: initial screen. #p=<id> in the URL explicitly preselects a child (the
+  // tablet-bookmark case, see NOTES.md v11) — skip the chooser and land straight on that
+  // child's ready-to-play screen. Otherwise, any existing profiles show the chooser-first flow
+  // the task specifies; zero profiles leaves the HTML's own default-active #startScreen (the
+  // create-profile-#1 form) showing, untouched.
+  if (profilesData.profiles.length){
+    if (activeP && hashInfo.profileId === activeP.id) selectProfile(activeP.id);
+    else showWhoScreen();
+  }
+
   // ---- v9.3: reconcile localStorage/IndexedDB, THEN stamp this visit — see
   // reconcileStorage()/stampVisit()'s own comments for why the order matters. Fire-and-forget
-  // (never blocks first paint); re-applies to the UI whatever it recovers/changes.
-  reconcileStorage().then(({ sessionsChanged }) => {
+  // (never blocks first paint); re-applies to the UI whatever it recovers/changes. v11: also
+  // reconciles tg_profiles + every per-profile key now (see reconcileStorage()'s own updated
+  // comment) — profilesChanged drives the same "don't clobber a parent who moved on" guard via
+  // stillOnEntryScreen() as the sync-pull callback below.
+  reconcileStorage().then(({ sessionsChanged, profilesChanged }) => {
     stampVisit();
     if (sessionsChanged) refreshProgressBtn();
-    if (!profile.name && !profile.bday && !profile.age){
-      const p2 = JSON.parse(localStorage.getItem("tg_profile") || "{}");
-      // v9.3 adversarial-review fix: only backfill a field that's STILL empty right now — a
-      // parent who started typing the child's name during the reconcile window (this can take
-      // a couple of IndexedDB round-trips) must never have their in-progress keystrokes
-      // silently overwritten by a recovered OLD value once reconcile finally resolves.
-      if (p2.name && !$("childName").value) $("childName").value = p2.name;
-      if (p2.bday && !$("childBday").value) $("childBday").value = p2.bday;
-      else if (p2.age && !$("childAge").value) $("childAge").value = p2.age;
+    if (profilesChanged && stillOnEntryScreen()){
+      const d = loadProfiles();
+      if (!state.activeProfileId && d.activeProfileId) state.activeProfileId = d.activeProfileId;
+      refreshSwitchChildLink();
+      if (d.profiles.length){ state.pendingNewProfile = false; showWhoScreen(); }
     }
     const m2 = localStorage.getItem("tg_muted");
     if (m2 !== null && (m2 === "1") !== state.muted){ state.muted = m2 === "1"; updateMuteBtn(); }
     renderStorageDiagnostic();
   }).catch(() => { stampVisit(); renderStorageDiagnostic(); });
+
+  // ---- v11: family sync pull — fire-and-forget (see syncPullAndMerge()'s own comment), never
+  // blocks first paint. This is the actual fix for the Fire tablet's wiped-storage case: a
+  // device that just booted with ZERO local profiles but a valid #f=code recovers everything
+  // here, moments after first paint, then (if the parent hasn't already navigated away) lands
+  // exactly where the URL asked — a specific child via #p=, or the chooser otherwise.
+  syncPullAndMerge().then(() => {
+    refreshProgressBtn(); renderFamilyCard(); renderStorageDiagnostic();
+    if (!stillOnEntryScreen()) return;
+    const d = loadProfiles();
+    if (!state.activeProfileId && d.activeProfileId) state.activeProfileId = d.activeProfileId;
+    refreshSwitchChildLink();
+    if (hashInfo.profileId && d.profiles.some(p => p.id === hashInfo.profileId)) selectProfile(hashInfo.profileId);
+    else if (d.profiles.length){ state.pendingNewProfile = false; showWhoScreen(); }
+  });
 })();
 </script>
 </body>
