@@ -111,6 +111,9 @@
   /* ---------- game board ---------- */
   #promptBar { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px; min-height: 76px; }
   #promptText { font-size: clamp(20px, 4.5vw, 32px); font-weight: 700; }
+  /* v13: Mandarin domains only — small grey English translation under the big hanzi prompt,
+     parent-facing, unobtrusive (never shown for a non-Mandarin item — see setSubtitle()). */
+  #promptSubtitle { display: none; font-size: 13px; color: #a99; text-align: center; margin: -6px auto 4px; max-width: 90%; }
   #speakBtn { font-size: 30px; background: none; border: none; cursor: pointer; transition: transform .15s; }
   #speakBtn.pulse { animation: speakPulse .55s ease-in-out infinite; }
   @keyframes speakPulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.25)} }
@@ -388,6 +391,7 @@
            Doesn't-know buttons entirely in scored play. -->
       <button id="shrugBtn" onclick="tapShrug()" title="I don't know this one">🤷</button>
     </div>
+    <div id="promptSubtitle"></div>
     <div id="arcadeTimerBar"></div>
     <div id="categoryAnchors"></div>
     <div id="domainTransition"></div>
@@ -432,6 +436,13 @@
       <div class="big-stat" id="overallAge"></div>
       <div id="overallNote" style="margin-top:4px;color:#8a7d66"></div>
     </div>
+    <!-- v13: Mandarin — its own card, RAW level/words-explored only, never folded into the
+         overall estimate above (English developmental norms don't apply here) — see endGame(). -->
+    <div class="res-card" id="mandarinResultsCard" style="display:none">
+      <h3>中文 Mandarin</h3>
+      <div id="mandarinBars"></div>
+      <div style="font-size:11px;color:#a99;margin-top:8px">Just starting out — this is a raw progress level for your immersion program, not compared to any age norm.</div>
+    </div>
     <details><summary>Item-by-item detail</summary><div id="itemDetail"></div></details>
     <p class="disclaimer">⚠️ This is a parent-facing play activity inspired by the structure of professional tools (MacArthur-Bates CDI word checklists; age-anchored concept items in the spirit of ASQ-3 / PLS-5 style screeners). It is <b>not</b> a validated or diagnostic instrument, one session is a snapshot, and toddler performance varies hugely day to day. If you ever have concerns about language development, talk to your pediatrician or ask about a free early-intervention evaluation.</p>
     <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">
@@ -448,6 +459,14 @@
       <h3>🧠 Concept domains — age-equivalent vs chronological age</h3>
       <div id="domainCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px"></div>
       <div style="font-size:12px;color:#a99;margin-top:8px">Dashed line = chronological age (typical pace). Shaded band = ±8 months, a rough "typical variation" range — this mirrors how growth-score charts track development.</div>
+    </div>
+    <!-- v13: Mandarin — its own chart cluster, deliberately separate from the English domains
+         above (raw level trend, no chronological-age line, no percentile framing — see
+         renderMandarinCharts()). -->
+    <div class="res-card" style="max-width:760px">
+      <h3>中文 Mandarin level</h3>
+      <div id="mandarinCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px"></div>
+      <div style="font-size:12px;color:#a99;margin-top:8px">A raw progress trend for your immersion program — not compared to any age norm.</div>
     </div>
     <div class="res-card" style="max-width:760px">
       <h3>🗣 Vocabulary growth vs CDI median</h3>
@@ -2215,6 +2234,147 @@ function countExplain(d){
   return `There are ${d.n} — you can count them one by one!`;
 }
 
+/* =====================================================================
+   v13: MANDARIN (中文) — receptive vocabulary/quantities/numerals/colors for
+   a toddler starting Mandarin immersion. Three domains (colors/numbers/words),
+   fully generic through the SAME adaptive engine (pickNextItem/computeTarget/
+   applyFloorRule/recordResult/renderItem/finalizeDomain/saveSession) every
+   English domain uses — only the ITEM CONTENT and a small number of
+   explicitly zh-aware call sites differ (grep `.zh`/`dom.lang==="zh"` in this
+   file): audio playback (speakZh() — NEVER falls through to live English-
+   voice TTS on a missing bundled clip, see its own comment), a small English
+   subtitle under the big hanzi prompt (it.subtitle/it.explainSubtitle), a
+   ~50% chance of a Mandarin instead of English praise line on a correct
+   answer (see tapTile), an English-only `spokenLabel` for the "Now let's
+   play with X!" domain-intro line (dom.label is bilingual for the PICKER
+   tile — "颜色 Colors" — which would read as a mangled mixed-language
+   sentence if spoken by the English voice), and exclusion from Arcades / the
+   overall developmental-age median / age-equivalent-or-percentile language
+   anywhere (English norms don't apply to a from-zero immersion program) —
+   see pickEverythingDomain(), endGame(), renderDomainCharts().
+   b-values here are EXPOSURE-relative (first-year-immersion frequency/
+   typicality ranking: 你好-level basics low, 外套/书包 higher), NOT
+   age-relative — never compare them to an English domain's b-values, and
+   never seed a Mandarin domain's prior from chronological age (see
+   priorFor()'s zh branch below and MANDARIN_START_THETA) — an immersion
+   beginner starts at the bottom of the ladder regardless of how old they are.
+   ===================================================================== */
+const MANDARIN_START_THETA = 15; // low fixed prior mu for a zero-history Mandarin domain — see priorFor()
+// v13: rotated in ~half the time (Math.random()<0.5) as the correct-answer praise line within a
+// zh domain ONLY — see tapTile's own comment. Every other domain's praise is untouched.
+const MANDARIN_PRAISE_LINES = ["好棒!", "对了!", "太厉害了!"];
+
+// ---- colors: 9 basics, same hex swatches as COLOR_DEFS above (colorSwatch() reused verbatim) ----
+const ZH_COLOR_DEFS = [
+  ["红色","red","#e63946",18],["黄色","yellow","#f4c614",20],["蓝色","blue","#1d6fd6",20],
+  ["绿色","green","#3fa34d",22],["橙色","orange","#f77f1e",28],["粉色","pink","#f26bb5",30],
+  ["紫色","purple","#8e5bd1",32],["黑色","black","#222222",36],["白色","white","#fafafa",38],
+];
+function makeZhColorItem(d, pool, arity){
+  const distractors = simpleDistractors(pool, d, arity - 1);
+  const choices = shuffle([d, ...distractors]);
+  return { label:d.name, b:d.age, c:1/arity, s:4, zh:true,
+    prompt:`哪个是${d.name}？点一点！`, say:`哪个是${d.name}？点一点！`,
+    subtitle:`Which one is ${d.english}? Point!`,
+    explain:`这是${d.name}!`, explainSubtitle:`This is ${d.english}!`,
+    tiles: choices.map(c => colorSwatch(c.hex)), correct: choices.indexOf(d) };
+}
+
+// ---- numbers: TWO item kinds sharing one domain — quantities (count-tile renderer, reused
+// verbatim from countTile() above, e.g. "哪个有三个苹果？点一点！") and hanzi numeral
+// recognition (styled-text tiles, same pattern as the English "numbers" domain's
+// makeNumeralItem). makeZhNumberItem below branches on d.kind; each kind only ever draws
+// distractors from its OWN kind (see the `samekind` filter) so a count-quantity tile and a
+// hanzi-character tile never appear together in the same round.
+const ZH_NUM_HANZI = ["一","二","三","四","五","六","七","八","九","十"]; // index 0 = "1"
+const ZH_COUNT_DEFS = [1,2,3,4,5,6,7,8,9,10].map((n,i) => ({
+  kind:"count", label:`${n}个苹果`, n, hanzi: ZH_NUM_HANZI[i], age: Math.round(15 + i*3.5), emoji:"🍎",
+}));
+const ZH_NUMERAL_DEFS = [1,2,3,4,5,6,7,8,9,10].map((n,i) => ({
+  kind:"numeral", label:`数字${ZH_NUM_HANZI[i]}`, n, hanzi: ZH_NUM_HANZI[i], age: Math.round(30 + i*3.3),
+}));
+const ZH_NUMBER_DEFS = [...ZH_COUNT_DEFS, ...ZH_NUMERAL_DEFS];
+function makeZhNumberItem(d, pool, arity){
+  if (d.kind === "count"){
+    const candidates = [d.n-2, d.n-1, d.n+1, d.n+2, d.n+3, d.n+4].filter(x => x !== d.n && x >= 1 && x <= 12);
+    const others = shuffle(candidates).slice(0, arity - 1);
+    const choices = shuffle([d.n, ...others]);
+    return { label:d.label, b:d.age, c:1/arity, s:4, zh:true,
+      prompt:`哪个有${d.hanzi}个苹果？点一点！`, say:`哪个有${d.hanzi}个苹果？点一点！`,
+      subtitle:`Which one has ${d.n}? Tap it!`,
+      explain:`这里有${d.hanzi}个 — 一个一个数一数!`, explainSubtitle:`There are ${d.n} — count them one by one!`,
+      tiles: choices.map(c => countTile(c, d.emoji)), correct: choices.indexOf(d.n) };
+  }
+  // numeral recognition — distractors only from the OTHER 9 numeral defs, never a count-kind def
+  const samekind = pool.filter(x => x.kind === "numeral");
+  const distractors = simpleDistractors(samekind, d, arity - 1);
+  const choices = shuffle([d, ...distractors]);
+  return { label:d.label, b:d.age, c:1/choices.length, s:4, zh:true,
+    prompt:`找到数字${d.hanzi}！点一点！`, say:`找到数字${d.hanzi}！点一点！`,
+    subtitle:`Find the number ${d.n}! Tap it!`,
+    explain:`这是数字${d.hanzi}!`, explainSubtitle:`This is the number ${d.n}!`,
+    tiles: choices.map(c => `<span class="txt" style="color:#1d6fd6">${c.hanzi}</span>`), correct: choices.indexOf(d) };
+}
+
+// ---- words: ~60 items across the 6 immersion-preschool themes in the task (food/drink,
+// clothing, classroom, animals, body, family), emoji reused from the same everyday-object
+// glyphs the English banks already use where a natural match exists. `age` here is a
+// first-year-immersion EXPOSURE rank (low = basics kids hear constantly — family, common food;
+// high = classroom/wardrobe-specific vocabulary like 外套/书包), never a developmental-age
+// claim. Routed through the SAME filterEmojiSupported() bank-load-time tofu filter every other
+// emoji bank in this file uses (see top-of-file comment) — a device where one of these glyphs
+// renders as tofu silently drops just that word from the pool, same graceful-degradation
+// contract as VOCAB_WORDS/FUNCTION_DEFS/etc. Every emoji below is used by exactly one word (no
+// two words share a picture — verified by inspection — so no item/distractor pairing can ever
+// be visually ambiguous).
+let ZH_WORD_DEFS = [
+  // food & drink (15)
+  ["水","water","💧",15,"food"],["牛奶","milk","🥛",17,"food"],["苹果","apple","🍎",18,"food"],
+  ["香蕉","banana","🍌",19,"food"],["米饭","rice","🍚",21,"food"],["鸡蛋","egg","🥚",22,"food"],
+  ["面条","noodles","🍜",24,"food"],["饼干","cookie","🍪",25,"food"],["面包","bread","🍞",27,"food"],
+  ["草莓","strawberry","🍓",29,"food"],["橙子","orange","🍊",31,"food"],["葡萄","grapes","🍇",33,"food"],
+  ["果汁","juice","🧃",35,"food"],["西瓜","watermelon","🍉",37,"food"],["蛋糕","cake","🎂",40,"food"],
+  // animals (10)
+  ["狗","dog","🐶",16,"animals"],["猫","cat","🐱",17,"animals"],["鱼","fish","🐟",19,"animals"],
+  ["鸟","bird","🐦",20,"animals"],["兔子","rabbit","🐰",23,"animals"],["猪","pig","🐷",25,"animals"],
+  ["牛","cow","🐮",26,"animals"],["马","horse","🐴",28,"animals"],["羊","sheep","🐑",30,"animals"],
+  ["熊猫","panda","🐼",32,"animals"],
+  // family (7)
+  ["妈妈","mom","👩",14,"family"],["爸爸","dad","👨",14,"family"],["宝宝","baby","👶",16,"family"],
+  ["哥哥","older brother","👦",24,"family"],["姐姐","older sister","👧",25,"family"],
+  ["爷爷","grandpa","👴",30,"family"],["奶奶","grandma","👵",30,"family"],
+  // body (8)
+  ["手","hand","✋",18,"body"],["脚","foot","🦶",19,"body"],["眼睛","eyes","👀",21,"body"],
+  ["鼻子","nose","👃",22,"body"],["嘴巴","mouth","👄",23,"body"],["耳朵","ear","👂",24,"body"],
+  ["牙齿","teeth","🦷",33,"body"],["头发","hair","💇",36,"body"],
+  // clothing (10)
+  ["鞋子","shoes","👟",26,"clothing"],["帽子","hat","🧢",28,"clothing"],["袜子","socks","🧦",29,"clothing"],
+  ["裤子","pants","👖",33,"clothing"],["衬衫","shirt","👕",35,"clothing"],["裙子","skirt","👗",37,"clothing"],
+  ["手套","gloves","🧤",39,"clothing"],["围巾","scarf","🧣",44,"clothing"],["靴子","boots","👢",46,"clothing"],
+  ["外套","coat","🧥",50,"clothing"],
+  // classroom (10)
+  ["书","book","📖",34,"classroom"],["门","door","🚪",36,"classroom"],["剪刀","scissors","✂️",38,"classroom"],
+  ["蜡笔","crayon","🖍️",40,"classroom"],["椅子","chair","🪑",41,"classroom"],["铅笔","pencil","✏️",42,"classroom"],
+  ["尺子","ruler","📏",43,"classroom"],["窗户","window","🪟",44,"classroom"],
+  ["老师","teacher","🧑‍🏫",45,"classroom"],["书包","backpack","🎒",52,"classroom"],
+];
+ZH_WORD_DEFS = filterEmojiSupported(ZH_WORD_DEFS, d => d[2], 40); // floor 40/60 — see top-of-file tofu comment
+function zhWordDistractors(pool, target, n){
+  const others = pool.filter(x => x.label !== target.label);
+  let near = others.filter(x => Math.abs(x.age - target.age) <= 14);
+  if (near.length < n) near = others;
+  return shuffle(near).slice(0, n);
+}
+function makeZhWordItem(d, pool, arity){
+  const distractors = zhWordDistractors(pool, d, arity - 1);
+  const choices = shuffle([d, ...distractors]);
+  return { label:d.word, b:d.age, c:1/arity, s:4, zh:true,
+    prompt:`${d.word}在哪里？点一点！`, say:`${d.word}在哪里？点一点！`,
+    subtitle:`Where is the ${d.english}? Point!`,
+    explain:`这是${d.word}!`, explainSubtitle:`This is the ${d.english}!`,
+    tiles: choices.map(c => emojiTile(c.emoji)), correct: choices.indexOf(d) };
+}
+
 const DOMAINS = [
   { key:"vocabulary", label:"Words", emoji:"🐶", section:"Words & Sounds",
     defs: VOCAB_WORDS.map(([w,e,a,th]) => ({ label:w, word:w, emoji:e, age:a, theme:th })),
@@ -2275,6 +2435,25 @@ const DOMAINS = [
   { key:"phono", label:"Letter Sounds & Rhymes", emoji:"🎵", section:"Words & Sounds",
     defs: PHONO_DEFS,
     make: makePhonoItem },
+  // ---- v13: MANDARIN (中文) — three domains, appended at the end per the same "never disturb
+  // existing DOMAINS[] positions" rule every prior addition (v4/v7) followed. `lang:"zh"` is the
+  // one flag that fans out to every zh-aware call site in this file (grep it) — arcade exclusion,
+  // theta-seed exclusion, no-age-language exclusion, subtitle rendering, Mandarin-safe audio.
+  // `spokenLabel` is English-only (dom.label is bilingual, for the picker tile) — see
+  // collectAllSayStrings()/beginDomain()'s "Now let's play with X!" line, which must never try to
+  // speak a hanzi label through the English voice.
+  { key:"zhColors", label:"颜色 Colors", spokenLabel:"Chinese Colors", emoji:"🟥",
+    section:"中文 Mandarin", lang:"zh",
+    defs: ZH_COLOR_DEFS.map(([name,english,hex,b]) => ({ label:name, name, english, hex, age:b })),
+    make: makeZhColorItem },
+  { key:"zhNumbers", label:"数字 Numbers", spokenLabel:"Chinese Numbers", emoji:"🔢",
+    section:"中文 Mandarin", lang:"zh",
+    defs: ZH_NUMBER_DEFS,
+    make: makeZhNumberItem },
+  { key:"zhWords", label:"词语 Words", spokenLabel:"Chinese Words", emoji:"🐼",
+    section:"中文 Mandarin", lang:"zh",
+    defs: ZH_WORD_DEFS.map(([hanzi,english,emoji,b,theme]) => ({ label:hanzi, word:hanzi, english, emoji, age:b, theme })),
+    make: makeZhWordItem },
 ];
 
 /* =====================================================================
@@ -2370,9 +2549,12 @@ function collectAllSayStrings(){
   add(EVERYTHING_INTERLUDE_LINE);
 
   // ---- domain intro / celebration, one per DOMAINS[] entry (beginDomain/domainDone) ----
+  // v13: `dom.spokenLabel || dom.label` — a Mandarin domain's `label` is bilingual for the
+  // PICKER tile ("颜色 Colors"), which would read as a mangled mixed-language sentence if spoken
+  // by the English voice; `spokenLabel` (English-only) is what's actually enumerated/spoken here.
   for (const dom of DOMAINS){
-    add(`Now let's play with ${dom.label}!`);
-    add(`Hooray! Great job with ${dom.label}!`);
+    add(`Now let's play with ${dom.spokenLabel || dom.label}!`);
+    add(`Hooray! Great job with ${dom.spokenLabel || dom.label}!`);
   }
 
   // ---- per-item `say` + reveal text ("This one is the X!"), walking each
@@ -2389,6 +2571,10 @@ function collectAllSayStrings(){
   // word is bundled via the recordable-cue inventory below).
   const ARITY = 4;
   for (const dom of DOMAINS){
+    // v13: Mandarin domains are bundled by a SEPARATE enumeration (collectMandarinSayStrings(),
+    // via tools/gen_audio_zh.sh + the Edge-TTS Mandarin voice) — never mixed into this English
+    // (`say`/macOS `Samantha`) bundle, which would mispronounce hanzi text.
+    if (dom.lang === "zh") continue;
     if (dom.key === "seekfind"){
       // renderSeekfindRound's item shape, replicated here (see its `it.say`/
       // reveal call) — every SEEKFIND_SCENES word, not dom.defs (empty for
@@ -2436,6 +2622,33 @@ function collectAllSayStrings(){
   // automatically, zero edits needed here.
   for (const group of collectAllCueGroups()) for (const cue of group.cues) add(cueNaturalText(cue.key));
 
+  return [...set].sort();
+}
+
+// v13: MANDARIN audio bundle — the SAME "pure enumeration, walk each domain's own defs through
+// its own make()" pattern as collectAllSayStrings() above, scoped to ONLY the `lang==="zh"`
+// DOMAINS[] entries, feeding tools/gen_audio_zh.sh (Edge-TTS zh-CN-YunxiaNeural) instead of
+// gen_audio.sh (macOS `say`/Samantha, English). Kept as a genuinely separate function (not a
+// branch inside collectAllSayStrings()) so the two audio pipelines can never accidentally cross:
+// a Mandarin string can never land in the English manifest and vice versa, by construction —
+// each function only ever walks its own subset of DOMAINS. Manifest KEYS are the exact hanzi
+// strings spoken (it.say/it.explain), which can never collide with an English manifest key (see
+// AUDIO_MANIFEST's single flat namespace) since hanzi and English `say`/`explain` strings are
+// never textually identical.
+function collectMandarinSayStrings(){
+  const set = new Set();
+  const add = (s) => { if (s) set.add(s); };
+  MANDARIN_PRAISE_LINES.forEach(add);
+  const ARITY = 4;
+  for (const dom of DOMAINS){
+    if (dom.lang !== "zh" || !dom.make) continue;
+    for (const d of dom.defs){
+      let it;
+      try { it = dom.make(d, dom.defs, ARITY); } catch(e){ continue; } // defensive only — every real def succeeds
+      add(it.say);
+      add(it.explain);
+    }
+  }
   return [...set].sort();
 }
 
@@ -2711,6 +2924,26 @@ function playBundledText(text, cb, onMiss){
   playAudioClip(audio, cb, false).then(started => { if (!started) onMiss(); });
 }
 
+// v13: Mandarin-domain-safe speak — bundled clip ONLY, deliberately never falls through to live
+// speechSynthesis the way speak()/sayCue() do for every English domain. speakTTS()'s `voice`
+// picker always selects an ENGLISH system voice (Samantha/Karen/Ava/...); handing it hanzi text
+// would mispronounce every word, exactly the bad fallback the task calls out. A missing bundled
+// clip (stale bundle — a string not yet covered by tools/gen_audio_zh.sh) instead advances the
+// flow SILENTLY: the on-screen hanzi + English subtitle (it.subtitle/it.explainSubtitle, see
+// renderItem()/tapTile's reveal branch) still carry the meaning with no audio, which beats a
+// wrong-voice mispronunciation. Same "flow always advances, muted or not" contract speak() has.
+function speakZh(text, cb){
+  if (state.muted){ if (cb) setTimeout(cb, Math.max(600, (text||"").length*90)); return; }
+  playBundledText(text, cb, () => { if (cb) setTimeout(cb, 500); });
+}
+// v13: the ONE reveal/explanation call site every second-miss/shrug/comeback-wrong branch below
+// routes through (tapTile/tapShrug/resolveComeback) — picks speakZh vs speak() based on it.zh, so
+// none of those call sites need their own Mandarin branch.
+function speakExplain(it, cb){
+  const text = it.explain || it.revealText || `This one is the ${it.label}!`;
+  if (it.zh) speakZh(text, cb); else speak(text, cb);
+}
+
 // Bug fix (2026-08-19): whichever session currently "owns" the item on screen — an active
 // arcade session (state.arcade/state.everything, each carrying its OWN .currentItem, never
 // state.currentItem — see their own comments) or, when neither is active, scored play
@@ -2743,6 +2976,8 @@ function sayItem(it, cb){
     step(0);
     return;
   }
+  // v13: Mandarin items never carry saySegments/cueKey — bundled-clip-only, see speakZh()'s comment.
+  if (it.zh){ speakZh(it.say, cb); return; }
   sayCue(it.cueKey, it.say, cb);
 }
 function sayCue(cueKey, fallbackText, cb){
@@ -2988,6 +3223,13 @@ function priorFor(domainKey, age){
   // 12/12 trials while keeping a true-theta-30-at-age-30 control tight (no wild jumps,
   // theta in [27,34] across 12 trials) — sigma>=12 started producing occasional wild
   // low-ability jumps (e.g. sigma=14 hit 49 on one low-ability trial). See NOTES.md v5 testing.
+  // v13: Mandarin domains (key prefix "zh") never fall back to chronological age — the b-values
+  // are exposure-relative, not age-relative, so an immersion beginner starts at a low FIXED prior
+  // regardless of how old they are. The session-history branch above already covers "seed from
+  // prior Mandarin sessions" generically (keyed by domainKey, same as every other domain) since
+  // Mandarin sessions only ever write to a Mandarin domainKey — this only changes the
+  // zero-history fallback.
+  if (domainKey.indexOf("zh") === 0) return { mu: MANDARIN_START_THETA, sigma: 10 };
   return { mu: age, sigma: 10 };
 }
 function domainShouldStop(ds){
@@ -4257,9 +4499,12 @@ function tapShrug(){
   queueComeback(it, it.seekfind ? "seek" : (it.body ? "body" : "tile")); // v12: req 6 — see its own comment
   const consecShrugs = state.domain.consecShrugs || 0;
   ttsCancel(); stopClip(); // sanctioned interrupt path, same as skip/doesn't-know/map-out used to be
-  const explainText = it.explain || it.revealText || `This one is the ${it.label}!`;
+  setSubtitle(it.zh ? it.explainSubtitle : null); // v13: swap the prompt subtitle for the reveal's English translation
   setTimeout(() => {
-    speak(explainText, () => {
+    // v13: speakExplain picks speakZh (bundled-only) vs speak() based on it.zh — the normalizer/
+    // end lines below stay plain English speak() in every domain, Mandarin included, per the
+    // task ("shrug mechanics apply unchanged").
+    speakExplain(it, () => {
       if (!state.domain) return; // map-out mid-explanation guard
       if (consecShrugs >= 3){
         speak(pick(SHRUG_END_LINES), () => { if (state.domain) domainDone(); });
@@ -4587,10 +4832,21 @@ function playEverything(){
 // live to act on yet) up front, before the screen is even shown — so there is no stale frame to
 // paint. renderItem() restores board/seekBoard visibility and the two controls once it actually
 // has a new item to show.
+// v13: small grey English translation line under the big hanzi #promptText — Mandarin domains
+// only (it.subtitle/it.explainSubtitle; every other domain's item has neither, so this is a
+// no-op there). Centralized here so renderItem/tapTile's reveal branch/tapShrug/
+// renderComebackItem all update it the same way.
+function setSubtitle(text){
+  const el = $("promptSubtitle");
+  if (!el) return;
+  if (text){ el.textContent = text; el.style.display = "block"; }
+  else { el.textContent = ""; el.style.display = "none"; }
+}
 function clearBoardUI(){
   $("board").innerHTML = ""; $("board").style.display = "none"; $("board").classList.remove("compact");
   $("seekBoard").innerHTML = ""; $("seekBoard").style.display = "none";
   $("promptText").textContent = "";
+  setSubtitle(null); // v13
   $("categoryAnchors").innerHTML = ""; $("categoryAnchors").style.display = "none";
   cancelShrugTimer(); // v12: a prior domain's shrug timer must not tick through the "Now let's play with X!" narration window
   hideShrugBtn();
@@ -4633,7 +4889,7 @@ function beginDomain(idx){
   // during "Play everything!" too (tapping it there converts the run to picker-mode).
   $("mapBtn").style.display = "inline-block";
   show("gameScreen");
-  speak(`Now let's play with ${dom.label}!`, renderItem);
+  speak(`Now let's play with ${dom.spokenLabel || dom.label}!`, renderItem); // v13: see spokenLabel's own comment
 }
 
 function nextDomain(){
@@ -4742,6 +4998,7 @@ function renderComebackItem(){
   show("gameScreen");
   state.currentItem = it; // so 🔊 repeatPrompt() replays THIS item, not a stale scored one — see activeItemHolder()
   $("promptText").textContent = "Remember this one? " + it.prompt;
+  setSubtitle(it.subtitle); // v13: Mandarin domains only — "Remember this one?" itself stays English/unsubtitled, per the task's "comeback mechanics apply unchanged"
   if (entry.kind === "seek"){
     const sceneDef = SEEKFIND_SCENES.find(s => s.words.includes(it.label));
     const scene = { def: sceneDef, slots: seekfindSlots(sceneDef.words.length) };
@@ -4802,8 +5059,8 @@ function resolveComeback(it, correct, revealFn){
     });
   } else {
     chimeTry();
-    const explainText = it.explain || it.revealText || `This one is the ${it.label}!`;
-    speak(explainText, () => {
+    setSubtitle(it.zh ? it.explainSubtitle : null); // v13: swap to the reveal's English translation
+    speakExplain(it, () => {
       setTimeout(() => { if (state.domain === ds) renderComebackItem(); }, 300);
     });
   }
@@ -4834,7 +5091,7 @@ function finishDomainCelebration(){
     $("interludeBtn").onclick = () => showPicker();
     show("interlude");
     fanfare(); confetti(24);
-    speak(`Hooray! Great job with ${dom.label}!`);
+    speak(`Hooray! Great job with ${dom.spokenLabel || dom.label}!`); // v13: see spokenLabel's own comment
     return;
   }
   // "Play everything!" — v9.5: firstPlayableIndex() skips any locked domain at its turn
@@ -4850,7 +5107,7 @@ function finishDomainCelebration(){
   $("interludeBtn").onclick = () => nextDomain(); // nextDomain() recomputes the same firstPlayableIndex — stays in sync with the preview above
   show("interlude");
   fanfare(); confetti(24);
-  speak(`Hooray! Great job with ${dom.label}!`);
+  speak(`Hooray! Great job with ${dom.spokenLabel || dom.label}!`); // v13: see spokenLabel's own comment
 }
 
 function progressPct(ds){
@@ -4937,6 +5194,7 @@ function renderItem(){
   const it = dom.make(raw, dom.defs, arity);
   state.currentItem = it; state.locked = false; state.firstTry = true;
   $("promptText").textContent = it.prompt;
+  setSubtitle(it.subtitle); // v13: Mandarin domains only — no-op (hides) for every other domain's item, which has no .subtitle
   if (it.anchors){
     // v4 (mod 6): categories — show the 3 theme anchors above the tile grid
     $("categoryAnchors").innerHTML = `<div class="anchor-label">These go together!</div><div class="anchor-row">${it.anchors.map(e => `<span>${e}</span>`).join("")}</div>`;
@@ -5148,7 +5406,11 @@ function tapTile(i, tileEl){
     if (state.firstTry){ addStar(); confetti(8); }
     recordResult(it, state.firstTry);
     $("mascot").classList.remove("bounce"); void $("mascot").offsetWidth; $("mascot").classList.add("bounce");
-    speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]));
+    // v13: within a Mandarin domain, ~half the time speak a Mandarin praise line (bundled clip
+    // only, via speakZh) instead of the usual English one — every other domain is byte-identical
+    // to before (this branch is never entered when !it.zh).
+    if (it.zh && Math.random() < 0.5) speakZh(pick(MANDARIN_PRAISE_LINES));
+    else speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]));
     setTimeout(()=>{ renderItem(); }, 1300);
   } else {
     // v12: wrong-answer destigmatizing (req 3) — gently dim the tapped tile (no shake, no red
@@ -5161,7 +5423,9 @@ function tapTile(i, tileEl){
     braveGuess();
     if (state.firstTry){
       // remediation tap — not scored; child gets another try. Praise variants replace the old
-      // plain "Good try! Look again!" — see BRAVE_GUESS_LINES.
+      // plain "Good try! Look again!" — see BRAVE_GUESS_LINES. v13: brave-guess lines stay
+      // English in every domain, Mandarin included — "Shrug/brave-guess/comeback mechanics apply
+      // unchanged" per the task.
       state.firstTry = false;
       speak(pick(BRAVE_GUESS_LINES));
     } else {
@@ -5173,7 +5437,8 @@ function tapTile(i, tileEl){
       queueComeback(it, "tile"); // v12: req 6 — see its own comment
       tiles[it.correct].classList.add("reveal");
       tiles.forEach((t,j)=>{ if(j!==it.correct) t.classList.add("dim"); });
-      speak(it.explain || it.revealText || `This one is the ${it.label}!`);
+      setSubtitle(it.zh ? it.explainSubtitle : null); // v13: swap the prompt subtitle for the reveal's English translation
+      speakExplain(it);
       setTimeout(()=>{ renderItem(); }, 1600);
     }
   }
@@ -5324,6 +5589,10 @@ function endGame(){
   for (const dom of DOMAINS){
     const fd = state.finalDomains[dom.key];
     if (!fd) continue;
+    // v13: Mandarin domains never contribute an age-equivalent bar or the overall median below
+    // (ageEqs) — English developmental norms don't apply to a from-zero immersion program. They
+    // get their OWN raw-theta summary card instead — see mandarinCard below.
+    if (dom.lang === "zh") continue;
     ageEqs.push(fd.theta);
     const pct = Math.min(100, Math.max(0, fd.theta / maxScale * 100));
     const chronoPct = Math.min(100, age / maxScale * 100);
@@ -5339,6 +5608,22 @@ function endGame(){
     note.style.cssText = "font-size:11px;color:#a99;margin:-4px 0 8px 118px";
     note.textContent = `around the ${pctBand}th percentile band for his age (±${fd.sd}mo, ${fd.n} items)`;
     bars.appendChild(note);
+  }
+
+  // v13: Mandarin — its own card, RAW theta + a "words explored" framing, explicitly no
+  // age-equivalent/percentile language anywhere (see the top-of-Mandarin-section comment above
+  // ZH_COLOR_DEFS for why: English norms don't apply to a from-zero immersion program).
+  const mandarinDoms = DOMAINS.filter(d => d.lang === "zh" && state.finalDomains[d.key]);
+  const mCard = $("mandarinResultsCard"), mBars = $("mandarinBars");
+  if (mandarinDoms.length){
+    mBars.innerHTML = mandarinDoms.map(dom => {
+      const fd = state.finalDomains[dom.key];
+      return `<div class="bar-row"><div class="lbl">${dom.emoji} ${dom.label}</div>
+        <div class="bar-val">level ${fd.theta} · ${fd.n} word${fd.n===1?"":"s"} this session</div></div>`;
+    }).join("");
+    mCard.style.display = "block";
+  } else {
+    mCard.style.display = "none";
   }
 
   // overall
@@ -5363,7 +5648,10 @@ function endGame(){
   // v12: comeback-card log entries ({comeback:true}, see resolveComeback()) get their own 🔁
   // prefix ahead of the usual correct/wrong glyph — visually distinct from a scored attempt,
   // never confusable with ✅/❌/❌ᴰᴷ/⏭.
-  const fmtItem = r => `${r.comeback ? "🔁 " : ""}${r.skipped ? "⏭" : (r.dontKnow ? "❌ᴰᴷ" : (r.correct ? "✅" : "❌"))} ${r.label} <span style="color:#bbb">(${r.b}mo)</span>`;
+  // v13: `isZh` suppresses the "(Xmo)" suffix — b here is an exposure rank, not months, and
+  // showing it with a "mo" unit would read as age-equivalent language (the thing this domain is
+  // explicitly excluded from anywhere in the UI).
+  const fmtItem = (r, isZh) => `${r.comeback ? "🔁 " : ""}${r.skipped ? "⏭" : (r.dontKnow ? "❌ᴰᴷ" : (r.correct ? "✅" : "❌"))} ${r.label}${isZh ? "" : ` <span style="color:#bbb">(${r.b}mo)</span>`}`;
   for (const dom of DOMAINS){
     const fd = state.finalDomains[dom.key];
     if (!fd) continue;
@@ -5376,9 +5664,9 @@ function endGame(){
         (byTheme[theme] = byTheme[theme] || []).push(r);
       });
       det.innerHTML += `<p><b>${dom.label}:</b></p>` + Object.keys(byTheme).sort().map(t =>
-        `<p style="margin:2px 0 2px 14px;font-size:13px"><i>${t}:</i> ${byTheme[t].map(fmtItem).join(" · ")}</p>`).join("");
+        `<p style="margin:2px 0 2px 14px;font-size:13px"><i>${t}:</i> ${byTheme[t].map(r => fmtItem(r, false)).join(" · ")}</p>`).join("");
     } else {
-      det.innerHTML += `<p><b>${dom.label}:</b> ` + fd.items.map(fmtItem).join(" · ") + `</p>`;
+      det.innerHTML += `<p><b>${dom.label}:</b> ` + fd.items.map(r => fmtItem(r, dom.lang === "zh")).join(" · ") + `</p>`;
     }
   }
 
@@ -5418,6 +5706,7 @@ function showProgress(){
   const p = activeProfile(); // v11: title shows the active child's name
   $("progressTitle").textContent = p && p.name ? `📈 ${p.name}'s progress over time` : "📈 Progress over time";
   renderDomainCharts();
+  renderMandarinCharts(); // v13
   renderVocabChart();
   renderSessionList();
   renderStorageDiagnostic();
@@ -5445,6 +5734,7 @@ function renderDomainCharts(){
   const wrap = $("domainCharts");
   wrap.innerHTML = "";
   for (const dom of DOMAINS){
+    if (dom.lang === "zh") continue; // v13: Mandarin gets its own cluster — see renderMandarinCharts()
     const pts = sessions.filter(s => s.domains && s.domains[dom.key])
       .map(s => ({ x: s.ageMonths, y: s.domains[dom.key].theta }));
     if (!pts.length) continue;
@@ -5453,6 +5743,32 @@ function renderDomainCharts(){
     wrap.appendChild(card);
   }
   if (!wrap.children.length) wrap.innerHTML = `<p class="subtitle">Play a session to start tracking progress!</p>`;
+}
+// v13: Mandarin — its own chart cluster, RAW theta trend (session count on the x-axis, not
+// chronological age — a Mandarin domain's b-values are exposure-relative, so plotting them
+// against age would misleadingly imply an age norm exists). Reuses domainChartSVG() verbatim
+// (it's a plain line+band renderer, no age-comparison text baked into the SVG itself — the
+// age-equivalent FRAMING lives entirely in the surrounding card captions, which differ between
+// #domainCharts' card and this one) — words-known-ish framing via the n-count caption below each
+// chart instead of a percentile/age readout.
+function renderMandarinCharts(){
+  const sessions = loadSessions();
+  const wrap = $("mandarinCharts");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  for (const dom of DOMAINS){
+    if (dom.lang !== "zh") continue;
+    const entries = sessions.filter(s => s.domains && s.domains[dom.key]);
+    if (!entries.length) continue;
+    const pts = entries.map((s, i) => ({ x: i + 1, y: s.domains[dom.key].theta }));
+    const lastN = entries[entries.length - 1].domains[dom.key].n || 0;
+    const card = document.createElement("div");
+    card.innerHTML = `<div style="font-weight:700;font-size:13px;margin-bottom:4px">${dom.emoji} ${dom.label}</div>`
+      + domainChartSVG(pts)
+      + `<div style="font-size:11px;color:#a99;margin-top:4px">x-axis = session number · last session covered ${lastN} word${lastN===1?"":"s"}</div>`;
+    wrap.appendChild(card);
+  }
+  if (!wrap.children.length) wrap.innerHTML = `<p class="subtitle">Play a Mandarin session to start tracking progress!</p>`;
 }
 function renderVocabChart(){
   const sessions = loadSessions().filter(s => s.vocabEstimate != null);
@@ -5476,13 +5792,18 @@ function renderSessionList(){
   const wrap = $("sessionList");
   if (!sessions.length){ wrap.innerHTML = `<p class="subtitle">No sessions yet.</p>`; return; }
   wrap.innerHTML = sessions.map(s => {
+    // v13: Mandarin domains show a raw "level" (no "mo" unit — b/theta here is an exposure rank,
+    // not months; showing "mo" would read as age-equivalent language) — see fmtItem()'s own note
+    // in endGame() for the identical reasoning applied to the Results screen's item detail.
     const domSummary = Object.entries(s.domains || {}).map(([k,d]) => {
       const dom = DOMAINS.find(x => x.key === k);
-      return `${dom ? dom.emoji : ""} ${dom ? dom.label : k}: ${d.theta}mo`;
+      const isZh = dom && dom.lang === "zh";
+      return `${dom ? dom.emoji : ""} ${dom ? dom.label : k}: ${isZh ? `level ${d.theta}` : `${d.theta}mo`}`;
     }).join(" · ");
     const detail = Object.entries(s.domains || {}).map(([k,d]) => {
       const dom = DOMAINS.find(x => x.key === k);
-      const items = (d.items || []).map(r => `${r.comeback ? "🔁 " : ""}${r.skipped ? "⏭" : (r.dontKnow ? "❌ᴰᴷ" : (r.correct ? "✅" : "❌"))} ${r.label} (${r.b}mo)`).join(" · ");
+      const isZh = dom && dom.lang === "zh";
+      const items = (d.items || []).map(r => `${r.comeback ? "🔁 " : ""}${r.skipped ? "⏭" : (r.dontKnow ? "❌ᴰᴷ" : (r.correct ? "✅" : "❌"))} ${r.label}${isZh ? "" : ` (${r.b}mo)`}`).join(" · ");
       return `<p><b>${dom ? dom.label : k}:</b> ${items}</p>`;
     }).join("");
     const dateStr = new Date(s.date).toLocaleDateString();
@@ -6387,7 +6708,9 @@ function drawFromEverythingBag(sess, domainKey){
 }
 function pickEverythingDomain(sess){
   if (!sess.domainOrder || sess.domainPos >= sess.domainOrder.length){
-    sess.domainOrder = shuffle(DOMAINS.map(d => d.key));
+    // v13: Mandarin domains are excluded from every arcade mode ("keep separation for now", per
+    // the task) — Everything Mix draws from every OTHER DOMAINS[] entry only.
+    sess.domainOrder = shuffle(DOMAINS.filter(d => d.lang !== "zh").map(d => d.key));
     sess.domainPos = 0;
   }
   return sess.domainOrder[sess.domainPos++];
