@@ -45,7 +45,17 @@ function stubEl() {
   return el;
 }
 const sandbox = {
-  console,
+  // Bug fix: index.html's OWN top-level code logs a diagnostic via console.log (the emoji
+  // tofu-detection sweep, "N glyphs checked, M unsupported..." — see its own comment there) —
+  // with the real `console` passed straight through, that landed on STDOUT, ahead of (and thus
+  // corrupting) the actual JSON payload this script writes via process.stdout.write below.
+  // Harmless when run interactively (console.error below also goes to a separate stream), but
+  // fatal for gen_audio.sh's `node tools/dump_say_strings.js > "$STRINGS_JSON"` pipeline, whose
+  // downstream `JSON.parse(fs.readFileSync(...))` would choke on the leading non-JSON line.
+  // Routes every sandboxed console.* call to the real console.error (stderr) instead — this
+  // script's own diagnostics already use console.error, so stdout is now reserved exclusively
+  // for the one process.stdout.write call at the bottom.
+  console: { log: (...a) => console.error(...a), warn: (...a) => console.error(...a), error: (...a) => console.error(...a), info: (...a) => console.error(...a), assert: (...a) => console.error(...a), debug: (...a) => console.error(...a) },
   document: {
     getElementById: () => stubEl(),
     querySelectorAll: () => [],
@@ -55,6 +65,22 @@ const sandbox = {
   localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
   navigator: { userAgent: 'node' },
   Math, JSON, Array, Object, Set, Map, String, Number, Date, RegExp, Promise,
+  // Bug fix: v11's family-sync code has a bare top-level `setInterval(...)` call (polling
+  // renderSyncStatus) — not inside init()'s IIFE, so it executes during mere top-level
+  // evaluation of the script, same as every *_DEFS array/function declaration this dumper
+  // actually needs. Node's `vm` sandbox has no timer globals by default, so this threw
+  // "setInterval is not defined" and made the WHOLE script fail to evaluate (not just that one
+  // statement) — collectAllSayStrings() itself never even got defined.
+  // Real Node timer fns (not plain no-ops), so a call site's return value/clearX() pairing still
+  // behaves — but every handle is IMMEDIATELY .unref()'d so a real (never-fired-in-this-dumper's-
+  // lifetime) interval/timeout can't keep the process alive after the synchronous top-level
+  // evaluation below finishes (first attempt at this fix used real un-unref'd timers and hung
+  // the dumper indefinitely — setInterval's handle blocks Node's event loop from ever going
+  // idle by design).
+  setInterval: (...a) => { const h = setInterval(...a); h.unref && h.unref(); return h; },
+  clearInterval,
+  setTimeout: (...a) => { const h = setTimeout(...a); h.unref && h.unref(); return h; },
+  clearTimeout,
 };
 sandbox.window = sandbox; // `"speechSynthesis" in window` etc. all resolve against this same stub object
 
