@@ -42,22 +42,26 @@
      this is the primary "switch games" control for a parent mid-session, per the task. */
   #mapBtn { background: none; border: none; font-size: 32px; cursor: pointer; padding: 6px; line-height: 1; min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
   #quitBtn { background: none; border: 2px solid var(--tile-border); border-radius: 12px; padding: 6px 12px; font-size: 14px; color: #999; cursor: pointer; }
-  /* ---------- skip (parent-facing, deliberately unobtrusive — not a kid-attractor) ---------- */
-  .skip-btn { background: none; border: none; font-size: 12px; color: #b8ab90; cursor: pointer; padding: 4px 10px; opacity: .7; touch-action: manipulation; }
-  .skip-btn:active { opacity: 1; }
-  /* ---------- v9.5: parent answer timer (Feature 1) ----------
-     #timerBtn is a .skip-btn like Skip/Doesn't-know (same unobtrusive parent-facing styling);
-     .active just tints it while a countdown is live, no layout change. #timerBar is a thin,
-     deliberately calm shrinking bar under the prompt — see startAnswerTimer()'s own comment for
-     why the shrink itself is a plain CSS width transition rather than per-frame JS. */
-  #timerBtn.active { color: var(--accent2); opacity: 1; }
-  /* align-self:stretch is load-bearing, not cosmetic — #timerBar is a flex ITEM of .screen
-     (align-items:center), so without it the bar shrink-to-fits to its own (empty) content
-     instead of the true available width, same root cause NOTES.md v9.3 documents for
-     #categoryAnchors: the width:0%/width:100% toggle in startAnswerTimer()/cancelAnswerTimer()
-     would resolve against a 0px containing block and never visibly animate. */
-  #timerBar { height: 4px; margin: 0 6px 6px; border-radius: 2px; background: var(--accent2); width: 0%; opacity: 0; transition: none; align-self: stretch; }
-  #timerBar.running { opacity: 1; }
+  /* ---------- v12: SHRUG FLOW button (replaces v9.5's parent-facing Skip/Doesn't-know/answer-
+     timer controls in SCORED play — see tapShrug()/armShrugTimer()'s own comment). KID-sized (not
+     the old unobtrusive .skip-btn treatment — this one's meant to be noticed and tapped by the
+     child, per the task), hidden until armShrugTimer()'s ~12s callback adds .show. The fade-in +
+     ONE gentle pulse are two separate animations chained by duration (pulse starts as soon as
+     opacity has faded in) rather than one combined keyframe, so the pulse cleanly runs exactly
+     once (animation-iteration-count:1) instead of needing extra state to stop a looping one. */
+  #shrugBtn {
+    display: none; align-items: center; gap: 6px; font-size: 17px; font-weight: 700;
+    background: #fff6ea; border: 3px solid var(--accent); border-radius: 18px; color: var(--ink);
+    padding: 8px 16px; cursor: pointer; touch-action: manipulation; opacity: 0;
+  }
+  #shrugBtn.show { animation: shrugFadeIn .4s ease-out forwards, shrugPulse .6s ease-in-out .4s 1; }
+  @keyframes shrugFadeIn { from { opacity: 0; transform: scale(.8); } to { opacity: 1; transform: scale(1); } }
+  @keyframes shrugPulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.12)} }
+  /* ---------- v12: "brave guess" chip (req 3) — lives next to #stars, own counter, pop lighter
+     than addStar()'s confetti. Hidden until the first genuine wrong attempt this session. */
+  #braveChip { display: none; align-items: center; gap: 3px; font-size: 18px; font-weight: 800; color: #8e5bd1; }
+  #braveChip.pop { animation: bravePop .4s ease-out; }
+  @keyframes bravePop { 0%{transform:scale(1)} 50%{transform:scale(1.25)} 100%{transform:scale(1)} }
   /* ---------- categories (Feature 6): anchor strip above the tile grid ---------- */
   /* v9.3 fix: #categoryAnchors is a flex ITEM of .screen (align-items:center), so without an
      explicit width it shrink-to-fits to its own CONTENT'S natural size instead of the true
@@ -146,10 +150,10 @@
      could convert into a false second-miss without ever looking at the new
      target. See NOTES.md v3 adversarial-review fix. */
   .seek-obj.found { opacity: .5; animation: none; pointer-events: none; }
-  .seek-obj.wrong { animation: seekshake .45s; }
+  /* v12: wrong-answer destigmatizing (req 3) — gentle dim, no shake, in every mode. */
+  .seek-obj.dim { opacity: .35; animation: none; }
   .seek-obj.reveal { animation: pop .5s; filter: drop-shadow(0 0 0 var(--good)) drop-shadow(0 2px 2px rgba(0,0,0,.12)); outline: 4px solid var(--good); outline-offset: 4px; border-radius: 50%; }
   @keyframes seekbob { 0%,100%{transform:translate(-50%,-50%) translateY(0)} 50%{transform:translate(-50%,-50%) translateY(-8px)} }
-  @keyframes seekshake { 0%,100%{transform:translate(-50%,-50%) translateX(0)} 20%,60%{transform:translate(-50%,-50%) translateX(-8px)} 40%,80%{transform:translate(-50%,-50%) translateX(8px)} }
   /* ---------- picker (Feature 1) ---------- */
   #pickerScreen { justify-content: flex-start; padding-top: 14px; }
   #pickerGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 14px; width: 100%; max-width: 760px; padding: 8px; }
@@ -203,17 +207,19 @@
   #arcadeStreak.pulse { animation: arcadeStreakPulse .4s; }
   @keyframes arcadeStreakPulse { 0%{transform:scale(1)} 50%{transform:scale(1.4)} 100%{transform:scale(1)} }
   /* ---------- v10: Mix-It-Up arcade — its OWN answer timer bar ----------
-     Visually identical treatment to #timerBar (same thin shrinking bar under the prompt) but a
-     SEPARATE element/id driven by SEPARATE JS (startArcadeTimer/cancelArcadeTimer, own
-     `state.arcade.timer`) — arcade must never share the scored engine's `_answerTimer`/
-     #timerBar/#timerBtn, which are parent-triggered and gated by scored-mode-only state. Same
-     align-self:stretch load-bearing note as #timerBar (see its own comment) applies here too.
+     A thin shrinking bar under the prompt, driven by its OWN JS (startArcadeTimer/
+     cancelArcadeTimer, own `state.arcade.timer`) — arcade must never share the scored engine's
+     `_shrugTimer`/#shrugBtn (v12's automatic shrug flow — see tapShrug()'s own comment), which is
+     gated by scored-mode-only state and has no visible countdown at all (a fade-in button, not a
+     bar). Same align-self:stretch load-bearing note #categoryAnchors documents applies here too.
   */
   #arcadeTimerBar { height: 4px; margin: 0 6px 6px; border-radius: 2px; background: var(--accent2); width: 0%; opacity: 0; transition: none; align-self: stretch; }
   #arcadeTimerBar.running { opacity: 1; }
   /* ---------- v7: My Body tap-on-figure hit regions (invisible unless mid-feedback) ---------- */
   .body-hit.correct { background: rgba(107,203,119,.35); box-shadow: 0 0 0 4px var(--good); animation: pop .5s; }
-  .body-hit.wrong { animation: seekshake .45s; }
+  /* v12: wrong-answer destigmatizing (req 3) — a neutral grey highlight (this region normally
+     shows nothing at all unless mid-feedback), no shake, no red. */
+  .body-hit.dim { background: rgba(150,140,130,.28); }
   .body-hit.reveal { background: rgba(107,203,119,.35); box-shadow: 0 0 0 4px var(--good); }
   /* v9.4: the tappable figure wrapper itself (see renderBodyFigure/attachTap) — same long-press
      suppression as every other child-tap surface. */
@@ -232,11 +238,11 @@
   #board.compact { max-height: 60vh; }
   #board.compact .tile { min-height: 84px; font-size: clamp(40px, 11vw, 84px); }
   .tile.correct { border-color: var(--good); background: #eaffea; animation: pop .5s; }
-  .tile.wrong { border-color: var(--bad); animation: shake .45s; }
   .tile.reveal { border-color: var(--good); background: #eaffea; }
+  /* v12: wrong-answer destigmatizing (req 3) — the tapped-wrong tile gently dims (same .dim class
+     a second-miss's non-correct tiles already used); no shake, no red border, in ANY mode. */
   .tile.dim { opacity: .35; }
   @keyframes pop { 0%{transform:scale(1)} 40%{transform:scale(1.12)} 100%{transform:scale(1)} }
-  @keyframes shake { 0%,100%{transform:translateX(0)} 20%,60%{transform:translateX(-10px)} 40%,80%{transform:translateX(10px)} }
   .tile svg { width: 82%; height: 82%; }
   .tile .txt { font-weight: 800; }
 
@@ -298,6 +304,7 @@
       <button id="mapBtn" onclick="backToMap()" style="display:none" aria-label="Back to map" title="Back to the map">🗺</button>
     </div>
     <div id="stars"></div>
+    <div id="braveChip">💪 <span id="braveCount">0</span></div>
     <div id="arcadeStreak">🔥 <span id="arcadeStreakCount">0</span></div>
     <span id="syncGlyph" style="font-size:11px;color:#a99;white-space:nowrap"></span>
     <button id="muteBtn" onclick="toggleMute()" aria-label="Mute">🔊</button>
@@ -376,11 +383,11 @@
     <div id="promptBar">
       <button id="speakBtn" onclick="repeatPrompt()">🔊</button>
       <div id="promptText"></div>
-      <button id="timerBtn" class="skip-btn" onclick="startAnswerTimer()" title="Start a 10-second answer timer (parent)">⏱</button>
-      <button id="skipBtn" class="skip-btn" onclick="skipItem()" title="Skip this item (parent)">🤷 Skip</button>
-      <button id="dkBtn" class="skip-btn" onclick="dontKnowItem()" title="Child doesn't know this one (parent)">🙅 Doesn't know</button>
+      <!-- v12: shrug flow — auto-shown by armShrugTimer() ~12s into a scored item with no
+           resolution; see tapShrug()'s own comment. Replaces the v9.5 parent-facing ⏱ Skip/
+           Doesn't-know buttons entirely in scored play. -->
+      <button id="shrugBtn" onclick="tapShrug()" title="I don't know this one">🤷</button>
     </div>
-    <div id="timerBar"></div>
     <div id="arcadeTimerBar"></div>
     <div id="categoryAnchors"></div>
     <div id="domainTransition"></div>
@@ -1218,6 +1225,7 @@ const state = {
   name: "", age: 30, arity: 4, domainIdx: -1, domain: null,
   finalDomains: {}, stars: 0, locked: false, checklist: new Set(),
   currentItem: null, firstTry: true, muted: false,
+  braveGuesses: 0, // v12: "brave guess" chip counter — session-local only, see braveGuess()'s own comment
   sessionMode: null, // "single" (picker: one domain, return to picker) | "all" (Play everything!)
   mascotSpeaking: false, // v9.3: tapMascot() debounce — see its own comment
   visits: null, // v9.3: {first, count} — see stampVisit()/renderStorageDiagnostic()
@@ -1387,6 +1395,7 @@ function makeFunctionItem(d, pool, arity){
   return { label: d.name, b: d.age, c: 1/choices.length, s: 4,
     prompt: `Which one do you use to ${d.name}?`,
     say: `Which one do you use to ${d.name}? Find it!`,
+    explain: FUNCTION_EXPLAIN[d.name],
     tiles: choices.map(c => emojiTile(c.emoji)), correct: choices.indexOf(d) };
 }
 
@@ -1454,7 +1463,7 @@ function makeTimeItem(d, pool, arity){
   let tiles = o.tiles, correct = o.correct;
   if (Math.random() < .5){ tiles = [tiles[1], tiles[0]]; correct = 1 - correct; }
   const prompt = TIME_PROMPTS[d.name] || `Tap ${d.name}!`;
-  return { label: d.name, b: d.age, c: 0.5, s: 4, prompt, say: prompt, tiles, correct };
+  return { label: d.name, b: d.age, c: 0.5, s: 4, prompt, say: prompt, explain: TIME_EXPLAIN[d.name], tiles, correct };
 }
 
 /* ---------- v7: "My Body" (tap-on-figure) ----------
@@ -1632,7 +1641,7 @@ function renderBodyFigure(tapHandler){
 function renderBodyRound(dom, ds){
   const available = dom.defs.filter(d => !ds.used.has(d.label));
   if (!available.length){ domainDone(); return; }
-  const target = computeTarget(ds);
+  const target = computeTarget(ds, "mybody");
   const pool = applyFloorRule(ds, available, d => d.age);
   const avoid = recentCorrectLabels(dom.key);
   const d = pickAmongTopN(pool, target, x => x.age, 3, { avoid, getLabel: c => c.label });
@@ -1645,11 +1654,13 @@ function renderBodyRound(dom, ds){
   const guessCount = BODY_REGIONS[d.label].cx.length;
   const it = { label: d.label, b: d.age, c: guessCount / BODY_DEFS.length, s: 4,
     prompt: `Tap the ${d.label}!`, say: `Can you find the ${d.label}? Tap it!`,
+    explain: BODY_EXPLAIN[d.label],
     body: true };
   state.currentItem = it; state.locked = false; state.firstTry = true;
   $("promptText").textContent = it.prompt;
   $("progressBar").style.width = progressPct(ds) + "%";
   sayItem(it); // v8: no-op fallback to speak() — mybody items never set cueKey
+  armShrugTimer(); // v12: see its own comment
 }
 function tapBodyPart(part, el){
   if (state.locked || !state.domain) return;
@@ -1658,7 +1669,7 @@ function tapBodyPart(part, el){
   const highlightAll = (cls) => { $("seekBoard").querySelectorAll(`.body-hit[data-part="${it.label}"]`).forEach(e => e.classList.add(cls)); };
   if (part === it.label){
     state.locked = true;
-    cancelAnswerTimer(); // v9.5: item resolved (correct) — stop any running answer timer
+    cancelShrugTimer(); // v12: item resolved (correct) — stop any running shrug timer
     highlightAll("correct");
     chimeGood();
     if (state.firstTry){ addStar(); confetti(8); }
@@ -1668,17 +1679,18 @@ function tapBodyPart(part, el){
     setTimeout(() => { renderItem(); }, 1300);
   } else {
     chimeTry();
-    el.classList.add("wrong");
-    setTimeout(() => el.classList.remove("wrong"), 500);
+    el.classList.add("dim"); // v12: gentle dim, no shake — see tapTile's own comment
+    braveGuess();
     if (state.firstTry){
       state.firstTry = false;
-      speak(pick(["Good try! Look again!","Hmm, try again!"]));
+      speak(pick(BRAVE_GUESS_LINES));
     } else {
       state.locked = true;
-      cancelAnswerTimer(); // v9.5: item resolved (second-miss reveal) — stop any running answer timer
+      cancelShrugTimer(); // v12: item resolved (second-miss reveal) — stop any running shrug timer
       recordResult(it, false);
+      queueComeback(it, "body"); // v12: req 6 — see its own comment
       highlightAll("reveal");
-      speak(it.revealText || `This one is the ${it.label}!`);
+      speak(it.explain || it.revealText || `This one is the ${it.label}!`);
       setTimeout(() => { renderItem(); }, 1600);
     }
   }
@@ -1714,6 +1726,7 @@ function makePatternItem(d, pool, arity){
   const choices = shuffle([{ html:d.answer, correct:true }, ...wrongs.map(w => ({ html:w, correct:false }))]);
   return { label: d.label, b: d.age, c: 1/choices.length, s: 4,
     prompt: `What comes next?`, say: `Look at the pattern! What comes next?`,
+    explain: PATTERN_EXPLAIN[d.label],
     patternStrip: d.seq.join(""),
     tiles: choices.map(c => c.html), correct: choices.findIndex(c => c.correct) };
 }
@@ -1776,11 +1789,430 @@ function makeLetterSoundItem(d, pool, arity){
     // (TTS mangles "mmm"/"buh" as phonics phones); a parent's own recording
     // of the phone replaces the whole spoken line when one exists.
     cueKey: `phone:${d.sound}`,
+    explain: `The letter ${d.letter} says "${d.sound}"!`,
     tiles: choices.map(c => `<span class="txt" style="color:#e67e22">${c.letter}</span>`), correct: choices.indexOf(d) };
 }
 function makePhonoItem(d, pool, arity){
   if (d.kind === "rhyme") return makeRhymeItem(d, arity);
   return makeLetterSoundItem(d, pool.filter(x => x.kind === "sound"), arity);
+}
+
+/* =====================================================================
+   v12: EXPLANATION LINES — spoken by the fox at any reveal (shrug, second miss, arcade
+   timeout) so a missed item still teaches something concrete, not just "this one is the X".
+   Vocab/functions get hand-written per-word lines (206 + 30, generated + spot-checked against
+   the exact word lists in this file); every other domain gets a per-def lookup or a small
+   programmatic template built from the item's own fields (letters/numbers/adjectives/
+   counting/phono letter-sounds — see adjExplain/countExplain below and each make*Item()'s own
+   `explain:` field). Rhyme items (phono, kind:"rhyme") keep their existing revealText ("X
+   rhymes with Y!") unchanged — already a genuine explanation, not replaced. Every EXPLAIN table
+   here is looked up by the SAME label/name field its domain's make*Item() already uses for
+   d.label/d.name, so a missing key just falls back to the generic "This one is the X!" line at
+   the call site (tapTile/tapSeekObj/tapBodyPart/tapShrug/arcadeTimeout) — never a crash.
+   ===================================================================== */
+const VOCAB_EXPLAIN = {
+  "milk": "Milk is a cold white drink that helps you grow!",
+  "dog": "A dog says woof and loves to play!",
+  "ball": "You bounce and roll a ball to play games!",
+  "banana": "A banana is a sweet yellow fruit you peel!",
+  "car": "A car has wheels and drives you places!",
+  "shoe": "You wear a shoe to protect your feet!",
+  "cup": "You drink from a cup!",
+  "fish": "A fish swims in water and breathes through gills!",
+  "apple": "An apple is a crunchy fruit you can bite!",
+  "bird": "A bird has wings and loves to fly!",
+  "book": "You open a book and read fun stories!",
+  "hat": "You wear a hat on your head!",
+  "cookie": "A cookie is a sweet treat you love to munch!",
+  "spoon": "You use a spoon to scoop up your food!",
+  "cow": "A cow says moo and gives us milk!",
+  "train": "A train zooms along tracks with a chugga chugga sound!",
+  "moon": "The moon glows in the sky at night!",
+  "chair": "You sit down on a chair!",
+  "strawberry": "A strawberry is a sweet red berry with tiny seeds!",
+  "sock": "You wear a sock to keep your toes warm!",
+  "butterfly": "A butterfly has colorful wings and flutters through the air!",
+  "turtle": "A turtle carries its cozy home on its back!",
+  "carrot": "A carrot is a crunchy orange vegetable from the ground!",
+  "glasses": "You wear glasses to help your eyes see better!",
+  "cheese": "Cheese is a yummy food made from milk!",
+  "penguin": "A penguin is a bird that waddles and loves to swim!",
+  "drum": "You bang on a drum to make a boom boom sound!",
+  "umbrella": "An umbrella keeps you dry when it rains!",
+  "ladder": "You climb up a ladder to reach high places!",
+  "broccoli": "Broccoli is a green vegetable that looks like a tiny tree!",
+  "octopus": "An octopus has eight wiggly arms and lives in the sea!",
+  "pineapple": "A pineapple is a spiky fruit that tastes sweet inside!",
+  "cactus": "A cactus is a prickly plant that lives in the desert!",
+  "wrench": "You use a wrench to twist and tighten bolts!",
+  "globe": "A globe is a round model of our whole world!",
+  "magnet": "A magnet is special and pulls metal things toward it!",
+  "microscope": "A microscope helps you see tiny things up close!",
+  "raccoon": "A raccoon has a striped tail and a masked face!",
+  "mushroom": "A mushroom is a little plant with a round cap!",
+  "dinosaur": "A dinosaur is a giant animal that lived long, long ago!",
+  "lizard": "A lizard is a small reptile that scurries on the ground!",
+  "avocado": "An avocado is a creamy green fruit with a big pit!",
+  "hedgehog": "A hedgehog curls into a tiny prickly ball!",
+  "pumpkin": "A pumpkin is a round orange fruit that grows on a vine!",
+  "pretzel": "A pretzel is a twisty, salty snack to munch!",
+  "flamingo": "A flamingo is a pink bird that stands on one leg!",
+  "tiger": "A tiger is a big orange cat with black stripes!",
+  "rhinoceros": "A rhinoceros is a huge animal with a horn on its nose!",
+  "magnifying glass": "A magnifying glass makes tiny things look big!",
+  "kangaroo": "A kangaroo hops around and carries its baby in a pouch!",
+  "violin": "You play a violin by moving a bow across its strings!",
+  "lobster": "A lobster is a sea creature with big snappy claws!",
+  "telescope": "A telescope helps you see far away things, like stars!",
+  "anchor": "An anchor drops into the water to hold a boat still!",
+  "peacock": "A peacock is a bird with a big, colorful tail!",
+  "saxophone": "You blow into a saxophone to make music!",
+  "compass": "A compass shows you which way to go!",
+  "stethoscope": "A doctor uses a stethoscope to listen to your heartbeat!",
+  "thermometer": "A thermometer tells you how hot or cold something is!",
+  "clock": "A clock tells you what time it is!",
+  "accordion": "You squeeze an accordion to make music!",
+  "statue": "A statue is a still figure made of stone or metal!",
+  "stopwatch": "A stopwatch counts how fast or slow something is!",
+  "volcano": "A volcano is a mountain that can spurt hot lava!",
+  "gears": "Gears are round wheels with teeth that spin together!",
+  "saturn": "Saturn is a planet with big beautiful rings around it!",
+  "fire extinguisher": "A fire extinguisher sprays foam to put out fires!",
+  "bone": "A bone is strong and holds your body up!",
+  "satellite": "A satellite zooms around Earth way up in space!",
+  "ice cube": "An ice cube is frozen water that feels cold!",
+  "abacus": "An abacus has beads you slide to count numbers!",
+  "scales": "Scales help you weigh how heavy something is!",
+  "dna": "DNA is a tiny code inside every living thing!",
+  "trident": "A trident is a pole with three pointy prongs on top!",
+  "hourglass": "An hourglass has sand that trickles down to show time passing!",
+  "unicorn": "A unicorn is a magical horse with a sparkly horn!",
+  "feather": "A feather is soft and light and helps birds fly!",
+  "castle": "A castle is a big stone home for a king!",
+  "crystal ball": "A crystal ball is a shiny sphere that sparkles and glows!",
+  "mask": "A mask covers your face for fun or pretend play!",
+  "vase": "You put pretty flowers inside a vase!",
+  "old key": "An old key is used to unlock an old, old door!",
+  "gem": "A gem is a shiny, sparkly jewel!",
+  "shield": "A shield is a big shiny cover you hold for protection!",
+  "crown": "A crown sits on top of a king or queen's head!",
+  "lantern": "A lantern glows to help you see in the dark!",
+  "ring": "A ring is a little circle you wear on your finger!",
+  "trophy": "A trophy is a shiny prize you win for doing great!",
+  "wizard": "A wizard waves a wand and does magical spells!",
+  "dragon": "A dragon is a giant creature that can breathe fire!",
+  "genie": "A genie pops out of a lamp and grants wishes!",
+  "helmet": "You wear a helmet to keep your head safe!",
+  "flashlight": "A flashlight shines a bright beam of light in the dark!",
+  "puzzle": "A puzzle has pieces that fit together to make a picture!",
+  "robot": "A robot is a machine that can move and beep!",
+  "ferris wheel": "A ferris wheel spins around with seats to ride!",
+  "candle": "A candle has a little flame that flickers and glows!",
+  "shooting star": "A shooting star zips across the night sky in a flash!",
+  "chess piece": "A chess piece moves around a checkered game board!",
+  "paint palette": "A paint palette holds little blobs of colorful paint!",
+  "medal": "A medal is a shiny prize you wear around your neck!",
+  "scroll": "A scroll is a long rolled up piece of paper!",
+  "potion": "A potion is a magic liquid in a bottle!",
+  "spaceship": "A spaceship zooms through space to visit the stars!",
+  "squirrel": "A squirrel scurries up trees and loves to munch nuts!",
+  "kite": "You fly a kite high up in the windy sky!",
+  "duck": "A duck says quack and loves to paddle in water!",
+  "bee": "A bee buzzes around and makes sweet honey!",
+  "flower": "A flower is pretty, smells nice, and grows from the ground!",
+  "bicycle": "You pedal a bicycle with your feet to make it go!",
+  "ladybug": "A ladybug is a tiny red bug with black spots!",
+  "rainbow": "A rainbow paints the sky with pretty colors after rain!",
+  "egg": "A baby animal can hatch out of an egg!",
+  "pan": "You cook food in a pan on the stove!",
+  "crab": "A crab walks sideways and has two snappy claws!",
+  "whale": "A whale is a giant animal that swims in the ocean!",
+  "shark": "A shark is a big fish that glides through the ocean!",
+  "dolphin": "A dolphin is a friendly ocean animal that loves to leap!",
+  "squid": "A squid swims in the sea and has long wiggly arms!",
+  "school": "You go to school to learn and play with friends!",
+  "doctor": "A doctor helps take care of you when you feel sick!",
+  "guitar": "You strum a guitar to make music!",
+  "firefighter": "A firefighter puts out fires to keep everyone safe!",
+  "hospital": "A hospital is where doctors help people feel better!",
+  "piano": "You press piano keys to make musical notes!",
+  "police officer": "A police officer helps keep everyone safe!",
+  "farmer": "A farmer grows crops and takes care of animals!",
+  "tower": "A tower is a very tall, narrow building!",
+  "trumpet": "You blow into a trumpet to make a bright, loud sound!",
+  "chef": "A chef cooks yummy food in the kitchen!",
+  "factory": "A factory is a big building where things get made!",
+  "astronaut": "An astronaut flies to space and floats around in a suit!",
+  "chapel": "A chapel is a small, quiet building for prayer!",
+  "builder": "A builder uses tools to build houses and buildings!",
+  "basketball": "You bounce a basketball and toss it through a hoop!",
+  "tennis": "You hit a tennis ball back and forth with a racket!",
+  "football": "You kick or throw a football in a fun game!",
+  "baseball": "You hit a baseball with a bat and run around bases!",
+  "bowling": "In bowling you roll a ball to knock down pins!",
+  "skateboard": "You ride a skateboard by rolling on its wheels!",
+  "swim goggles": "You wear swim goggles so your eyes stay dry underwater!",
+  "golf": "In golf you hit a little ball into a tiny hole!",
+  "sun": "The sun is a giant ball of light that warms us!",
+  "cloud": "A cloud floats in the sky and is fluffy like cotton!",
+  "rain": "Rain is water that falls from clouds in the sky!",
+  "snow": "Snow is soft, cold, and fluffy and falls from the sky!",
+  "wind": "Wind is moving air that can blow your hair around!",
+  "lightning": "Lightning is a bright flash of light in a stormy sky!",
+  "tornado": "A tornado is a big spinning swirl of wind!",
+  "hurricane": "A hurricane is a huge, swirling storm with strong winds!",
+  "star": "A star twinkles way up high in the night sky!",
+  "rocket": "A rocket blasts off into space with a whoosh!",
+  "planet": "A planet is a giant round world that circles the sun!",
+  "alien": "An alien might live way out on another planet!",
+  "comet": "A comet is a giant snowball that zooms through space!",
+  "sunrise": "A sunrise paints the morning sky as the sun comes up!",
+  "galaxy": "A galaxy is a giant swirl of stars in space!",
+  "asteroid": "An asteroid is a big rock that floats around in space!",
+  "ant": "An ant is tiny but super strong for its size!",
+  "snail": "A snail carries its curly shell on its back!",
+  "spider": "A spider spins a sticky web with its eight legs!",
+  "caterpillar": "A caterpillar munches leaves before turning into a butterfly!",
+  "fly": "A fly is a tiny buzzing bug with two wings!",
+  "worm": "A worm wiggles through the dirt with no legs at all!",
+  "beetle": "A beetle is a bug with a hard, shiny shell!",
+  "scorpion": "A scorpion has a curly tail and pinchy claws!",
+  "grapes": "Grapes are small, juicy fruits that grow in bunches!",
+  "sandwich": "A sandwich is yummy food tucked between two slices of bread!",
+  "pasta": "Pasta is a squiggly noodle you twirl on your fork!",
+  "watermelon": "A watermelon is a big juicy fruit with a green rind!",
+  "sheep": "A sheep says baa and has soft, fluffy wool!",
+  "horse": "A horse gallops fast and says neigh!",
+  "elephant": "An elephant is huge and has a long, swishy trunk!",
+  "monkey": "A monkey swings through trees and loves to munch bananas!",
+  "key": "You use a key to unlock a door!",
+  "lamp": "A lamp lights up a room when you switch it on!",
+  "telephone": "You talk to someone far away using a telephone!",
+  "television": "You watch fun shows and cartoons on a television!",
+  "boat": "A boat floats on water and carries you across!",
+  "airplane": "An airplane flies high in the sky with big wings!",
+  "helicopter": "A helicopter spins its blades to fly straight up!",
+  "motorcycle": "A motorcycle has two wheels and zooms down the road!",
+  "dress": "A dress is a pretty outfit you wear!",
+  "mittens": "You wear mittens to keep your hands warm and cozy!",
+  "scarf": "You wrap a scarf around your neck to stay warm!",
+  "boots": "You wear boots to splash through puddles!",
+  "tree": "A tree grows tall with branches, leaves, and roots!",
+  "seashell": "A seashell is a pretty shell you find on the beach!",
+  "leaf": "A leaf grows on a tree and turns pretty colors!",
+  "mountain": "A mountain is a giant hill that reaches way up high!",
+  "microphone": "You speak into a microphone to make your voice louder!",
+  "headphones": "You wear headphones over your ears to listen to music!",
+  "long drum": "You tap a long drum to make a fun beat!",
+  "banjo": "You pluck a banjo's strings to make a twangy sound!",
+  "hammer": "You swing a hammer to bang in nails!",
+  "paintbrush": "You dip a paintbrush in paint to make colorful pictures!",
+  "screwdriver": "You twist a screwdriver to turn screws in and out!",
+  "saw": "A saw has sharp teeth that cut through wood!",
+  "house": "A house is a cozy place where a family lives!",
+  "bridge": "A bridge helps you cross over a river or road!",
+  "temple": "A temple is a special building where people go to pray!",
+  "museum": "A museum is full of cool things to see and learn!",
+  "artist": "An artist paints and draws to make beautiful art!",
+  "teacher": "A teacher helps you learn new and exciting things!",
+  "pilot": "A pilot flies an airplane way up in the sky!",
+  "scientist": "A scientist does experiments to discover how things work!",
+};
+
+const FUNCTION_EXPLAIN = {
+  "drink": "You use a cup to drink!",
+  "sleep": "A bed is where you sleep!",
+  "wash your hands": "Grab some soap to wash your hands!",
+  "open the door": "A key opens the door for you!",
+  "sweep the floor": "You use a broom to sweep the floor clean!",
+  "cut paper": "Scissors are for cutting paper!",
+  "write": "Grab a pencil to write!",
+  "stay dry in the rain": "An umbrella keeps you dry in the rain!",
+  "brush your teeth": "You use a toothbrush to brush your teeth!",
+  "see far away": "A telescope helps you see far, far away!",
+  "eat": "A fork helps you eat your food!",
+  "comb your hair": "Use a comb to fix your hair!",
+  "take a picture": "Click! A camera takes your picture!",
+  "see in the dark": "A flashlight lights up the dark!",
+  "call someone": "You use a telephone to call someone!",
+  "carry groceries": "A shopping bag carries your groceries!",
+  "look at your reflection": "Look in a mirror to see yourself!",
+  "tell time": "A watch tells you what time it is!",
+  "cut your food": "You use a knife to cut your food!",
+  "stay warm": "A cozy coat keeps you warm!",
+  "fan yourself": "Wave a fan to cool yourself off!",
+  "measure length": "A ruler helps you measure how long things are!",
+  "weigh something": "Put it on a scale to see how heavy it is!",
+  "magnify small things": "A magnifying glass makes small things look big!",
+  "find your way": "A compass helps you find your way!",
+  "keep food cold": "Ice keeps your food nice and cold!",
+  "wake you up": "An alarm clock wakes you up in the morning!",
+  "catch a fish": "You use a fishing rod to catch a fish!",
+  "dig a hole": "Grab a shovel to dig a hole!",
+  "build something": "You use a hammer to build something!",
+};
+
+const COLOR_EXPLAIN = {
+  "red": "This one is red — like a fire truck!",
+  "blue": "This one is blue — like the sky!",
+  "yellow": "This one is yellow — like the sun!",
+  "green": "This one is green — like grass!",
+  "orange": "This one is orange — like a pumpkin!",
+  "pink": "This one is pink — like a flamingo!",
+  "purple": "This one is purple — like a grape!",
+  "black": "This one is black — like the night sky!",
+  "white": "This one is white — like snow!",
+  "brown": "This one is brown — like a teddy bear!",
+  "gray": "This one is gray — like a friendly elephant!",
+};
+
+const SHAPE_EXPLAIN = {
+  "circle": "A circle is round all the way around!",
+  "square": "A square has four sides that are all the same!",
+  "star": "A star has five pointy tips!",
+  "heart": "A heart has two bumps on top and a point at the bottom!",
+  "triangle": "A triangle has three sides!",
+  "rectangle": "A rectangle has four sides — two long, two short!",
+  "diamond": "A diamond stands up on its pointy corner!",
+  "oval": "An oval is round and stretched, like an egg!",
+};
+
+const POSITION_EXPLAIN = {
+  "in": "IN means the ball is tucked inside the box!",
+  "on": "ON means the ball is sitting right on top of the box!",
+  "under": "UNDER means the ball is hiding beneath the table!",
+  "next to": "NEXT TO means the ball is right beside the box!",
+  "behind": "BEHIND means the ball is hiding in back of the box!",
+  "in front of": "IN FRONT OF means the ball is out in front of the box!",
+  "between": "BETWEEN means the ball is right in the middle of the two boxes!",
+};
+
+const OPPOSITE_EXPLAIN = {
+  "big": "BIG means large, like a great big elephant!",
+  "little": "LITTLE means small, like a tiny baby elephant!",
+  "up": "UP means going higher, like a balloon floating to the sky!",
+  "down": "DOWN means going lower, like a balloon sinking to the ground!",
+  "happy": "HAPPY means smiling because you feel good!",
+  "sad": "SAD means feeling down, with a little frown!",
+  "long": "LONG means it stretches out far, like a long train!",
+  "short": "SHORT means it's small and doesn't stretch far!",
+  "hot": "HOT means it's warm, like fire — careful!",
+  "cold": "COLD means it's chilly, like ice!",
+  "full": "FULL means the cup is filled all the way up!",
+  "empty": "EMPTY means there's nothing inside the cup!",
+  "fast": "FAST means zooming by quick, like a running rabbit!",
+  "slow": "SLOW means moving nice and easy, like a turtle!",
+  "more": "MORE means a whole bunch — lots and lots!",
+  "less": "LESS means just a little bit!",
+  "same": "SAME means they match — just alike!",
+  "different": "DIFFERENT means they don't match — not alike!",
+};
+
+const FEELING_EXPLAIN = {
+  "happy": "Happy means you feel good, like smiling and giggling!",
+  "sad": "Sad means you feel down, and maybe want a hug!",
+  "angry": "Angry means you feel mad, like your face gets hot!",
+  "sleepy": "Sleepy means your eyes feel heavy and want to close!",
+  "scared": "Scared means something gave you a jump or a fright!",
+  "surprised": "Surprised means something happened you didn't expect at all!",
+  "excited": "Excited means you feel bouncy and can't wait!",
+  "silly": "Silly means you feel goofy and want to giggle!",
+  "frustrated": "Frustrated means something tricky is bugging you!",
+  "curious": "Curious means you really want to find out more!",
+  "confused": "Confused means you're not quite sure what's happening!",
+  "nervous": "Nervous means your tummy feels a little fluttery!",
+  "shy": "Shy means you feel a bit bashful around new people!",
+  "proud": "Proud means you feel great about something you did!",
+  "bored": "Bored means you can't think of anything fun to do!",
+  "disappointed": "Disappointed means you're let down that something didn't happen!",
+  "embarrassed": "Embarrassed means your cheeks feel hot and shy!",
+  "lonely": "Lonely means you wish someone were there to play with you!",
+  "jealous": "Jealous means you wish you had what someone else has!",
+  "guilty": "Guilty means you feel sorry about something you did!",
+  "grateful": "Grateful means you feel thankful for something nice!",
+  "impatient": "Impatient means you don't want to wait one more second!",
+};
+
+const TIME_EXPLAIN = {
+  "day": "DAY time is bright and sunny outside!",
+  "night": "NIGHT time is dark, with the moon and stars out!",
+  "morning": "MORNING is when the sun comes up and you eat breakfast!",
+  "bedtime": "BEDTIME is when the moon is out and it's time to sleep!",
+  "first": "FIRST means at the very front of the line!",
+  "last": "LAST means all the way at the back of the line!",
+  "sockfirst": "Socks go on FIRST, then shoes go on top!",
+  "summer": "SUMMER is warm and sunny — perfect for shorts!",
+  "winter": "WINTER is cold and snowy — time for a cozy coat!",
+  "yesterday": "YESTERDAY was the day that already happened!",
+  "tomorrow": "TOMORROW is the day that's coming next!",
+};
+
+const PATTERN_EXPLAIN = {
+  "ab-red-blue": "It goes red, blue, red, blue — so red comes next!",
+  "ab-yellow-green": "It goes yellow, green, yellow, green — so yellow comes next!",
+  "aab-red-blue": "It goes red, red, blue — so blue comes next!",
+  "aab-green-purple": "It goes green, green, purple — so purple comes next!",
+  "abc-red-blue-yellow": "It goes red, blue, yellow, then starts again — yellow comes next!",
+  "abc-green-purple-red": "It goes green, purple, red, then starts again — red comes next!",
+  "abb-red-blue": "It goes red, blue, blue — so blue comes next!",
+  "abb-yellow-green": "It goes yellow, green, green — so green comes next!",
+  "size-big-small": "It goes big, small, big, small — so big comes next!",
+  "growing-1to3": "Each group gets one dot bigger — so four dots come next!",
+  "growing-2to4": "Each group gets one dot bigger — so five dots come next!",
+};
+
+const CATEGORY_EXPLAIN = {
+  "animals": "They're all animals — creatures that live, breathe, and move!",
+  "body parts": "They're all parts of your body!",
+  "food": "They're all food — yummy things you can eat!",
+  "farm animals": "They're all animals that live on a farm!",
+  "vehicles": "They're all vehicles — things that carry you around!",
+  "kitchen things": "They're all things you'd find in the kitchen!",
+  "clothes": "They're all clothes you wear!",
+  "weather": "They're all kinds of weather you see outside!",
+  "sports": "They're all things you use to play sports!",
+  "bugs": "They're all bugs — little critters that creep and crawl!",
+  "sea creatures": "They're all creatures that live in the sea!",
+  "instruments": "They're all instruments you can play music on!",
+  "space": "They're all things you'd find way up in space!",
+  "things that fly": "They're all things that can fly up in the sky!",
+  "bath time": "They're all things you use at bath time!",
+  "tools": "They're all tools that help you build and fix things!",
+};
+
+const BODY_EXPLAIN = {
+  "nose": "Your nose is in the middle of your face — you smell with it!",
+  "eyes": "Your eyes are what you see with!",
+  "mouth": "Your mouth is what you talk and eat with!",
+  "ears": "Your ears are what you hear with!",
+  "hair": "Hair grows right on top of your head!",
+  "hands": "Your hands are what you hold and touch with!",
+  "feet": "Your feet are what you stand and walk on!",
+  "tummy": "Your tummy is right in the middle of your body!",
+  "knees": "Your knees are what bend when you walk or sit!",
+  "fingers": "Your fingers are on the end of your hands!",
+  "neck": "Your neck holds your head up, between your shoulders and chin!",
+  "elbow": "Your elbow is the bendy spot in the middle of your arm!",
+  "ankle": "Your ankle is the bendy spot right above your foot!",
+  "wrist": "Your wrist is the bendy spot right above your hand!",
+  "shoulders": "Your shoulders are up top, where your arms begin!",
+  "eyebrow": "Your eyebrows sit right above your eyes!",
+  "chin": "Your chin is at the very bottom of your face!",
+  "heel": "Your heel is the back part of your foot!",
+};
+
+function adjExplain(attrs){
+  // Tricky Pictures (adjectives): programmatic, not hand-authored — same size/fill/color/shape
+  // join order as adjLabel()/adjPromptLabel() above, just with a full-sentence wrapper.
+  const parts = [];
+  if (attrs.size) parts.push(attrs.size);
+  if (attrs.fill) parts.push(attrs.fill);
+  if (attrs.color) parts.push(attrs.color);
+  parts.push(attrs.shape);
+  return `This one is a ${parts.join(" ")}!`;
+}
+function countExplain(d){
+  return `There are ${d.n} — you can count them one by one!`;
 }
 
 const DOMAINS = [
@@ -1909,10 +2341,12 @@ function collectAllSayStrings(){
   const set = new Set();
   const add = (s) => { if (s) set.add(s); };
 
-  // ---- fixed filler lines (correct / try-again / doesn't-know transition) ----
+  // ---- fixed filler lines (correct / brave-guess / shrug-flow transition) ----
   ["Yes!","Great job!","You got it!","Wow!","Awesome!"].forEach(add); // tapTile/tapSeekObj/tapBodyPart correct-answer praise
-  ["Good try! Look again!","Hmm, try again!"].forEach(add);           // first-miss remediation prompt
-  add("On to the next one!");                                        // dontKnowItem transition
+  BRAVE_GUESS_LINES.forEach(add); // v12: first-miss praise — see braveGuess()'s own comment
+  SHRUG_NORMALIZER_LINES.forEach(add); // v12: shrug-flow "we both learned something" lines
+  SHRUG_END_LINES.forEach(add); // v12: 3-consecutive-shrugs graceful domain end
+  add("Remember this one?"); // v12: comeback-card intro line — see renderComebackItem()
   // v9: name-free greeting variant — `Hi ${state.name}!` is per-child and can
   // never be pre-bundled, so startGame() now speaks this fixed line instead
   // (the on-screen flow is unaffected; only the SPOKEN greeting changed).
@@ -1962,6 +2396,7 @@ function collectAllSayStrings(){
       for (const scene of SEEKFIND_SCENES) for (const w of scene.words){
         add(`Can you find the ${w}? Tap the ${w}!`);
         add(`This one is the ${w}!`);
+        add(VOCAB_EXPLAIN[w]); // v12: shrug/second-miss/arcade-timeout explanation line
       }
       continue;
     }
@@ -1972,6 +2407,7 @@ function collectAllSayStrings(){
       for (const d of dom.defs){
         add(`Can you find the ${d.label}? Tap it!`);
         add(`This one is the ${d.label}!`);
+        add(BODY_EXPLAIN[d.label]); // v12: shrug/second-miss/arcade-timeout explanation line
       }
       continue;
     }
@@ -1981,13 +2417,14 @@ function collectAllSayStrings(){
         // v9.1: the stable question segment (choice-word segments are covered
         // by the recordable-cue inventory below)
         add(`Which one rhymes with ${d.word}?`);
-        add(`${d.correct.w} rhymes with ${d.word}!`); // rhyme items' revealText
+        add(`${d.correct.w} rhymes with ${d.word}!`); // rhyme items' revealText — already a real explanation, no separate it.explain
         continue;
       }
       let it;
       try { it = dom.make(d, dom.defs, ARITY); } catch(e){ continue; } // defensive only — every real def succeeds
       add(it.say);
       add(`This one is the ${it.label}!`);
+      add(it.explain); // v12: shrug/second-miss/arcade-timeout explanation line — see the v12 EXPLAIN tables above
     }
   }
 
@@ -2585,11 +3022,51 @@ function domainShouldStop(ds){
 //       target candidates (after the floor filter) instead of always the single nearest, so
 //       repeat sessions/domains don't feel robotically deterministic (the "1, 2, 3 in order"
 //       complaint) while staying close to the target difficulty.
-function computeTarget(ds){
+// v12 (req 5, difficulty retune): item selection switches from "nearest b to thetaHat+1(+streak
+// accel)" — which targets roughly a 50% pass probability, per the Rasch item-response formula
+// pCorrect() already uses everywhere else in this file — to PROBABILITY targeting: aim for the
+// b-value whose predicted P(correct|thetaHat) is TARGET_P (0.78), so "nearest 3 to target" still
+// picks among the top-3 CLOSEST items, just closest to a gentler difficulty. Keeps the floor
+// rule, streak accelerator, and top-3/min/max/SD-stop machinery completely unchanged — only the
+// number computeTarget() returns is different. Verified via simulation (tools/sim_v12.js, see
+// NOTES.md v12): theta-70 all-correct still reaches the top of the numbers/feelings ladders
+// within a run (the floor rule + streak accelerator still find the wall), while a theta-40 child
+// at chronological age 40 now sees ~75-80% expected success vs the old ~60-70%.
+const TARGET_P = 0.78;
+// Per-domain guess-rate ESTIMATE used only to pick a target b (never for actual scoring —
+// pCorrect()/updatePosterior() always use the real item.c once an item is built, same as
+// before). Most domains are state.arity-way picture-pointing (c=1/arity); opposites/time are
+// forced 2AFC (c=0.5, see makeOppositeItem/makeTimeItem); seek&find's c shrinks as a scene
+// empties out (1/liveCount, ~6-14) so this uses a representative mid-scene estimate; mybody's c
+// varies per body part (bilateral vs singular hit-region count / 18) so this uses the bank-wide
+// average (12 bilateral + 6 singular parts, see BODY_DEFS/BODY_REGIONS).
+function domainGuessRate(domKey){
+  switch(domKey){
+    case "opposites": case "time": return 0.5;
+    case "seekfind": return 1/10;
+    case "mybody": return 30/18/18; // avg guessCount (30/18) / BODY_DEFS.length (18), see recordResult's item.c
+    default: return 1 / (state.arity || 4);
+  }
+}
+// Inverts pCorrect(theta,item)=c+(1-c)*sigmoid((theta-b)/s) for b at a given target probability
+// p: sigmoid((theta-b)/s)=(p-c)/(1-c) => b = theta - s*logit((p-c)/(1-c)). Clamped so a
+// pathological c near/above p (shouldn't happen — every domain's c above is comfortably under
+// 0.78) can't invert to +/-Infinity.
+function probTargetB(theta, c, s, p){
+  const pAdj = Math.min(0.985, Math.max(0.015, (p - c) / (1 - c)));
+  return theta - s * Math.log(pAdj / (1 - pAdj));
+}
+function computeTarget(ds, domKey){
   const thetaHat = eap(ds.grid, ds.post);
-  if (ds.n === 0) return thetaHat - 4; // easy warm-up start
+  const c = domainGuessRate(domKey);
+  const pTargetB = probTargetB(thetaHat, c, 4, TARGET_P);
+  if (ds.n === 0) return pTargetB - 4; // easy warm-up start, same -4 ease-in as before, now off the gentler baseline
+  // streak accelerator: SAME +4-per-streak-beyond-the-first magnitude as before, now layered on
+  // top of the P-target baseline instead of thetaHat+1 — still finds the same wall, just starting
+  // from a gentler floor (per the task: "the accelerator now raises the P-target's b
+  // equivalently — preserve wall-finding, just gentler").
   const streak = ds.streak || 0;
-  return thetaHat + 1 + 4 * Math.max(0, streak - 1);
+  return pTargetB + 4 * Math.max(0, streak - 1);
 }
 function applyFloorRule(ds, candidates, getB){
   if (ds.floorB === undefined || (ds.missAboveFloor || 0) >= 2) return candidates;
@@ -2641,7 +3118,7 @@ function pickNextItem(dom){
   const ds = state.domain;
   const available = dom.defs.filter(d => !ds.used.has(d.label));
   if (!available.length) return null;
-  const target = computeTarget(ds);
+  const target = computeTarget(ds, dom.key);
   const pool = applyFloorRule(ds, available, d => d.age);
   const avoid = recentCorrectLabels(dom.key);
   const opts = { avoid, getLabel: c => c.label };
@@ -2685,6 +3162,7 @@ function makeVocabItem(d, pool, arity){
   const choices = shuffle([d, ...distractors]);
   return { label:d.word, b:d.age, c:1/arity, s:4,
     prompt:`Where is the ${d.word}?`, say:`Where is the ${d.word}? Tap the ${d.word}!`,
+    explain: VOCAB_EXPLAIN[d.word],
     tiles: choices.map(c => emojiTile(c.emoji)), correct: choices.indexOf(d) };
 }
 
@@ -2697,6 +3175,7 @@ function makeColorItem(d, pool, arity){
   const choices = shuffle([d, ...distractors]);
   return { label:d.name, b:d.age, c:1/arity, s:4,
     prompt:`Tap the ${d.name} one!`, say:`Can you find the ${d.name} one? Tap ${d.name}!`,
+    explain: COLOR_EXPLAIN[d.name],
     tiles: choices.map(c => colorSwatch(c.hex)), correct: choices.indexOf(d) };
 }
 
@@ -2718,6 +3197,7 @@ function makeShapeItem(d, pool, arity){
   const choices = shuffle([d, ...distractors]);
   return { label:d.name, b:d.age, c:1/arity, s:4,
     prompt:`Tap the ${d.name}!`, say:`Where is the ${d.name}? Tap the ${d.name}!`,
+    explain: SHAPE_EXPLAIN[d.name],
     tiles: choices.map(c => shapeSVG(c.name)), correct: choices.indexOf(d) };
 }
 
@@ -2739,6 +3219,7 @@ function makeLetterItem(d, pool, arity){
   const size = isLower ? "little" : "big";
   return { label:d.name, b:d.age, c:1/arity, s:4,
     prompt:`Tap the ${size} letter ${d.name}!`, say:`Can you find the ${size} letter ${d.name}?`,
+    explain: `That's the letter ${d.name}!`,
     tiles: choices.map(c => `<span class="txt" style="color:#8e5bd1">${c.name}</span>`), correct: choices.indexOf(d) };
 }
 
@@ -2781,6 +3262,7 @@ function makeNumeralItem(d, pool, arity){
   return { label:d.name, b:d.age, c:1/choices.length, s:4,
     // "say" passes the plain numeral string — SpeechSynthesis reads "47" as "forty-seven" naturally.
     prompt:`Tap the number ${d.name}!`, say:`Where is the number ${d.name}?`,
+    explain: `That's the number ${d.name}!`,
     tiles: choices.map(c => `<span class="txt" style="color:#1d6fd6">${c.name}</span>`), correct: choices.indexOf(d) };
 }
 
@@ -2794,6 +3276,7 @@ function makeCountItem(d, pool, arity){
   const choices = shuffle([d.n, ...others]);
   return { label:d.label, b:d.age, c:1/arity, s:4,
     prompt:`Tap the one with ${d.n}!`, say:`Which picture has ${d.n}? Count and tap!`,
+    explain: countExplain(d),
     tiles: choices.map(c => countTile(c, d.emoji)), correct: choices.indexOf(d.n) };
 }
 
@@ -2866,6 +3349,7 @@ function makePositionItem(d, pool, arity){
     const options = shuffle([{ kind:"under", isTarget:true }, ...kinds.map(k => ({ kind:k, isTarget:false }))]);
     return { label:d.name, b:d.age, c:1/arity, s:4,
       prompt:`Ball ${d.name} the table?`, say:`Tap the picture where the ball is ${d.name} the table!`,
+      explain: POSITION_EXPLAIN[d.name],
       tiles: options.map(o => tableScene(o.kind)), correct: options.findIndex(o => o.isTarget) };
   }
   if (d.family === "twobox"){
@@ -2873,6 +3357,7 @@ function makePositionItem(d, pool, arity){
     const options = shuffle([{ kind:"between", isTarget:true }, ...kinds.map(k => ({ kind:k, isTarget:false }))]);
     return { label:d.name, b:d.age, c:1/arity, s:4,
       prompt:`Ball ${d.name} the boxes?`, say:`Tap the picture where the ball is ${d.name} the boxes!`,
+      explain: POSITION_EXPLAIN[d.name],
       tiles: options.map(o => twoboxScene(o.kind)), correct: options.findIndex(o => o.isTarget) };
   }
   // crate family: distractors scoped to other crate-world relations only
@@ -2881,6 +3366,7 @@ function makePositionItem(d, pool, arity){
   const choices = shuffle([d, ...distractors]);
   return { label:d.name, b:d.age, c:1/arity, s:4,
     prompt:`Ball ${d.name} the box?`, say:`Tap the picture where the ball is ${d.name} the box!`,
+    explain: POSITION_EXPLAIN[d.name],
     tiles: choices.map(c => positionScene(c.name)), correct: choices.indexOf(d) };
 }
 
@@ -2926,6 +3412,7 @@ function makeOppositeItem(d, pool, arity){
   const nounTxt = d.noun ? ` ${d.noun}` : " one";
   return { label:d.name, b:d.age, c:0.5, s:4,
     prompt:`Tap the ${d.name}${nounTxt}!`, say:`Which one is ${d.name}? Tap the ${d.name}${nounTxt}!`,
+    explain: OPPOSITE_EXPLAIN[d.name],
     tiles, correct };
 }
 
@@ -3042,6 +3529,7 @@ function makeAdjItem(d, pool, arity){
   const choices = shuffle([d, ...oneOffs, ...twoOffs]);
   return { label: adjLabel(d), b: d.b, c: 1/choices.length, s: 4,
     prompt: `Tap the ${adjPromptLabel(d)}!`, say: `Can you find the ${adjLabel(d)}? Tap the ${adjPromptLabel(d)}!`,
+    explain: adjExplain(d),
     tiles: choices.map(c => adjSVG(c)), correct: choices.indexOf(d) };
 }
 
@@ -3070,6 +3558,7 @@ function makeCategoryItem(d, pool, arity){
   const choiceIcons = shuffle([correctIcon, ...distractorIcons]);
   return { label: d.label, b: d.age, c: 1/choiceIcons.length, s: 4,
     prompt: `Which one belongs with them?`, say: `These go together! Which one belongs with them?`,
+    explain: CATEGORY_EXPLAIN[d.label],
     anchors,
     tiles: choiceIcons.map(e => emojiTile(e)), correct: choiceIcons.indexOf(correctIcon) };
 }
@@ -3469,6 +3958,7 @@ function makeFeelingItem(d, pool, arity){
   const choices = shuffle([d, ...distractors]);
   return { label: d.name, b: d.age, c: 1/choices.length, s: 4,
     prompt: `Who feels ${d.name}?`, say: `Who feels ${d.name}? Tap the ${d.name} face!`,
+    explain: FEELING_EXPLAIN[d.name],
     tiles: choices.map(c => feelingSVG(c.name)), correct: choices.indexOf(d) };
 }
 
@@ -3675,56 +4165,125 @@ function tapMascot(){
   speak(pick(MASCOT_LINES), () => { state.mascotSpeaking = false; });
 }
 
-/* ---------- v9.5: parent answer timer (Feature 1) ----------
-   A parent-tappable ⏱ button next to Skip/Doesn't-know starts a 10-second countdown for the
-   CURRENT item only. No auto-start (a parent opts in per question), no ticking sound — just a
-   thin shrinking bar under the prompt, animated via a plain CSS width transition (100% -> 0%
-   over the same 10s the real setTimeout deadline uses) rather than a per-frame JS timer, so the
-   visual can never itself drift out of sync with the moment dontKnowItem() actually fires.
-   On expiry with no resolution, routes through dontKnowItem() exactly (scores incorrect, ᴰᴷ
-   mark, neutral transition) — no separate scoring path.
-   Cancelled — via cancelAnswerTimer() — at every point that resolves or abandons the current
-   item (correct tap, second-miss reveal, manual skip/doesn't-know, map-out) and unconditionally
-   at the top of renderItem(), so a timer can never survive into the next item/domain. Re-
-   tappable each question: a second tap while one is already running just restarts the full 10s
-   (cancelAnswerTimer() at the top of startAnswerTimer() below) rather than toggling it off or
-   stacking a second deadline — "start a countdown" is the button's only stated affordance. */
-let _answerTimer = null; // { timeoutId, item } targeting state.currentItem at start time, or null
+/* ---------- v12: SHRUG FLOW (replaces v9.5's parent-tappable answer timer/skip/doesn't-know
+   buttons in SCORED play — see the removed #timerBtn/#skipBtn/#dkBtn markup and this file's own
+   v12 NOTES entry). Fully automatic, no parent tap required: ~12s after a scored item renders
+   with no resolution, a kid-sized 🤷 button fades in near the prompt with one gentle pulse.
+   Tapping it: the correct tile/object/body-part glows via the SAME .reveal styling second-miss
+   already uses, the fox speaks that item's explanation (it.explain — see the v12 EXPLAIN tables
+   above), it scores via the SAME path dontKnowItem used to (recordResult(it,false,{dontKnow:
+   true}) — ᴰᴷ marker, streak reset, floor bookkeeping, EAP update), then a rotating "we both
+   learned something" normalizer line, then advance. Never framed as failure — see
+   SHRUG_NORMALIZER_LINES below.
+   Three CONSECUTIVE shrugs end the domain gracefully (celebratory, not a failure state) — see
+   recordResult()'s ds.consecShrugs bookkeeping (reset by ANY non-shrug resolution) and
+   tapShrug()'s own check below.
+   Timer plumbing intentionally mirrors the old parent timer's shape (own timer var, cancel-
+   unconditionally-at-top-of-renderItem, cancel-on-every-resolution-path) since that discipline —
+   "a timer must never survive into the next item/domain" — is exactly as true here; only the
+   TRIGGER (automatic vs parent-tapped) and the RESOLUTION (reveal+explain+normalizer vs silent
+   ᴰᴷ) changed. */
+const SHRUG_DELAY_MS = 12000;
+// v12: rotate ~4 variants, per the task — spoken after the explanation, always framing the
+// shrug as a shared discovery, never a failure.
+const SHRUG_NORMALIZER_LINES = [
+  "I didn't know either — now we BOTH know!",
+  "Now we know it together!",
+  "That's a tricky one — good thing we figured it out!",
+  "Every question teaches us something new!",
+];
+// v12: spoken once, on the 3rd CONSECUTIVE shrug, instead of a normalizer line — the domain then
+// ends via the normal domainDone() flow (celebratory interlude, finalizeDomain, rotation-lock
+// bookkeeping), so this is layered on TOP of that, not a replacement for it.
+const SHRUG_END_LINES = [
+  "We found your super spot! High five!",
+  "Look how much you learned today! High five!",
+  "You found your growing edge — nice work!",
+];
+let _shrugTimer = null; // { timeoutId, item } targeting state.currentItem at arm time, or null
 
-function cancelAnswerTimer(){
-  if (_answerTimer){ clearTimeout(_answerTimer.timeoutId); _answerTimer = null; }
-  const bar = $("timerBar");
-  if (bar){ bar.classList.remove("running"); bar.style.transition = "none"; bar.style.width = "0%"; }
-  const btn = $("timerBtn");
-  if (btn) btn.classList.remove("active");
+function hideShrugBtn(){
+  const btn = $("shrugBtn");
+  if (btn){ btn.style.display = "none"; btn.classList.remove("show"); }
+}
+function showShrugBtn(){
+  const btn = $("shrugBtn");
+  if (!btn) return;
+  btn.style.display = "inline-flex";
+  btn.classList.remove("show"); void btn.offsetWidth; // restart the fade-in + one-shot pulse
+  btn.classList.add("show");
+}
+function cancelShrugTimer(){
+  if (_shrugTimer){ clearTimeout(_shrugTimer.timeoutId); _shrugTimer = null; }
+  hideShrugBtn();
+}
+// Called once per rendered scored item (tile-grid, seek&find, and mybody all call this at the
+// end of their own render function — see renderItem()/renderSeekfindRound()/renderBodyRound())
+// — NOT parent-triggered, per the task ("no parent tap required").
+function armShrugTimer(){
+  if (state.locked || !state.currentItem || !state.domain) return; // nothing live to arm for
+  cancelShrugTimer(); // belt-and-braces — every render already calls this at its own top too
+  const it = state.currentItem;
+  const timeoutId = setTimeout(() => {
+    _shrugTimer = null;
+    // Only show if this is STILL the same, unresolved item — same staleness guard the old
+    // parent-timer's expiry check used.
+    if (state.currentItem === it && !state.locked && state.domain) showShrugBtn();
+  }, SHRUG_DELAY_MS);
+  _shrugTimer = { timeoutId, item: it };
+}
+function tapShrug(){
+  if (state.locked || !state.currentItem || !state.domain) return;
+  cancelShrugTimer();
+  state.locked = true;
+  const it = state.currentItem;
+  // reveal the correct answer with the SAME styling every second-miss reveal already uses,
+  // dispatched by board type exactly like tapTile/tapSeekObj/tapBodyPart's own reveal branches.
+  if (it.seekfind){
+    const el = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
+    if (el) el.classList.add("reveal","found");
+    if (state.domain.sf && state.domain.sf.scene) state.domain.sf.scene.resolved++;
+  } else if (it.body){
+    $("seekBoard").querySelectorAll(`.body-hit[data-part="${it.label}"]`).forEach(e => e.classList.add("reveal"));
+  } else {
+    const tiles = [...$("board").children];
+    tiles[it.correct].classList.add("reveal");
+    tiles.forEach((t,j) => { if (j !== it.correct) t.classList.add("dim"); });
+  }
+  // scores via the SAME path dontKnowItem used (ᴰᴷ marker, streak reset, floor bookkeeping) —
+  // recordResult()'s own ds.consecShrugs bookkeeping (see its v12 comment) is what tapShrug reads
+  // right after this call to decide between a normalizer line and the 3-in-a-row graceful end.
+  recordResult(it, false, { dontKnow: true, shrug: true });
+  queueComeback(it, it.seekfind ? "seek" : (it.body ? "body" : "tile")); // v12: req 6 — see its own comment
+  const consecShrugs = state.domain.consecShrugs || 0;
+  ttsCancel(); stopClip(); // sanctioned interrupt path, same as skip/doesn't-know/map-out used to be
+  const explainText = it.explain || it.revealText || `This one is the ${it.label}!`;
+  setTimeout(() => {
+    speak(explainText, () => {
+      if (!state.domain) return; // map-out mid-explanation guard
+      if (consecShrugs >= 3){
+        speak(pick(SHRUG_END_LINES), () => { if (state.domain) domainDone(); });
+      } else {
+        speak(pick(SHRUG_NORMALIZER_LINES), () => { if (state.domain) renderItem(); });
+      }
+    });
+  }, 150);
 }
 
-function startAnswerTimer(){
-  // Nothing live to time — between domains, mid domain-transition narration, or the item
-  // already resolved. Same guard shape as skipItem/dontKnowItem.
-  if (state.locked || !state.currentItem || !state.domain) return;
-  cancelAnswerTimer(); // re-tappable: a second tap restarts the full 10s rather than stacking
-  const it = state.currentItem;
-  const bar = $("timerBar");
-  if (bar){
-    bar.style.transition = "none";
-    bar.style.width = "100%";
-    bar.classList.add("running");
-    void bar.offsetWidth; // force a reflow so the transition below actually animates from 100%
-    bar.style.transition = "width 10s linear";
-    bar.style.width = "0%";
-  }
-  const timerBtn = $("timerBtn");
-  if (timerBtn) timerBtn.classList.add("active"); // guarded to match cancelAnswerTimer()'s own null-check style
-  const timeoutId = setTimeout(() => {
-    const firedFor = it;
-    cancelAnswerTimer(); // clears _answerTimer/bar/button — safe even though this timeout already fired
-    // Only fire dontKnowItem() if this is STILL the same, unresolved item — belt-and-braces:
-    // every resolution path already cancels this timer itself, but this guard makes a
-    // resolution/expiry race harmless even if one of those call sites were ever missed.
-    if (state.currentItem === firedFor && !state.locked && state.domain) dontKnowItem();
-  }, 10000);
-  _answerTimer = { timeoutId, item: it };
+/* ---------- v12: "brave guess" micro-reward (req 3) ----------
+   Every genuine wrong attempt (first OR second miss, scored or arcade) pops a small chip near
+   the star bar — its OWN counter, lighter pop animation than addStar()'s confetti — plus a
+   rotating fox-praise line on the FIRST miss (the second miss speaks the item's explanation
+   instead, so the two spoken lines never stack). Session-local only (like state.stars), not
+   persisted — this is in-the-moment reassurance, not a tracked metric. */
+const BRAVE_GUESS_LINES = ["Brave guess!", "I love that you tried!", "Guessing makes your brain grow!"];
+function braveGuess(){
+  state.braveGuesses = (state.braveGuesses || 0) + 1;
+  const chip = $("braveChip"), count = $("braveCount");
+  if (!chip) return;
+  chip.style.display = "inline-flex";
+  count.textContent = state.braveGuesses;
+  chip.classList.remove("pop"); void chip.offsetWidth; chip.classList.add("pop");
 }
 
 /* ---------- flow ---------- */
@@ -4033,8 +4592,8 @@ function clearBoardUI(){
   $("seekBoard").innerHTML = ""; $("seekBoard").style.display = "none";
   $("promptText").textContent = "";
   $("categoryAnchors").innerHTML = ""; $("categoryAnchors").style.display = "none";
-  $("skipBtn").style.display = "none"; $("dkBtn").style.display = "none";
-  $("timerBtn").style.display = "none"; cancelAnswerTimer(); // v9.5: a prior domain's timer must not tick through the "Now let's play with X!" narration window
+  cancelShrugTimer(); // v12: a prior domain's shrug timer must not tick through the "Now let's play with X!" narration window
+  hideShrugBtn();
   $("domainTransition").style.display = "none"; $("domainTransition").innerHTML = ""; // v6: see showDomainTransition/renderItem
 }
 
@@ -4103,7 +4662,7 @@ function backToMap(){
   // callback that fires renderItem() afterward is already guarded by the existing
   // `if (!ds) return` check (showPicker nulls state.domain).
   if (state.domain) finalizeDomain(state.domain);
-  cancelAnswerTimer(); // v9.5: map-out cancels any running answer timer
+  cancelShrugTimer(); // v12: map-out cancels any running shrug timer
   state.sessionMode = "single";
   ttsCancel(); stopClip(); // v8: map-out is a sanctioned interrupt path — stop any playing recorded clip too
   showPicker();
@@ -4130,11 +4689,134 @@ function finalizeDomain(ds){
     theta: Math.round(thetaHat),
     sd: Math.round(sd),
     n: ds.n,
-    items: ds.log.slice(),
+    // v12: comeback cards (req 6) — ds.comebackLog entries (each {comeback:true}) are appended
+    // AFTER the real scored log, purely for parent-facing item-detail visibility (fmtItem shows
+    // them with a 🔁 marker). They never affected ds.n/ds.grid/ds.post (resolveComeback() never
+    // calls recordResult/updatePosterior), so theta/sd above are already correct with or without
+    // this concat — this is display-only.
+    items: ds.log.concat(ds.comebackLog || []),
   };
 }
 
+/* ---------- v12: COMEBACK CARDS (req 6) ----------
+   Items revealed via shrug or a real second-miss in SCORED play (queueComeback(), called from
+   tapTile/tapSeekObj/tapBodyPart/tapShrug's own reveal branches) get queued on ds.comebackQueue.
+   At the true end of that domain — domainDone() now routes through startComebackOrFinish()
+   FIRST, before the normal finalize+celebrate flow (finishDomainCelebration(), the renamed old
+   domainDone() body) — up to 2 are re-asked as UNSCORED "Remember this one?" bonus rounds: same
+   underlying item, tiles/scene re-shuffled fresh via the SAME render primitives scored play uses
+   (renderSeekfindScene/renderBodyFigure/a fresh tile-array shuffle), just with dedicated tap
+   closures (never tapTile/tapSeekObj/tapBodyPart, never state.currentItem/state.locked/
+   recordResult) so a comeback round is structurally incapable of touching theta/n/streak/floor —
+   same "own render + own resolution path, never the scored engine's" pattern arcade already
+   established. Correct -> full celebration (addStar/confetti/chime, same praise lines scored
+   play uses). Wrong -> gentle reveal (same .reveal/.dim styling) + that item's explanation, no
+   penalty, single attempt (no second-chance loop — this is low-stakes bonus content, not a
+   measurement item). Scope decision (adversarial-review note): arcade-timeout reveals are NOT
+   queued — arcade sessions are endless with no "end of domain" boundary to replay them at (see
+   state.arcade's own comment on why arcade never touches state.domain); comeback cards are a
+   scored-domain-only feature, documented in NOTES.md v12. */
+function queueComeback(it, kind){
+  const ds = state.domain;
+  if (!ds) return;
+  ds.comebackQueue = ds.comebackQueue || [];
+  if (ds.comebackQueue.some(e => e.it.label === it.label)) return; // no duplicate comeback for the same item
+  ds.comebackQueue.push({ kind, it });
+}
+function startComebackOrFinish(){
+  const ds = state.domain;
+  if (!ds){ finishDomainCelebration(); return; }
+  const queue = ds.comebackQueue || [];
+  if (!queue.length){ finishDomainCelebration(); return; }
+  ds.comebackPending = shuffle(queue).slice(0, 2); // "up to 2", randomly chosen if more were queued
+  ds.comebackLog = [];
+  renderComebackItem();
+}
+function renderComebackItem(){
+  const ds = state.domain;
+  if (!ds || !ds.comebackPending || !ds.comebackPending.length){ finishDomainCelebration(); return; }
+  ds.comebackLocked = false;
+  const entry = ds.comebackPending[0];
+  const it = entry.it;
+  clearBoardUI();
+  show("gameScreen");
+  state.currentItem = it; // so 🔊 repeatPrompt() replays THIS item, not a stale scored one — see activeItemHolder()
+  $("promptText").textContent = "Remember this one? " + it.prompt;
+  if (entry.kind === "seek"){
+    const sceneDef = SEEKFIND_SCENES.find(s => s.words.includes(it.label));
+    const scene = { def: sceneDef, slots: seekfindSlots(sceneDef.words.length) };
+    $("board").style.display = "none"; $("seekBoard").style.display = "block";
+    renderSeekfindScene(scene, (word, el) => {
+      if (ds.comebackLocked) return; ds.comebackLocked = true;
+      const correct = word === it.label;
+      const targetEl = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
+      resolveComeback(it, correct, () => { if (targetEl) targetEl.classList.add(correct ? "correct" : "reveal", "found"); });
+    });
+  } else if (entry.kind === "body"){
+    $("board").style.display = "none"; $("seekBoard").style.display = "block";
+    renderBodyFigure((part, el) => {
+      if (ds.comebackLocked) return; ds.comebackLocked = true;
+      const correct = part === it.label;
+      resolveComeback(it, correct, () => {
+        $("seekBoard").querySelectorAll(`.body-hit[data-part="${it.label}"]`).forEach(e => e.classList.add(correct ? "correct" : "reveal"));
+      });
+    });
+  } else {
+    $("seekBoard").style.display = "none"; $("board").style.display = "grid";
+    const order = shuffle(it.tiles.map((_, i) => i)); // "same tiles re-shuffled" — fresh permutation, same picture set
+    const newCorrect = order.indexOf(it.correct);
+    const board = $("board");
+    const nTiles = order.length;
+    board.style.gridTemplateColumns = (nTiles === 3 || nTiles >= 5) ? "1fr 1fr 1fr" : "1fr 1fr";
+    board.classList.toggle("compact", nTiles >= 5);
+    board.innerHTML = "";
+    order.forEach((origIdx, i) => {
+      const tile = document.createElement("div");
+      tile.className = "tile";
+      tile.innerHTML = it.tiles[origIdx];
+      attachTap(tile, () => {
+        if (ds.comebackLocked) return; ds.comebackLocked = true;
+        const correct = i === newCorrect;
+        const tiles = [...board.children];
+        resolveComeback(it, correct, () => {
+          tiles[newCorrect].classList.add(correct ? "correct" : "reveal");
+          tiles.forEach((t,j) => { if (j !== newCorrect) t.classList.add("dim"); });
+        });
+      });
+      board.appendChild(tile);
+    });
+  }
+  speak("Remember this one?", () => { if (state.domain === ds) sayItem(it); });
+}
+function resolveComeback(it, correct, revealFn){
+  const ds = state.domain;
+  if (!ds) return;
+  ds.comebackPending.shift();
+  ds.comebackLog.push({ label: it.label, b: it.b, correct, comeback: true });
+  revealFn();
+  if (correct){
+    chimeGood(); addStar(); confetti(8);
+    $("mascot").classList.remove("bounce"); void $("mascot").offsetWidth; $("mascot").classList.add("bounce");
+    speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]), () => {
+      setTimeout(() => { if (state.domain === ds) renderComebackItem(); }, 300);
+    });
+  } else {
+    chimeTry();
+    const explainText = it.explain || it.revealText || `This one is the ${it.label}!`;
+    speak(explainText, () => {
+      setTimeout(() => { if (state.domain === ds) renderComebackItem(); }, 300);
+    });
+  }
+}
+
 function domainDone(){
+  // v12: comeback cards (req 6) run BEFORE the normal finalize+celebrate flow — see
+  // startComebackOrFinish()'s own comment. finalizeDomain() itself now happens inside
+  // finishDomainCelebration() below (moved from the top of this function) so ds.comebackLog is
+  // fully populated by the time finalizeDomain() reads it.
+  startComebackOrFinish();
+}
+function finishDomainCelebration(){
   finalizeDomain(state.domain);
   const dom = DOMAINS[state.domainIdx];
   // v9.5: rotation lock (Feature 2) — this is the ONE call site for "a domain reached its
@@ -4218,7 +4900,7 @@ function shrinkToFit(els, maxFont, minFont){
 }
 
 function renderItem(){
-  cancelAnswerTimer(); // v9.5: a timer must not survive into the next item — unconditional, before any early return
+  cancelShrugTimer(); // v12: a shrug timer must not survive into the next item — unconditional, before any early return
   const dom = DOMAINS[state.domainIdx];
   const ds = state.domain;
   if (!ds) return; // a stale speak() callback fired after endGame() already tore down the session
@@ -4229,9 +4911,6 @@ function renderItem(){
   $("domainTransition").style.display = "none";
   $("categoryAnchors").style.display = "none"; // reset — re-shown below only for category items
   if (domainShouldStop(ds)){ domainDone(); return; }
-  // v5.1: restore the controls clearBoardUI() hid on domain entry — safe to call on every
-  // render (mid-domain re-renders just no-op back to their already-visible state).
-  $("skipBtn").style.display = ""; $("dkBtn").style.display = ""; $("timerBtn").style.display = ""; // v9.5
   if (dom.key === "seekfind"){
     $("board").style.display = "none";
     $("seekBoard").style.display = "block";
@@ -4300,65 +4979,7 @@ function renderItem(){
   }
   $("progressBar").style.width = progressPct(ds) + "%";
   sayItem(it); // v8: it.cueKey is set by makeRhymeItem/makeLetterSoundItem (phono); every other domain's item has no cueKey, so this is a no-op fallback to the previous speak(it.say) call
-}
-
-function skipItem(){
-  // v4 (mod 1): parent-facing skip. Excluded from the EAP estimate entirely (no
-  // updatePosterior call), does not touch ds.n (min/max item count), only ds.presented
-  // (the separate 12-presentation cap). The item is already in ds.used by the time
-  // this can be tapped (added at selection time in renderItem/renderSeekfindRound
-  // for both the tile-grid and seek&find paths), so it won't be re-offered. No penalty
-  // sound, no shake/dim styling, mascot untouched — stays cheerful.
-  if (state.locked || !state.currentItem || !state.domain) return;
-  cancelAnswerTimer(); // v9.5: manual skip cancels any running answer timer
-  state.locked = true;
-  const it = state.currentItem;
-  if (it.seekfind){
-    // v5 adversarial-review fix (pre-existing since v4, only surfaced now by comparison
-    // against dontKnowItem's handling of the identical situation): without retiring the
-    // on-screen object, a SKIPPED seek&find object stayed live/clickable for the rest of
-    // the scene — the exact stale-clickable-object bug .seek-obj.found's pointer-events:none
-    // was originally added to prevent (see that CSS comment), just re-opened via the one
-    // code path that predated it.
-    const el = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
-    if (el) el.classList.add("found");
-    if (state.domain.sf && state.domain.sf.scene) state.domain.sf.scene.resolved++;
-  }
-  state.domain.log.push({ label: it.label, b: it.b, skipped: true });
-  ttsCancel(); stopClip(); // v8: skip is a sanctioned interrupt path — stop any playing recorded clip too
-  setTimeout(() => { renderItem(); }, 150);
-}
-
-function dontKnowItem(){
-  // v5 (mod 3): parent-facing "doesn't know" — unlike Skip (excluded entirely from the
-  // estimate), this SCORES as incorrect: reuses recordResult's normal miss path (ds.n++,
-  // updatePosterior(correct=false), streak reset, floor bookkeeping) via the same `extra`
-  // param used to tag the log entry, so no scoring logic is duplicated here. No penalty sound,
-  // no tile shake/dim, no reveal (revealing would teach an answer the parent already said the
-  // child doesn't know — the point is measurement, not instruction) — just a brief neutral
-  // spoken transition and on to the next item, at Skip's pace.
-  if (state.locked || !state.currentItem || !state.domain) return;
-  cancelAnswerTimer(); // v9.5: manual "doesn't know" cancels any running timer; a no-op when THIS call is the timer's own expiry firing (already cleared before invoking dontKnowItem())
-  state.locked = true;
-  const it = state.currentItem;
-  if (it.seekfind){
-    // retire the on-screen object WITHOUT revealing it: add only "found" (fades, stops
-    // bobbing, pointer-events:none) — never "reveal"/"correct" (green outline + pop, which
-    // would tell the child which one it was). Without this the un-resolved object stays
-    // live and clickable for the rest of the scene — a free/misleading "correct" tap trap for
-    // a LATER item's target, the same class of bug v3 fixed for found/revealed objects.
-    const el = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
-    if (el) el.classList.add("found");
-    if (state.domain.sf && state.domain.sf.scene) state.domain.sf.scene.resolved++;
-  }
-  recordResult(it, false, { dontKnow: true });
-  // adversarial-review fix: a bare cancel()-then-speak() here would get silently swallowed
-  // in Chrome (see speak()'s own doc comment on this exact anti-pattern) — repeatPrompt()
-  // works around it with a delay after cancel(); do the same here instead of firing speak()
-  // synchronously on the next line.
-  ttsCancel(); stopClip(); // v8: "doesn't know" is a sanctioned interrupt path — stop any playing recorded clip too
-  setTimeout(() => { speak("On to the next one!"); }, 150);
-  setTimeout(() => { renderItem(); }, 1000);
+  armShrugTimer(); // v12: auto-start the 12s shrug-button timer for this item — see its own comment
 }
 
 /* ---------- seek & find (Feature 3) ---------- */
@@ -4421,7 +5042,7 @@ function renderSeekfindRound(dom, ds){
   // v5 (Issue 1 fix): same streak/floor/randomized-top-3 selection as pickNextItem, scoped to
   // this scene's remaining words (seek&find doesn't go through dom.make/pickNextItem, so the
   // rule has to be reapplied locally rather than shared through one call site).
-  const target = computeTarget(ds);
+  const target = computeTarget(ds, "seekfind");
   // IMPORTANT: filter a COPY for candidate selection, then remove `word` from the real
   // (unfiltered) ds.sf.scene.remaining — floor-excluded words must stay in the scene's
   // remaining pool for later rounds, not get silently dropped just because they lost this
@@ -4444,17 +5065,19 @@ function renderSeekfindRound(dom, ds){
   const liveCount = Math.max(1, ds.sf.scene.def.words.length - ds.sf.scene.resolved);
   const it = { label: word, b: info.age, c: 1/liveCount, s: 4,
     prompt: `Find the ${word}!`, say: `Can you find the ${word}? Tap the ${word}!`,
+    explain: VOCAB_EXPLAIN[word],
     seekfind: true };
   state.currentItem = it; state.locked = false; state.firstTry = true;
   $("promptText").textContent = it.prompt;
   $("progressBar").style.width = progressPct(ds) + "%";
   sayItem(it); // v8: no-op fallback to speak() — seekfind items never set cueKey
+  armShrugTimer(); // v12: see its own comment
 }
 function tapSeekObj(word, el){
-  // v6 adversarial-review fix: mirrors skipItem/dontKnowItem's guard (they already check
-  // !state.domain) — without it, a click that lands after backToMap()/endGame() has nulled
-  // state.domain (the tile itself can outlive that: switching screens only toggles a CSS class,
-  // it doesn't clear #board/#seekBoard, so a click dispatched programmatically or via a
+  // v6 adversarial-review fix: mirrors the domain-nulled-mid-flight guard every other tap
+  // handler here also checks — without it, a click that lands after backToMap()/endGame() has
+  // nulled state.domain (the tile itself can outlive that: switching screens only toggles a CSS
+  // class, it doesn't clear #board/#seekBoard, so a click dispatched programmatically or via a
   // late-arriving event on an old, now-hidden element was still reaching recordResult() and
   // crashing on `ds.log.push` with ds===null.
   if (state.locked || !state.domain) return;
@@ -4462,7 +5085,7 @@ function tapSeekObj(word, el){
   if (!it || !it.seekfind) return;
   if (word === it.label){
     state.locked = true;
-    cancelAnswerTimer(); // v9.5: item resolved (correct) — stop any running answer timer
+    cancelShrugTimer(); // v12: item resolved (correct) — stop any running shrug timer
     el.classList.add("correct","found");
     if (state.domain && state.domain.sf && state.domain.sf.scene) state.domain.sf.scene.resolved++;
     chimeGood();
@@ -4473,19 +5096,20 @@ function tapSeekObj(word, el){
     setTimeout(()=>{ renderItem(); }, 1300);
   } else {
     chimeTry();
-    el.classList.add("wrong");
-    setTimeout(()=>el.classList.remove("wrong"), 500);
+    el.classList.add("dim"); // v12: gentle dim, no shake — see tapTile's own comment
+    braveGuess();
     if (state.firstTry){
       state.firstTry = false;
-      speak(pick(["Good try! Look again!","Hmm, try again!"]));
+      speak(pick(BRAVE_GUESS_LINES));
     } else {
       state.locked = true;
-      cancelAnswerTimer(); // v9.5: item resolved (second-miss reveal) — stop any running answer timer
+      cancelShrugTimer(); // v12: item resolved (second-miss reveal) — stop any running shrug timer
       recordResult(it, false);
+      queueComeback(it, "seek"); // v12: req 6 — see its own comment
       const targetEl = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
       if (targetEl) targetEl.classList.add("reveal","found");
       if (state.domain && state.domain.sf && state.domain.sf.scene) state.domain.sf.scene.resolved++;
-      speak(it.revealText || `This one is the ${it.label}!`);
+      speak(it.explain || it.revealText || `This one is the ${it.label}!`);
       setTimeout(()=>{ renderItem(); }, 1600);
     }
   }
@@ -4509,15 +5133,15 @@ function repeatPrompt(){
 
 function tapTile(i, tileEl){
   // v6 adversarial-review fix: same stale-click guard as tapSeekObj above — tapTile previously
-  // checked ONLY state.locked, unlike its skipItem/dontKnowItem siblings which also check
-  // !state.currentItem/!state.domain. A click reaching this handler after navigation nulled
-  // state.domain (or state.currentItem) crashed inside recordResult's `ds.log.push`.
+  // checked ONLY state.locked, unlike its siblings which also check !state.currentItem/
+  // !state.domain. A click reaching this handler after navigation nulled state.domain (or
+  // state.currentItem) crashed inside recordResult's `ds.log.push`.
   if (state.locked || !state.currentItem || !state.domain) return;
   const it = state.currentItem;
   const tiles = [...$("board").children];
   if (i === it.correct){
     state.locked = true;
-    cancelAnswerTimer(); // v9.5: item resolved (correct) — stop any running answer timer
+    cancelShrugTimer(); // v12: item resolved (correct) — stop any running shrug timer
     tileEl.classList.add("correct");
     tiles.forEach((t,j)=>{ if(j!==i) t.classList.add("dim"); });
     chimeGood();
@@ -4527,21 +5151,29 @@ function tapTile(i, tileEl){
     speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]));
     setTimeout(()=>{ renderItem(); }, 1300);
   } else {
+    // v12: wrong-answer destigmatizing (req 3) — gently dim the tapped tile (no shake, no red
+    // border; .tile.wrong/@keyframes shake are removed from the CSS entirely, see index.html's
+    // <style> block), and EVERY genuine attempt earns a "brave guess" chip (own counter, lighter
+    // animation than addStar()'s confetti — see braveGuess()'s own comment) regardless of
+    // whether this is the first or second miss.
     chimeTry();
-    tileEl.classList.add("wrong");
-    setTimeout(()=>tileEl.classList.remove("wrong"), 500);
+    tileEl.classList.add("dim");
+    braveGuess();
     if (state.firstTry){
-      // remediation tap — not scored; child gets another try
+      // remediation tap — not scored; child gets another try. Praise variants replace the old
+      // plain "Good try! Look again!" — see BRAVE_GUESS_LINES.
       state.firstTry = false;
-      speak(pick(["Good try! Look again!","Hmm, try again!"]));
+      speak(pick(BRAVE_GUESS_LINES));
     } else {
-      // second miss: reveal, record the (first-attempt) result as incorrect, move on
+      // second miss: reveal, record the (first-attempt) result as incorrect, move on. Now
+      // speaks the item's EXPLANATION (it.explain), not just "this one is the X" — req 4.
       state.locked = true;
-      cancelAnswerTimer(); // v9.5: item resolved (second-miss reveal) — stop any running answer timer
+      cancelShrugTimer(); // v12: item resolved (second-miss reveal) — stop any running shrug timer
       recordResult(it, false);
+      queueComeback(it, "tile"); // v12: req 6 — see its own comment
       tiles[it.correct].classList.add("reveal");
       tiles.forEach((t,j)=>{ if(j!==it.correct) t.classList.add("dim"); });
-      speak(it.revealText || `This one is the ${it.label}!`);
+      speak(it.explain || it.revealText || `This one is the ${it.label}!`);
       setTimeout(()=>{ renderItem(); }, 1600);
     }
   }
@@ -4553,8 +5185,8 @@ function recordResult(it, firstTry, extra){
   ds.n++;
   updatePosterior(ds, it, firstTry);
   // v5 (Issue 1 fix): streak/floor bookkeeping that pickNextItem's computeTarget/applyFloorRule
-  // read. dontKnowItem (mod 3) reuses this same path with firstTry=false, so a "doesn't know"
-  // reset the streak and counts toward the floor exactly like any other miss, with no
+  // read. A shrug (tapShrug, extra.dontKnow) reuses this same path with firstTry=false, so it
+  // resets the streak and counts toward the floor exactly like any other miss, with no
   // special-casing needed here.
   if (firstTry){
     ds.streak = (ds.streak || 0) + 1;
@@ -4563,6 +5195,11 @@ function recordResult(it, firstTry, extra){
     ds.streak = 0;
     if (ds.floorB !== undefined && it.b > ds.floorB) ds.missAboveFloor = (ds.missAboveFloor || 0) + 1;
   }
+  // v12: CONSECUTIVE shrug counter for the shrug flow's "3 in a row ends the domain gracefully"
+  // rule (tapShrug reads this right after calling recordResult) — a shrug increments it, ANY
+  // other resolution (correct tap, or a real second-miss reveal via wrong taps) resets it to 0,
+  // per the task ("answers in between reset the count").
+  ds.consecShrugs = (extra && extra.shrug) ? (ds.consecShrugs || 0) + 1 : 0;
 }
 
 function addStar(){
@@ -4647,7 +5284,7 @@ function endGame(){
   if (state.domain) finalizeDomain(state.domain);
   state.domain = null; // guard against a stale nextDomain()->speak() callback firing renderItem() late
   state.currentItem = null; // bug fix (2026-08-19): same "session over" nulling as showPicker() — see activeItemHolder()'s comment
-  cancelAnswerTimer(); // v9.5: Finish cancels any running answer timer
+  cancelShrugTimer(); // v12: Finish cancels any running shrug timer
   // v10: Finish is a sanctioned arcade-exit path too — arcade contributes NOTHING to results
   // (nothing here reads state.arcade), but a just-resolved question's pending setTimeout
   // (renderArcadeItem/advanceArcade/a streak-celebration chain) must not fire against the
@@ -4723,7 +5360,10 @@ function endGame(){
   // detail
   const det = $("itemDetail");
   det.innerHTML = "";
-  const fmtItem = r => `${r.skipped ? "⏭" : (r.dontKnow ? "❌ᴰᴷ" : (r.correct ? "✅" : "❌"))} ${r.label} <span style="color:#bbb">(${r.b}mo)</span>`;
+  // v12: comeback-card log entries ({comeback:true}, see resolveComeback()) get their own 🔁
+  // prefix ahead of the usual correct/wrong glyph — visually distinct from a scored attempt,
+  // never confusable with ✅/❌/❌ᴰᴷ/⏭.
+  const fmtItem = r => `${r.comeback ? "🔁 " : ""}${r.skipped ? "⏭" : (r.dontKnow ? "❌ᴰᴷ" : (r.correct ? "✅" : "❌"))} ${r.label} <span style="color:#bbb">(${r.b}mo)</span>`;
   for (const dom of DOMAINS){
     const fd = state.finalDomains[dom.key];
     if (!fd) continue;
@@ -4842,7 +5482,7 @@ function renderSessionList(){
     }).join(" · ");
     const detail = Object.entries(s.domains || {}).map(([k,d]) => {
       const dom = DOMAINS.find(x => x.key === k);
-      const items = (d.items || []).map(r => `${r.skipped ? "⏭" : (r.dontKnow ? "❌ᴰᴷ" : (r.correct ? "✅" : "❌"))} ${r.label} (${r.b}mo)`).join(" · ");
+      const items = (d.items || []).map(r => `${r.comeback ? "🔁 " : ""}${r.skipped ? "⏭" : (r.dontKnow ? "❌ᴰᴷ" : (r.correct ? "✅" : "❌"))} ${r.label} (${r.b}mo)`).join(" · ");
       return `<p><b>${dom ? dom.label : k}:</b> ${items}</p>`;
     }).join("");
     const dateStr = new Date(s.date).toLocaleDateString();
@@ -5708,6 +6348,7 @@ function buildMixItUpItem(sess){
     label: pair.word, b: info.age,
     prompt: `Find the ${pair.word}!`, say: `Can you find the ${pair.word}? Tap the ${pair.word}!`,
     revealText: `This one is the ${pair.word}!`, // identical string to the scored seekfind bundle — no extra audio needed
+    explain: VOCAB_EXPLAIN[pair.word],
     sceneKey: pair.sceneKey, arcadeSource: "seekfind", kind: "seek",
   };
 }
@@ -5766,6 +6407,7 @@ function buildEverythingItem(sess){
       label: pair.word, b: info.age,
       prompt: `Find the ${pair.word}!`, say: `Can you find the ${pair.word}? Tap the ${pair.word}!`,
       revealText: `This one is the ${pair.word}!`,
+      explain: VOCAB_EXPLAIN[pair.word],
       sceneKey: pair.sceneKey, arcadeSource: "seekfind", kind: "seek",
     };
   }
@@ -5781,6 +6423,7 @@ function buildEverythingItem(sess){
       label: d.label, b: d.age,
       prompt: `Tap the ${d.label}!`, say: `Can you find the ${d.label}? Tap it!`,
       revealText: `This one is the ${d.label}!`,
+      explain: BODY_EXPLAIN[d.label],
       arcadeSource: "mybody", kind: "body",
     };
   }
@@ -5810,9 +6453,9 @@ const ARCADE_MODES = {
 };
 
 /* ---------- arcade-owned answer timer (Feature 3) ----------
-   Deliberately NOT _answerTimer/startAnswerTimer/cancelAnswerTimer (the v9.5 parent timer) —
-   own variable (state.arcade.timer), own DOM element (#arcadeTimerBar), same visual mechanics
-   (a plain CSS width transition, not per-frame JS — see v9.5's own comment on why). Cancelled
+   Deliberately NOT _shrugTimer/armShrugTimer/cancelShrugTimer (v12's automatic scored-play shrug
+   flow) — own variable (state.arcade.timer), own DOM element (#arcadeTimerBar), same visual
+   mechanics (a plain CSS width transition, not per-frame JS). Cancelled
    on ANY resolving tap (correct or the final/second wrong tap) inside tapArcadeTile/
    tapArcadeSeekObj, so there is exactly one path that can ever advance to the next question
    for a given item: either the child resolves it (timer cancelled first, synchronously —
@@ -5838,7 +6481,7 @@ function startArcadeTimer(sess){
   const timeoutId = setTimeout(() => {
     const firedFor = it;
     cancelArcadeTimer(sess);
-    // belt-and-braces, same style as startAnswerTimer()'s own guard: every resolution path
+    // belt-and-braces, same style as armShrugTimer()'s own guard: every resolution path
     // already cancels this timer itself, so this makes a resolution/expiry race harmless even
     // if a call site were ever missed, rather than actually relying on it.
     if (sess.active && sess.currentItem === firedFor && !sess.locked) arcadeTimeout(sess);
@@ -5930,11 +6573,15 @@ function arcadeTimeout(sess){
     tiles[it.correct].classList.add("reveal");
     tiles.forEach((t,j) => { if (j !== it.correct) t.classList.add("dim"); });
   }
-  speak(it.revealText || `This one is the ${it.label}!`);
+  speak(it.explain || it.revealText || `This one is the ${it.label}!`);
   finishArcadeQuestion(sess, false, ARCADE_REVEAL_MS);
 }
 
 /* ---------- tap handlers (arcade-owned; NOT tapTile/tapSeekObj/tapBodyPart) ---------- */
+// v12: wrong-answer destigmatizing (req 3) applies "in ALL modes", arcade included — a wrong tap
+// here gets the SAME gentle-dim + brave-guess treatment as scored play (see tapTile's own v12
+// comment for the full reasoning); the only arcade-specific bit is that a MISS still needs to
+// cancel/not-restart the 15s arcade timer, unchanged from before this pass.
 function tapArcadeTile(sess, i, tileEl){
   if (sess.locked || !sess.currentItem) return;
   cancelArcadeTimer(sess); // ANY tap (right or wrong) cancels — see startArcadeTimer()'s own comment
@@ -5950,17 +6597,17 @@ function tapArcadeTile(sess, i, tileEl){
     finishArcadeQuestion(sess, firstTry);
   } else {
     chimeTry();
-    tileEl.classList.add("wrong");
-    setTimeout(() => tileEl.classList.remove("wrong"), 500);
+    tileEl.classList.add("dim"); // v12: gentle dim, no shake/red — see tapTile's own comment
+    braveGuess(); // v12: every genuine wrong attempt earns the brave-guess chip
     if (sess.firstTry){
       sess.firstTry = false;
-      speak(pick(["Good try! Look again!","Hmm, try again!"]));
+      speak(pick(BRAVE_GUESS_LINES));
       // not resolved yet — no advance, no streak change, timer stays cancelled (no restart)
     } else {
       sess.locked = true;
       tiles[it.correct].classList.add("reveal");
       tiles.forEach((t,j) => { if (j !== it.correct) t.classList.add("dim"); });
-      speak(`This one is the ${it.label}!`);
+      speak(it.explain || it.revealText || `This one is the ${it.label}!`);
       finishArcadeQuestion(sess, false);
     }
   }
@@ -5978,16 +6625,16 @@ function tapArcadeSeekObj(sess, word, el){
     finishArcadeQuestion(sess, firstTry);
   } else {
     chimeTry();
-    el.classList.add("wrong");
-    setTimeout(() => el.classList.remove("wrong"), 500);
+    el.classList.add("dim"); // v12: gentle dim, no shake — see tapTile's own comment
+    braveGuess();
     if (sess.firstTry){
       sess.firstTry = false;
-      speak(pick(["Good try! Look again!","Hmm, try again!"]));
+      speak(pick(BRAVE_GUESS_LINES));
     } else {
       sess.locked = true;
       const targetEl = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
       if (targetEl) targetEl.classList.add("reveal","found");
-      speak(it.revealText || `This one is the ${it.label}!`);
+      speak(it.explain || it.revealText || `This one is the ${it.label}!`);
       finishArcadeQuestion(sess, false);
     }
   }
@@ -6011,15 +6658,15 @@ function tapArcadeBodyPart(sess, part, el){
     finishArcadeQuestion(sess, firstTry);
   } else {
     chimeTry();
-    el.classList.add("wrong");
-    setTimeout(() => el.classList.remove("wrong"), 500);
+    el.classList.add("dim"); // v12: gentle dim, no shake — see tapTile's own comment
+    braveGuess();
     if (sess.firstTry){
       sess.firstTry = false;
-      speak(pick(["Good try! Look again!","Hmm, try again!"]));
+      speak(pick(BRAVE_GUESS_LINES));
     } else {
       sess.locked = true;
       highlightAll("reveal");
-      speak(it.revealText || `This one is the ${it.label}!`);
+      speak(it.explain || it.revealText || `This one is the ${it.label}!`);
       finishArcadeQuestion(sess, false);
     }
   }
