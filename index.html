@@ -474,6 +474,139 @@
 <script>
 "use strict";
 /* =====================================================================
+   v11.1: RUNTIME TOFU DETECTION — bug fix, user-reported: some icons render as a "tofu" box
+   (vertical letterbox — the font's generic missing-glyph placeholder) on the Fire tablet's
+   built-in emoji font, which lags several Unicode-emoji versions behind evergreen desktop
+   browsers. The v10 bank-expansion pass added many newer glyphs without checking against that
+   older baseline. Fix has two layers (see NOTES.md v11.1 for the full writeup and the static
+   sweep of which specific emoji got swapped/dropped) — this is layer (a), the runtime one:
+   canvas-measure every emoji drawn from the item-pool banks below (VOCAB_WORDS/FUNCTION_DEFS/
+   COUNT_DEFS/CATEGORY_THEMES/AVATAR_EMOJIS), ONCE per device, and exclude any unsupported glyph
+   from the pools those banks feed BEFORE anything is ever rendered. Two things this does NOT
+   cover, by construction, not oversight (adversarial-review note, 2026-08-19): FEELING_DEFS'
+   3rd-column emoji is dead data (unused for rendering since v4.1 — SVG only, see its own bank
+   comment), nothing to check; TIME_DEFS' tile emoji are hardcoded literals inside timeTiles()'s
+   switch statement, not an array entry this pass can reach — all of those happen to be
+   long-established pre-2015 glyphs (near-zero real risk), but a genuinely new one added there
+   later would need its own explicit isEmojiSupported() call, not get this filtering for free.
+   Placed at the very top of the script (before any bank array below) so filtering can happen
+   immediately after each array's own declaration, transitively covering every downstream
+   consumer (DOMAINS[].defs, VOCAB_BY_WORD, SEEKFIND_SCENES, the arcade content bags) for free —
+   nothing downstream needs its own tofu-awareness. This ordering is also what satisfies "must
+   not flash tofu before filtering": the ~250-glyph sweep runs synchronously during top-level
+   script evaluation, which completes long before init() shows any screen, let alone renders an
+   actual item.
+   ===================================================================== */
+// Bump this whenever a bank gains/loses emoji that should force a re-check on devices with a
+// cached result (a stale cache would otherwise keep excluding a glyph forever even after this
+// file starts using a different/safer one for that word, or wrongly SHOW a glyph this pass
+// newly added without ever having measured it — the version-stamp guard in
+// loadEmojiSupportCache() below treats any mismatch as a full cache miss).
+const EMOJI_SUPPORT_VERSION = 1;
+let _emojiSupportCache = null; // lazy-loaded {version, results:{[emoji]:boolean}} — see loadEmojiSupportCache()
+let _emojiSupportDirty = false; // true once this session has computed at least one NEW result not yet persisted
+// Synchronous, localStorage-only load — same "fast synchronous baseline, then the async
+// IndexedDB-aware pass in reconcileStorage() corrects it later" pattern this file already uses
+// for tg_profile/tg_muted (see migrateLegacyProfile()'s own comment) and now tg_profiles. A
+// stale/cross-store-inconsistent cache here is harmless either way — the ONLY consequence is a
+// few extra (fast, local, no-network) canvas draws to recompute, never a wrong answer, since
+// support is recomputed fresh whenever a glyph is missing from whatever we loaded.
+function loadEmojiSupportCache(){
+  if (_emojiSupportCache) return _emojiSupportCache;
+  try {
+    const raw = JSON.parse(localStorage.getItem("tg_emojiSupport") || "null");
+    if (raw && raw.version === EMOJI_SUPPORT_VERSION && raw.results && typeof raw.results === "object"){
+      _emojiSupportCache = raw;
+      return raw;
+    }
+  } catch(e){}
+  _emojiSupportCache = { version: EMOJI_SUPPORT_VERSION, results: {} };
+  return _emojiSupportCache;
+}
+// persistSet() (dual-write to localStorage + the IndexedDB kv mirror) is declared later in this
+// file, but as a function DECLARATION it's hoisted and fully callable from here — it only
+// touches its own params plus indexedDB/localStorage, never `state` (declared after the bank
+// arrays below), so calling it during top-level script evaluation, before `state` exists, is
+// safe. Called at most once per glyph-computing pass (see isEmojiSupported), not once per
+// glyph, to avoid ~250 redundant writes on a cold cache.
+function persistEmojiSupportCache(){
+  if (!_emojiSupportDirty || !_emojiSupportCache) return;
+  _emojiSupportDirty = false;
+  try { persistSet("tg_emojiSupport", JSON.stringify(_emojiSupportCache)); } catch(e){}
+}
+// ---- canvas glyph-support probe ----
+// Standard "tofu detector" technique: render the candidate glyph to an offscreen canvas and
+// compare its pixel signature against the signature of a codepoint GUARANTEED to have no glyph
+// in any font anywhere — a Unicode noncharacter (U+FFFE), permanently reserved by the standard
+// as never-to-be-assigned, so every OS/browser's font-fallback chain is forced all the way down
+// to its own generic ".notdef" placeholder for it. That placeholder is font-defined (not
+// per-codepoint), so it renders IDENTICALLY regardless of which unassigned codepoint triggered
+// it — meaning any other candidate glyph producing that SAME pixel signature is, by
+// construction, also falling through to the placeholder, i.e. also unsupported. A real
+// (supported) glyph — even a plain monochrome/text-presentation one — draws genuinely different
+// pixels and can never collide with the placeholder's signature, so this has no false-positive
+// path against legitimately-simple glyphs; verified against a set of definitely-supported
+// emoji during adversarial review (see NOTES.md v11.1).
+// Known limitation (adversarial-review note, 2026-08-19, not fixed — see NOTES.md v11.1):
+// this catches a codepoint with NO glyph at all, but not a multi-codepoint ZWJ sequence (e.g.
+// a profession emoji like 👩‍⚕️) that fails to COMPOSE into one pictograph and instead renders as
+// several separate component glyphs side by side — that failure mode draws real, non-tofu
+// pixels, so it reads as "supported" here even though it doesn't look right. A width-based
+// second check (a broken composition is measurably wider than the correctly-fused glyph) could
+// catch this but risks new false positives of its own and wasn't judged worth the added
+// complexity for this pass — every ZWJ sequence still in the banks after the static sweep below
+// is either long-established (doctor/firefighter/farmer/chef) or was already re-verified
+// rendering correctly on evergreen browsers per the v7 notes; none reported as an issue.
+const TOFU_PROBE_SIZE = 40, TOFU_PROBE_FONT_PX = 32;
+let _tofuProbeCtx = null, _tofuBaselineSig = null;
+function tofuProbeCtx(){
+  if (_tofuProbeCtx) return _tofuProbeCtx;
+  const canvas = document.createElement("canvas");
+  canvas.width = TOFU_PROBE_SIZE; canvas.height = TOFU_PROBE_SIZE;
+  _tofuProbeCtx = canvas.getContext("2d", { willReadFrequently: true });
+  // No explicit emoji-font in the stack — deliberately matches the game's OWN rendering (see
+  // the body { font-family } rule far below, which also names no emoji font): every browser's
+  // font-fallback chain reaches the SAME system emoji font for a pictographic codepoint
+  // regardless of the declared font-family, so probing with a generic "sans-serif" stack here
+  // exercises the identical fallback path real gameplay does.
+  _tofuProbeCtx.textBaseline = "top";
+  _tofuProbeCtx.font = `${TOFU_PROBE_FONT_PX}px sans-serif`;
+  return _tofuProbeCtx;
+}
+function glyphSignature(ch){
+  const ctx = tofuProbeCtx();
+  ctx.clearRect(0, 0, TOFU_PROBE_SIZE, TOFU_PROBE_SIZE);
+  ctx.fillText(ch, 2, 2);
+  return ctx.getImageData(0, 0, TOFU_PROBE_SIZE, TOFU_PROBE_SIZE).data.join(",");
+}
+function tofuBaselineSignature(){
+  if (_tofuBaselineSig === null) _tofuBaselineSig = glyphSignature("￾"); // Unicode noncharacter — see this block's own comment
+  return _tofuBaselineSig;
+}
+// Lazy, per-glyph, memoized in both the in-memory cache and (batched) the persisted one. Called
+// from each bank's own `.filter(...)` immediately after its declaration below — collectively
+// this IS the "canvas-measure every unique emoji used by the banks" sweep the task calls for,
+// just performed incrementally rather than needing a separate pre-built master list (which
+// would otherwise have to duplicate every bank's emoji column and could drift out of sync).
+function isEmojiSupported(e){
+  if (!e) return true; // no glyph to check (e.g. OPPOSITE_DEFS' unused "" entries) — nothing to exclude
+  const cache = loadEmojiSupportCache();
+  if (e in cache.results) return cache.results[e];
+  let supported;
+  try { supported = glyphSignature(e) !== tofuBaselineSignature(); }
+  catch(err){ supported = true; } // canvas unavailable for some reason — fail open, never wrongly strip content
+  cache.results[e] = supported;
+  _emojiSupportDirty = true;
+  return supported;
+}
+// Generic bank filter: drops entries whose emoji is unsupported, with a floor so a device that
+// (implausibly) fails almost everything in one small bank never empties it below usable — safer
+// to risk a rare residual tofu tile than to hand an item builder/category theme zero candidates.
+function filterEmojiSupported(list, getEmoji, floor){
+  const kept = list.filter(x => isEmojiSupported(getEmoji(x)));
+  return kept.length >= (floor || 0) ? kept : list;
+}
+/* =====================================================================
    ITEM BANKS — each def: { label, age, ... } where `age` doubles as the
    Rasch item difficulty b_i (mastery age in months, ~50% pass rate).
    Anchors updated from RESEARCH.md Section 5 / the "quick table" in
@@ -496,7 +629,7 @@
 // per-theme coverage table in NOTES.md v7. `makeVocabItem`'s distractor selection
 // (vocabDistractors) and cross-item theme rotation (pickNextItem/pickAmongTopN) both
 // read this field; VOCAB_BY_WORD (below) also carries it through to seek&find.
-const VOCAB_WORDS = [
+let VOCAB_WORDS = [
   // ---- v4 (mod 3, wider words bank): b=14 floor word, per the "rungs from b=14" ask.
   ["milk","🥛",14,"food"],
   ["dog","🐶",16,"animals"],["ball","⚽",16,"household"],["banana","🍌",18,"food"],["car","🚗",18,"vehicles"],
@@ -598,7 +731,7 @@ const VOCAB_WORDS = [
   ["firefighter","👨‍🚒",48,"professions"],["hospital","🏥",55,"buildings"],["piano","🎹",44,"music"],
   ["police officer","👮",52,"professions"],["farmer","👩‍🌾",54,"professions"],["tower","🗼",60,"buildings"],
   ["trumpet","🎺",53,"music"],["chef","👨‍🍳",58,"professions"],["factory","🏭",65,"buildings"],
-  ["astronaut","🧑‍🚀",62,"professions"],["chapel","💒",72,"buildings"],["builder","👷",66,"professions"],
+  ["astronaut","👨‍🚀",62,"professions"],["chapel","💒",72,"buildings"],["builder","👷",66,"professions"],
   // ---- v10 (Mix-It-Up arcade content expansion): 134 -> 206 words. Four new themes (sports/
   // weather/space/bugs, 8 words each) plus ~4 more per existing theme, weighted toward
   // mid-range difficulty (b 24-55, where arcade's wider ±14mo sampling window spends most of
@@ -621,8 +754,22 @@ const VOCAB_WORDS = [
   ["microphone","🎤",26,"music"],["headphones","🎧",32,"music"],["long drum","🪘",38,"music"],["banjo","🪕",44,"music"],
   ["hammer","🔨",28,"tools"],["paintbrush","🖌️",30,"tools"],["screwdriver","🪛",34,"tools"],["saw","🪚",46,"tools"],
   ["house","🏠",18,"buildings"],["bridge","🌉",42,"buildings"],["temple","🛕",48,"buildings"],["museum","🏛️",54,"buildings"],
-  ["artist","🧑‍🎨",40,"professions"],["teacher","🧑‍🏫",44,"professions"],["pilot","🧑‍✈️",50,"professions"],["scientist","🧑‍🔬",56,"professions"],
+  // v11.1 tofu fix: these 5 ZWJ profession sequences swapped from the gender-neutral 🧑 base
+  // (Unicode 12.1, 2019) to a gendered base (Unicode 4.0, 2016) — the gender-neutral form is
+  // meaningfully newer and was flagged as at-risk on the Fire tablet's font; genders picked to
+  // keep the bank's existing mix balanced (doctor/farmer already render as women, firefighter/
+  // chef as men — see the v7 block above). Word labels, ages, and every other field untouched;
+  // this is purely a glyph swap. See NOTES.md v11.1 for the full static-sweep writeup — every
+  // OTHER newer glyph in this bank had no good older equivalent for the same word and is left
+  // to the runtime detector above instead.
+  ["artist","👩‍🎨",40,"professions"],["teacher","👩‍🏫",44,"professions"],["pilot","👩‍✈️",50,"professions"],["scientist","👨‍🔬",56,"professions"],
 ];
+// v11.1 tofu fix: drop any word whose emoji is tofu on THIS device — see top-of-file comment.
+// Floor of 80 is a defensive-only backstop (realistic Fire-tablet tofu counts are a handful of
+// words, nowhere near this) so a pathological device can never crash the vocabulary domain by
+// filtering it down to nothing.
+const VOCAB_WORDS_RAW_COUNT = VOCAB_WORDS.length; // v11.1: for the console diagnostic below only
+VOCAB_WORDS = filterEmojiSupported(VOCAB_WORDS, w => w[1], 80);
 
 // lookup: word label -> {emoji, age, theme}, shared by the vocabulary domain and
 // the seek-and-find scenes below so both draw b-values from one bank.
@@ -689,7 +836,7 @@ function runVocabUniquenessSelfTest(){
 // tile grid; "Find the X!" — child taps the matching object anywhere in the
 // scene. b = the target word's VOCAB_WORDS age; c (guess rate) = 1/objects
 // in the scene, set per-item in renderSeekfindRound.
-const SEEKFIND_SCENES = [
+const SEEKFIND_SCENES_RAW = [
   { key:"park", label:"Park", words:
     ["dog","bird","butterfly","squirrel","kite","duck","bee","flower","bicycle","ladybug","rainbow","compass","telescope","magnifying glass"] },
   { key:"kitchen", label:"Kitchen", words:
@@ -697,6 +844,19 @@ const SEEKFIND_SCENES = [
   { key:"ocean", label:"Ocean", words:
     ["fish","turtle","octopus","crab","whale","shark","dolphin","squid","lobster","anchor","penguin","satellite","fire extinguisher","dna"] },
 ];
+// v11.1 tofu fix: a scene's `words` are rendered as literal emoji objects on the board (via
+// VOCAB_BY_WORD, built from the already-filtered VOCAB_WORDS above), so any word tofu-filtered
+// out of the vocabulary bank must also disappear from every scene that references it — dropping
+// it here (rather than only from VOCAB_WORDS) is what actually keeps it off the seek&find board,
+// since renderSeekfindScene/renderArcadeSeekfindBoard both iterate `scene.words` directly, not
+// VOCAB_WORDS. `VOCAB_BY_WORD[w] === undefined` is exactly "this word didn't survive filtering"
+// — no separate emoji re-check needed, the two banks already share one filtering decision.
+// Belt-and-braces floor: never let a scene drop below 6 objects (seekfind's `c` = 1/live-objects
+// already tolerates a smaller board; 6 is a defensive floor, never realistically hit).
+const SEEKFIND_SCENES = SEEKFIND_SCENES_RAW.map(scene => {
+  const words = scene.words.filter(w => VOCAB_BY_WORD[w] !== undefined);
+  return { ...scene, words: words.length >= 6 ? words : scene.words };
+});
 const ROUNDS_PER_SCENE = 4;
 
 // ---- colors ---- (RESEARCH: red/blue/green/yellow 33-36, orange/purple/pink 39)
@@ -737,7 +897,12 @@ const NUMERAL_DEFS = [
 
 // ---- counting / quantities: "tap the picture with N" (give-N knower levels) ----
 // (RESEARCH: give-1 ~33, give-2 ~37, give-3 ~40, give-5/cardinal-principle ~47)
-const COUNT_DEFS = [ [1,33,"🍎"],[2,37,"🍌"],[3,40,"🍪"],[4,44,"⭐"],[5,47,"🐟"],[6,50,"🎈"] ];
+// v11.1: all six of these are long-established, pre-v10 emoji (universally supported — see
+// NOTES.md v11.1's static sweep) so this filter is a no-op in practice, but routing it through
+// the same isEmojiSupported() check as every other bank keeps the "excluded from item pools on
+// an unsupported device" contract genuinely universal rather than banks-I-remembered-to-cover.
+let COUNT_DEFS = [ [1,33,"🍎"],[2,37,"🍌"],[3,40,"🍪"],[4,44,"⭐"],[5,47,"🐟"],[6,50,"🎈"] ];
+COUNT_DEFS = filterEmojiSupported(COUNT_DEFS, c => c[2], 2);
 
 // ---- positions: SVG scenes of ball vs box ---- (RESEARCH: in 25, on 28, under 32,
 // next-to 39, behind 44, between 52)
@@ -811,7 +976,10 @@ const CATEGORY_THEMES = {
   food:          { label:"food",            b:49, members:["🍎","🍌","🍕","🍇","🥕","🍞","🧀","🍪","🥦","🍓","🥐"] },
   farmAnimals:   { label:"farm animals",    b:48, members:["🐔","🐓","🐑","🐐","🦃","🦢","🦙"] },
   vehicles:      { label:"vehicles",        b:52, members:["🚗","🚂","🚲","🚚","🚌","🛵","🚓","🚜","🚐"] },
-  kitchenThings: { label:"kitchen things",  b:54, members:["🍳","🔪","🍽️","🫖","🧂","🥣","🥢","🧺"] },
+  // v11.1 tofu fix: 🫖 (teapot, Unicode 13.0/2020) swapped for 🍵 (teacup, Unicode 0.6/2010) —
+  // same "kitchen hot-drink vessel" concept, no word label attached to this icon (category
+  // members are icon-only) so no wording implication either way. See NOTES.md v11.1.
+  kitchenThings: { label:"kitchen things",  b:54, members:["🍳","🔪","🍽️","🍵","🧂","🥣","🥢","🧺"] },
   clothes:       { label:"clothes",         b:55, members:["👕","🧦","👟","🧥","👖","🧢","🩳","🧤","👗"] },
   weather:       { label:"weather",         b:57, members:["☀️","🌧️","⛈️","❄️","🌈","⛅","🌩️","🌪️"] },
   sports:        { label:"sports",          b:58, members:["⚽","🏀","🎾","🏈","⚾","🏸","🏓","🥎","🏐"] },
@@ -823,6 +991,16 @@ const CATEGORY_THEMES = {
   bathHygiene:   { label:"bath time",       b:68, members:["🧼","🪥","🛁","🚿","🧴","🧽","🧻"] },
   tools:         { label:"tools",           b:70, members:["🔨","🔧","🪚","🪛","⛏️","🧰","🪓"] },
 };
+// v11.1 tofu fix: same bank-load-time exclusion as VOCAB_WORDS/FUNCTION_DEFS above, applied
+// per-theme since `members` (unlike those two banks) is a flat icon list with no separate
+// word/label per entry — dropping an unsupported icon just shrinks that theme's pool by one,
+// nothing else references a theme's members by identity. Floor of 4 (anchors show 3 + at least
+// 1 spare needed for a correct-answer/distractor draw — see makeCategoryItem) is the same
+// defensive-only backstop reasoning as the other banks' floors; every theme here has 7-11
+// members today, nowhere near it.
+for (const key of Object.keys(CATEGORY_THEMES)){
+  CATEGORY_THEMES[key].members = filterEmojiSupported(CATEGORY_THEMES[key].members, e => e, 4);
+}
 
 // v6 (fix 4a): measurement-validity bug reported live — an "animals" item offered BOTH lion
 // (the answer) and swan (a distractor drawn from "farm animals") — swan is ALSO an animal, so a
@@ -1105,7 +1283,7 @@ const PRESENT_CAP = 14; // v5: 12->14, so accelerated runs have room to reach th
 // 32-85 so arcade's wider theta-window sampling has real breadth to draw from at both ends.
 // See FUNCTION_OVERLAP_EXCLUDE below for pairs deliberately kept out of each other's
 // distractor pool (two objects that could BOTH plausibly answer the same prompt).
-const FUNCTION_DEFS = [
+let FUNCTION_DEFS = [
   ["drink", "🥤", 34],
   ["sleep", "🛏️", 36],
   ["wash your hands", "🧼", 39],
@@ -1137,6 +1315,13 @@ const FUNCTION_DEFS = [
   ["dig a hole", "⛏️", 83],
   ["build something", "🔨", 85],
 ];
+// v11.1 tofu fix: same bank-load-time exclusion as VOCAB_WORDS above — see top-of-file comment.
+// Floor of 15 (half the bank) is the same defensive-only backstop reasoning as VOCAB_WORDS' 80.
+// Note: a filtered-out item whose name is referenced by FUNCTION_OVERLAP_EXCLUDE below would
+// make runFunctionOverlapSelfTest() log a (non-fatal) "unknown item" warning on THAT device —
+// acceptable, same "adaptive engine tolerates the smaller pool" contract as every other self-
+// test in this file (all console-log/console.assert diagnostics, never a thrown error).
+FUNCTION_DEFS = filterEmojiSupported(FUNCTION_DEFS, f => f[1], 15);
 // v10: pairs whose real-world functions genuinely overlap enough that BOTH could plausibly
 // answer the other's prompt (e.g. a telescope and a magnifying glass both "help you see
 // better") — kept out of each other's distractor pool by functionDistractors() below, same
@@ -2089,13 +2274,33 @@ function playBundledText(text, cb, onMiss){
   playAudioClip(audio, cb, false).then(started => { if (!started) onMiss(); });
 }
 
+// Bug fix (2026-08-19): whichever session currently "owns" the item on screen — an active
+// arcade session (state.arcade/state.everything, each carrying its OWN .currentItem, never
+// state.currentItem — see their own comments) or, when neither is active, scored play
+// (state.currentItem). sayItem()'s staleness guard and repeatPrompt() below both used to read
+// state.currentItem UNCONDITIONALLY, which is simply the wrong field while arcade is active:
+// arcade never writes state.currentItem, so it stays either null or (worse) pointing at
+// whatever scored item was on screen the last time scored play ran. Two concrete symptoms this
+// caused, both reported live: (1) any arcade item with saySegments (the phono/rhyme domain,
+// reachable from Everything Mix) got ZERO audio — sayItem's OWN staleness check compared
+// state.currentItem (stale/null) against `it` (the real arcade item) and bailed out on segment
+// 0 every time; (2) pressing 🔊 (repeatPrompt) during arcade replayed whatever scored item
+// state.currentItem last held, sometimes from an entirely different, already-finished session
+// (the user's exact repro: a LETTERS item from a scored game exited mid-way earlier). Both are
+// fixed generically here rather than special-cased per call site, and every "this play session
+// ended" path (below) now also nulls state.currentItem for defense-in-depth.
+function activeItemHolder(){
+  if (state.arcade.active) return state.arcade;
+  if (state.everything.active) return state.everything;
+  return state; // scored play (or nothing in progress) — state.currentItem is authoritative
+}
 function sayItem(it, cb){
   // v9.1: items may carry saySegments (rhymes: stable question + choice words)
   // — play them in order, each through the normal recorded→bundled→TTS chain.
   if (it.saySegments && it.saySegments.length){
     const segs = it.saySegments;
     const step = (i) => {
-      if (i >= segs.length || state.currentItem !== it){ cb && cb(); return; }
+      if (i >= segs.length || activeItemHolder().currentItem !== it){ cb && cb(); return; }
       sayCue(segs[i].cueKey || null, segs[i].text, () => step(i + 1));
     };
     step(0);
@@ -3548,14 +3753,26 @@ function startGame(){
   const bday = $("childBday").value;
   const creating = state.pendingNewProfile || !state.activeProfileId;
   const p = creating ? createProfile(name, bday, age) : updateProfileFields(state.activeProfileId, name, bday, age);
+  enterPlayForProfile(p, age, name);
+}
+// Bug fix (2026-08-19): shared tail of "we have a concrete profile + a valid age, put the
+// child into gameplay" — factored out of startGame() so selectProfile()'s chooser-card fast
+// path (below) can reach the picker WITHOUT detouring through #startScreen's setup form (the
+// form is now reserved for ➕ Add a child only, per the task). Previously this logic lived
+// inline in startGame(); behavior here is unchanged from before the extraction, aside from the
+// new `silent` param (see selectProfile()'s own comment — skips the greeting speak() for the
+// two ungestured init()-triggered auto-select paths; startGame() never passes it, since a real
+// "▶ Play!" tap always backs it).
+function enterPlayForProfile(p, age, name, silent){
   state.activeProfileId = p.id;
   state.pendingNewProfile = false;
   state.age = age;
-  state.name = name;
+  state.name = name || p.name || "friend";
   state.arity = age < 30 ? 2 : (age <= 41 ? 3 : 4); // 2AFC <30mo, 3AFC 30-41, 4AFC 42+
   state.finalDomains = {};
   state.stars = 0; state.domainIdx = -1; state.domain = null; state.sessionMode = null;
   $("quitBtn").style.display = "block";
+  if (silent){ showPicker(); return; }
   // v9: name-free greeting so it's cacheable as one bundled clip regardless
   // of which child is playing — see collectAllSayStrings()'s doc comment.
   speak("Hi friend! Let's play!");
@@ -3617,7 +3834,16 @@ function lockedTileTap(tile){
   speak(LOCKED_DOMAIN_LINE);
 }
 
-/* ---------- v11: "Who's playing?" child-profile chooser ---------- */
+/* ---------- v11: "Who's playing?" child-profile chooser ----------
+   Bug fix (2026-08-19): tapping an existing child's card used to prefill #startScreen's
+   name/bday/age inputs and land THERE, forcing a second tap on "▶ Play!" before the child
+   could actually play. That setup-form detour is now reserved for ➕ Add a child only —
+   selectProfile() below sets the active profile and calls enterPlayForProfile() directly,
+   landing on the picker ("What should we play?") in one tap, matching startGame()'s own
+   post-create/update behavior exactly (same shared tail, same state reset). No "edit
+   profile" affordance existed on the card before this fix, so none is added now (per the
+   task) — a parent who needs to correct a name/birthday still reaches the form via
+   ➕ Add a child or (for a 2nd+ child) the "🔀 Switch child" link once back on #startScreen. */
 function renderWhoScreen(){
   const d = loadProfiles();
   const grid = $("whoGrid");
@@ -3638,11 +3864,19 @@ function renderWhoScreen(){
   grid.appendChild(addTile);
 }
 function showWhoScreen(){ renderWhoScreen(); show("whoScreen"); }
-// Tapping a chooser card: set it active, prefill the existing name/bday/age inputs from that
-// profile (so #startScreen's unchanged "▶ Play!" button reads them back exactly as before —
-// see startGame()'s own comment on why this needed no new "ready" screen), then land on
-// #startScreen per the task ("the normal start/Play screen with that child's name shown").
-function selectProfile(id){
+// Tapping a chooser card: set it active, then (per the bug fix above) go straight into
+// gameplay via enterPlayForProfile() instead of landing on #startScreen.
+// `silent` (adversarial-review fix, 2026-08-19): init()'s own two automatic calls below — the
+// #p=<id> URL-preselect on page load, and the same preselect re-applied after an async family-
+// sync pull — invoke this function with NO real user tap, so enterPlayForProfile()'s greeting
+// speak() would otherwise attempt playback with no user-activation gesture (browsers can block
+// or silently drop that — see speak()'s bundled-audio tier: a blocked Audio.play() just falls
+// through to speakTTS(), itself not guaranteed either way). Harmless either way — the greeting
+// has no `cb` and nothing downstream depends on it completing — but there's no reason to even
+// attempt an audio call the browser is likely to refuse. The real chooser-tap call site
+// (renderWhoScreen() above) always has a genuine tap behind it, so it omits `silent` and keeps
+// the greeting.
+function selectProfile(id, opts){
   const d = loadProfiles();
   const p = d.profiles.find(x => x.id === id);
   if (!p) return;
@@ -3650,13 +3884,28 @@ function selectProfile(id){
   saveProfiles(d);
   state.activeProfileId = id;
   state.pendingNewProfile = false;
+  // Keep #startScreen's inputs in sync too (the "no usable age" fallback below, and the
+  // ➕ Add a child -> 🔀 Switch child round trip, both still read these), even though the
+  // normal card-tap flow no longer shows that screen.
   $("childName").value = p.name || "";
   if (p.bday){ $("childBday").value = p.bday; $("childAge").value = ""; }
   else { $("childBday").value = ""; $("childAge").value = p.ageMonths || ""; }
   refreshSwitchChildLink();
+  // Same age derivation renderWhoScreen() uses for the card's own "age N" caption, so the
+  // fast path and the chooser agree on what age this child is right now.
+  const age = (typeof p.ageMonths === "number" && p.ageMonths) || monthsFromBday(p.bday) || null;
+  if (!age || age < 12 || age > 72){
+    // No usable age on file (shouldn't happen for a profile that's already been through
+    // startGame() once, but guard rather than enter gameplay with a bad/missing age) —
+    // fall back to the setup form so a parent can fix it, same as the pre-fix behavior.
+    refreshProgressBtn();
+    renderStorageDiagnostic();
+    show("startScreen");
+    return;
+  }
   refreshProgressBtn();
   renderStorageDiagnostic();
-  show("startScreen");
+  enterPlayForProfile(p, age, p.name, opts && opts.silent);
 }
 // "Add a child": clears activeProfileId's grip on the form (pendingNewProfile=true tells
 // startGame() to CREATE rather than update — see its own comment) and blanks the inputs so a
@@ -3675,6 +3924,11 @@ function refreshSwitchChildLink(){
 /* ---------- picker (Feature 1) ---------- */
 function showPicker(){
   state.domain = null; // stale-reference guard, same pattern as endGame()
+  // Bug fix (2026-08-19): every route back to the picker (map-out, arcade exit, a fresh
+  // startGame()) is a "this play session is over" boundary — null state.currentItem here too
+  // so a later repeatPrompt()/sayItem() staleness check (see activeItemHolder()'s comment)
+  // never finds a leftover reference to an item from a session that's already ended.
+  state.currentItem = null;
   $("progressWrap").style.display = "none";
   $("mapBtn").style.display = "none"; // v4 (mod 2): only shown while inside a module
   renderPicker();
@@ -4238,14 +4492,19 @@ function tapSeekObj(word, el){
 }
 
 function repeatPrompt(){
-  if (!state.currentItem) return;
+  // Bug fix (2026-08-19): session-aware — resolves whichever context is actually on screen
+  // (scored state.currentItem, or the active arcade session's own .currentItem) via
+  // activeItemHolder() instead of always reading state.currentItem. See that function's own
+  // comment for the exact bug this fixes (🔊 replaying a stale/wrong item during arcade play).
+  const holder = activeItemHolder();
+  const it = holder.currentItem;
+  if (!it) return;
   // interrupt anything in-flight, then wait a beat: Chrome swallows a speak()
   // issued synchronously after cancel(). stopClip() (v8) needs no such delay
   // — pause() has no swallow-window bug — but it's grouped here anyway since
   // repeatPrompt is one of the sanctioned interrupt paths.
   ttsCancel(); stopClip();
-  const it = state.currentItem;
-  setTimeout(() => { if (state.currentItem === it) sayItem(it); }, 150);
+  setTimeout(() => { if (holder.currentItem === it) sayItem(it); }, 150);
 }
 
 function tapTile(i, tileEl){
@@ -4387,6 +4646,7 @@ function endGame(){
   // adversarial-review fix).
   if (state.domain) finalizeDomain(state.domain);
   state.domain = null; // guard against a stale nextDomain()->speak() callback firing renderItem() late
+  state.currentItem = null; // bug fix (2026-08-19): same "session over" nulling as showPicker() — see activeItemHolder()'s comment
   cancelAnswerTimer(); // v9.5: Finish cancels any running answer timer
   // v10: Finish is a sanctioned arcade-exit path too — arcade contributes NOTHING to results
   // (nothing here reads state.arcade), but a just-resolved question's pending setTimeout
@@ -4829,7 +5089,29 @@ function mergeState(local, remote){
 }
 
 // ---------- profile storage helpers ----------
-const AVATAR_EMOJIS = ["🦁","🐸","🐼","🦊","🐨","🐵","🦄","🐯","🐰","🐻","🦉","🐢"];
+// v11.1: same tofu-exclusion pass as the item banks (see top-of-file comment) — all 12 are
+// long-established emoji so this is a no-op in practice, included for completeness since these
+// render as literal glyphs on the profile chooser cards too. Floor of 4 keeps pickAvatarEmoji()'s
+// hash-mod-length lookup safe even in a pathological all-unsupported case.
+const AVATAR_EMOJIS = filterEmojiSupported(["🦁","🐸","🐼","🦊","🐨","🐵","🦄","🐯","🐰","🐻","🦉","🐢"], e => e, 4);
+// v11.1: this is the last bank-load-time emoji filter in file order (VOCAB_WORDS/FUNCTION_DEFS/
+// COUNT_DEFS/CATEGORY_THEMES/AVATAR_EMOJIS above), so every glyph any bank cares about has now
+// been measured exactly once each (isEmojiSupported()'s own memoization guarantees that even
+// though several banks reuse the same emoji, e.g. 🔨/🔍/🔭 appear in more than one bank).
+// Dev-diagnostic (console, non-blocking, same pattern as every other self-test in this file) +
+// the actual persist of whatever got freshly computed this load (see persistEmojiSupportCache()'s
+// own comment on why this can't just be called from inside isEmojiSupported() itself — batching
+// one write here instead of ~250 is the whole point).
+(function runEmojiSupportDiagnostic(){
+  const cache = loadEmojiSupportCache();
+  const entries = Object.entries(cache.results);
+  const unsupported = entries.filter(([,ok]) => !ok).map(([e]) => e);
+  console.log(`emoji tofu-detection: ${entries.length} glyphs checked, ${unsupported.length} unsupported on this device`, unsupported);
+  if (typeof VOCAB_WORDS_RAW_COUNT === "number" && VOCAB_WORDS_RAW_COUNT !== VOCAB_WORDS.length){
+    console.log(`emoji tofu-detection: vocabulary bank ${VOCAB_WORDS_RAW_COUNT} -> ${VOCAB_WORDS.length} words after filtering`);
+  }
+  persistEmojiSupportCache();
+})();
 function genProfileId(){
   // 8 lowercase-base36 chars — short enough to read in a URL fragment (#p=...), long enough
   // that two profiles created a second apart never collide (this is a per-family id, not a
@@ -5843,7 +6125,7 @@ function startArcadeSession(sess){
   sess.streak = 0;
   sess.answeredSinceInterlude = 0;
   sess.currentItem = null; sess.locked = true; sess.firstTry = true;
-  state.domain = null; state.domainIdx = -1; // belt-and-braces — should already be null (only reachable from the picker)
+  state.domain = null; state.domainIdx = -1; state.currentItem = null; // belt-and-braces — should already be null (only reachable from the picker); state.currentItem nulling is bug fix (2026-08-19), see activeItemHolder()'s comment
   clearBoardUI(); // reuse as-is: wipes #board/#seekBoard/#promptText, hides skip/dk/timerBtn+cancels the SCORED timer — all correct for either arcade mode too
   $("progressWrap").style.display = "none"; // arcade is endless — no meaningful "progress" bar
   $("mapBtn").style.display = "inline-block";
@@ -5944,7 +6226,7 @@ function stillOnEntryScreen(){
   // the task specifies; zero profiles leaves the HTML's own default-active #startScreen (the
   // create-profile-#1 form) showing, untouched.
   if (profilesData.profiles.length){
-    if (activeP && hashInfo.profileId === activeP.id) selectProfile(activeP.id);
+    if (activeP && hashInfo.profileId === activeP.id) selectProfile(activeP.id, { silent: true }); // adversarial-review fix (2026-08-19): page-load auto-select, no user gesture — see selectProfile()'s own comment
     else showWhoScreen();
   }
 
@@ -5979,7 +6261,7 @@ function stillOnEntryScreen(){
     const d = loadProfiles();
     if (!state.activeProfileId && d.activeProfileId) state.activeProfileId = d.activeProfileId;
     refreshSwitchChildLink();
-    if (hashInfo.profileId && d.profiles.some(p => p.id === hashInfo.profileId)) selectProfile(hashInfo.profileId);
+    if (hashInfo.profileId && d.profiles.some(p => p.id === hashInfo.profileId)) selectProfile(hashInfo.profileId, { silent: true }); // adversarial-review fix (2026-08-19): async sync-pull auto-select, no user gesture — see selectProfile()'s own comment
     else if (d.profiles.length){ state.pendingNewProfile = false; showWhoScreen(); }
   });
 })();
