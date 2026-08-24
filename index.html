@@ -179,6 +179,11 @@
   .seek-obj.found { opacity: .5; animation: none; pointer-events: none; }
   /* v12: wrong-answer destigmatizing (req 3) — gentle dim, no shake, in every mode. */
   .seek-obj.dim { opacity: .35; animation: none; }
+  /* v14: hint nudge (Feature 1, Play mode only) — first shrug tap dims every non-target object
+     except the target + up to 2 decoys, rather than revealing outright. Heavier dim than the
+     wrong-tap `.dim` above (this is "hidden", not "you tried this and were wrong") and disabled
+     via pointer-events, same load-bearing reasoning as `.seek-obj.found` above. */
+  .seek-obj.hint-elim { opacity: .15; animation: none; pointer-events: none; }
   .seek-obj.reveal { animation: pop .5s; filter: drop-shadow(0 0 0 var(--good)) drop-shadow(0 2px 2px rgba(0,0,0,.12)); outline: 4px solid var(--good); outline-offset: 4px; border-radius: 50%; }
   @keyframes seekbob { 0%,100%{transform:translate(-50%,-50%) translateY(0)} 50%{transform:translate(-50%,-50%) translateY(-8px)} }
   /* ---------- picker (Feature 1) ---------- */
@@ -251,6 +256,17 @@
   /* v9.4: the tappable figure wrapper itself (see renderBodyFigure/attachTap) — same long-press
      suppression as every other child-tap surface. */
   .body-fig { touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  /* v14: hint nudge (Feature 1) for mybody — no region is disabled (every body-hit stays
+     tappable; narrowing to a literal handful of regions isn't meaningful when some zones only
+     have 4), instead a soft pulsing glow appears over the general zone (head/torso/legs)
+     containing the target. Positioned/sized in JS (hintBody()) via top/height %, centered
+     vertically with translateY so its own `top` can just be the zone's vertical midline. */
+  .body-hint-glow {
+    position: absolute; left: 4%; width: 92%; border-radius: 50%; pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(255,193,74,.55), rgba(255,193,74,0) 72%);
+    transform: translateY(-50%); animation: hintGlowPulse 1.1s ease-in-out infinite;
+  }
+  @keyframes hintGlowPulse { 0%,100%{opacity:.55; transform:translateY(-50%) scale(1);} 50%{opacity:.9; transform:translateY(-50%) scale(1.07);} }
   .tile {
     background: var(--tile); border: 4px solid var(--tile-border); border-radius: 28px;
     display: flex; align-items: center; justify-content: center; cursor: pointer;
@@ -269,6 +285,10 @@
   /* v12: wrong-answer destigmatizing (req 3) — the tapped-wrong tile gently dims (same .dim class
      a second-miss's non-correct tiles already used); no shake, no red border, in ANY mode. */
   .tile.dim { opacity: .35; }
+  /* v14: hint nudge (Feature 1, Play mode only) — first shrug tap on a 3+ tile item eliminates
+     every wrong tile but one, greying + disabling them (pointer-events, same reasoning as
+     .seek-obj.found) rather than revealing the answer outright. */
+  .tile.hint-elim { opacity: .28; filter: grayscale(.6); pointer-events: none; }
   @keyframes pop { 0%{transform:scale(1)} 40%{transform:scale(1.12)} 100%{transform:scale(1)} }
   /* Bug fix (2026-08-23, req 3 — color-swatch/shape overflow): was `width:82%;height:82%` on a
      normal-flow (non-positioned) SVG inside `.tile` (a flex/grid item whose own height comes
@@ -332,6 +352,20 @@
     cursor: pointer; font-size: 15px; text-align: center;
   }
   .word-chip.on { background: var(--good); border-color: var(--good); color: white; font-weight: 700; }
+  /* v14: Feature 2 — Play/Check-in mode segmented toggle (#startScreen, near Family sync).
+     Two-option control, same visual family as .word-chip's on/off but laid out as one shared-
+     border pill (a real segmented control) so it's read as "pick one of two", not "toggle two
+     independent switches" — deliberately small/unobtrusive per the task. */
+  .mode-toggle {
+    display: flex; border: 2px solid var(--tile-border); border-radius: 14px; overflow: hidden;
+    max-width: 480px; width: 100%; margin: 0 auto;
+  }
+  .mode-chip {
+    flex: 1; padding: 9px 10px; font-size: 14px; border: none; background: white; color: var(--ink);
+    cursor: pointer; touch-action: manipulation;
+  }
+  .mode-chip + .mode-chip { border-left: 2px solid var(--tile-border); }
+  .mode-chip.on { background: var(--accent2); color: white; font-weight: 700; }
   .cat-head { grid-column: 1/-1; text-align: left; font-weight: 800; color: #8a7d66; font-size: 14px; text-transform: uppercase; letter-spacing: .05em; margin-top: 8px; }
   #checklistScreen { justify-content: flex-start; padding-top: 10px; }
   #checklistScreen .sticky-top { position: sticky; top: 0; background: var(--bg); width: 100%; padding: 8px 0; z-index: 5; }
@@ -402,6 +436,14 @@
     <div id="voiceDiag" style="display:none;font-size:12px;color:#8a7d66;max-width:520px;text-align:left;background:#fff;border:1px solid #f0e0c0;border-radius:10px;padding:8px 12px;white-space:pre-wrap"></div>
     <button class="smallbtn" onclick="showBooth()">🎙 Grown-up recording booth</button>
     <p id="storageDiagFooter" class="subtitle" style="display:none;font-size:12px"></p>
+
+    <!-- v14: Feature 2 — Play vs Check-in mode, persisted per-profile (see setPendingMode()/
+         applyPendingMode()/syncModeToggleUI()). Unobtrusive, parent-facing, defaults to Play. -->
+    <div class="mode-toggle" role="group" aria-label="Play mode">
+      <button type="button" class="mode-chip" id="modeChipPlay" onclick="setPendingMode('play')">🎈 Play mode</button>
+      <button type="button" class="mode-chip" id="modeChipEval" onclick="setPendingMode('eval')">🎓 Check-in mode</button>
+    </div>
+    <p class="subtitle" style="font-size:12px;margin:-6px 0 6px">Check-in mode skips hints for a cleaner read on where they are today — everything else stays the same.</p>
 
     <!-- v11: family sync setup card — see renderFamilyCard()/createFamilyCode()/submitFamilyCode() -->
     <div class="res-card" style="max-width:480px">
@@ -1313,6 +1355,16 @@ const state = {
   currentItem: null, firstTry: true, muted: false,
   braveGuesses: 0, // v12: "brave guess" chip counter — session-local only, see braveGuess()'s own comment
   sessionMode: null, // "single" (picker: one domain, return to picker) | "all" (Play everything!)
+  // v14 (Feature 2): "play"|"eval" ("Check-in"). `mode` is the LOCKED value for the play session
+  // currently in progress (snapshotted once in enterPlayForProfile from the active profile's own
+  // persisted setting, then copied onto each ds at beginDomain() — never re-read mid-session, so
+  // a domain in flight can never straddle two modes). `pendingMode` is separate: the #startScreen
+  // toggle's own in-progress selection, applied to the profile being created/edited on Play! (see
+  // setPendingMode()/applyPendingMode()) — kept apart from `mode` so switching the toggle while
+  // just LOOKING at the form (not yet playing) can never retroactively affect an already-running
+  // session's difficulty targeting/hint behavior.
+  mode: "play",
+  pendingMode: "play",
   mascotSpeaking: false, // v9.3: tapMascot() debounce — see its own comment
   visits: null, // v9.3: {first, count} — see stampVisit()/renderStorageDiagnostic()
   // v11: child profiles — see migrateLegacyProfile()/loadProfiles()/pk() below. activeProfileId
@@ -1778,7 +1830,7 @@ function tapBodyPart(part, el){
     highlightAll("correct");
     chimeGood();
     if (state.firstTry){ addStar(); confetti(8); }
-    recordResult(it, state.firstTry);
+    scoreAnswer(it, state.firstTry);
     $("mascot").classList.remove("bounce"); void $("mascot").offsetWidth; $("mascot").classList.add("bounce");
     speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]));
     setTimeout(() => { renderItem(); }, 1300);
@@ -2628,6 +2680,7 @@ function collectAllSayStrings(){
   BRAVE_GUESS_LINES.forEach(add); // v12: first-miss praise — see braveGuess()'s own comment
   SHRUG_NORMALIZER_LINES.forEach(add); // v12: shrug-flow "we both learned something" lines
   SHRUG_END_LINES.forEach(add); // v12: 3-consecutive-shrugs graceful domain end
+  HINT_LINES.forEach(add); // v14: Feature 1 — first-shrug hint line (English domains; see collectMandarinSayStrings() for the zh line)
   add("Remember this one?"); // v12: comeback-card intro line — see renderComebackItem()
   // v9: name-free greeting variant — `Hi ${state.name}!` is per-child and can
   // never be pre-bundled, so startGame() now speaks this fixed line instead
@@ -2742,6 +2795,7 @@ function collectMandarinSayStrings(){
   const set = new Set();
   const add = (s) => { if (s) set.add(s); };
   MANDARIN_PRAISE_LINES.forEach(add);
+  add(HINT_LINE_ZH); // v14: Feature 1 — first-shrug hint line for Mandarin domains
   const ARITY = 4;
   for (const dom of DOMAINS){
     if (dom.lang !== "zh" || !dom.make) continue;
@@ -3305,12 +3359,20 @@ function sdOf(grid, post, mean){
   let v = 0; for (let i=0;i<grid.length;i++) v += post[i] * (grid[i]-mean) * (grid[i]-mean);
   return Math.sqrt(v);
 }
-function pCorrect(theta, item){
+// v14 (Feature 1): optional `cOverride` — used ONLY for a correct answer given right after a hint
+// (see recordResult()'s own comment), so the tile-elimination/seekfind-dim/mybody-zone narrowing
+// is reflected in theta's update. Deliberately a PARAMETER, never `item.c` itself — mutating the
+// item's own `c` would corrupt it for queueComeback()'s later unscored replay (comebacks store
+// this exact item object by reference — see its own comment) and for any other in-flight closure
+// still holding `it`. Every existing call site omits the 3rd arg, so behavior is byte-identical
+// to before whenever no hint was involved.
+function pCorrect(theta, item, cOverride){
+  const c = cOverride !== undefined ? cOverride : item.c;
   // Rasch + guessing: c + (1-c) * sigmoid((theta - b) / s)
-  return item.c + (1 - item.c) / (1 + Math.exp(-(theta - item.b) / item.s));
+  return c + (1 - c) / (1 + Math.exp(-(theta - item.b) / item.s));
 }
-function updatePosterior(ds, item, correct){
-  const like = ds.grid.map(t => { const p = pCorrect(t, item); return correct ? p : (1 - p); });
+function updatePosterior(ds, item, correct, cOverride){
+  const like = ds.grid.map(t => { const p = pCorrect(t, item, cOverride); return correct ? p : (1 - p); });
   const raw = ds.post.map((p,i) => p * like[i]);
   const sum = raw.reduce((a,b) => a+b, 0);
   if (sum > 0) ds.post = raw.map(x => x / sum);
@@ -3389,6 +3451,13 @@ function domainShouldStop(ds){
 // within a run (the floor rule + streak accelerator still find the wall), while a theta-40 child
 // at chronological age 40 now sees ~75-80% expected success vs the old ~60-70%.
 const TARGET_P = 0.78;
+// v14 (Feature 2): Check-in ("eval") sessions target a more INFORMATIVE (harder) probability —
+// gentler Play-mode targeting is deliberately loosened for a fun, low-friction everyday feel,
+// which is exactly what a clean measurement session doesn't want. `ds.mode` is read directly in
+// computeTarget() below (the one shared call site every domain's target-picking already funnels
+// through — pickNextItem for tile domains, plus the local reimplementations in
+// renderSeekfindRound/renderBodyRound), so this single constant swap covers all of them.
+const EVAL_TARGET_P = 0.65;
 // Per-domain guess-rate ESTIMATE used only to pick a target b (never for actual scoring —
 // pCorrect()/updatePosterior() always use the real item.c once an item is built, same as
 // before). Most domains are state.arity-way picture-pointing (c=1/arity); opposites/time are
@@ -3415,7 +3484,7 @@ function probTargetB(theta, c, s, p){
 function computeTarget(ds, domKey){
   const thetaHat = eap(ds.grid, ds.post);
   const c = domainGuessRate(domKey);
-  const pTargetB = probTargetB(thetaHat, c, 4, TARGET_P);
+  const pTargetB = probTargetB(thetaHat, c, 4, ds.mode === "eval" ? EVAL_TARGET_P : TARGET_P);
   if (ds.n === 0) return pTargetB - 4; // easy warm-up start, same -4 ease-in as before, now off the gentler baseline
   // streak accelerator: SAME +4-per-streak-beyond-the-first magnitude as before, now layered on
   // top of the P-target baseline instead of thetaHat+1 — still finds the same wall, just starting
@@ -4612,6 +4681,14 @@ const SHRUG_END_LINES = [
   "Look how much you learned today! High five!",
   "You found your growing edge — nice work!",
 ];
+// v14 (Feature 1): spoken on the FIRST shrug tap in Play mode, right before the hint visual
+// (tile elimination / seekfind dim / mybody zone glow) lands — see tapShrug()'s own comment.
+// English goes through the normal speak()/gen_audio.sh pipeline (collectAllSayStrings() below);
+// Mandarin domains get their own single bundled line through speakZh()/gen_audio_zh.sh (see
+// collectMandarinSayStrings()) — no live-TTS fallback for zh, same rule every other Mandarin
+// string in this file follows.
+const HINT_LINES = ["Let me give you a hint!", "Here's a hint!", "Let's make this a little easier!"];
+const HINT_LINE_ZH = "我给你一个提示!";
 let _shrugTimer = null; // { timeoutId, item } targeting state.currentItem at arm time, or null
 
 function hideShrugBtn(){
@@ -4646,9 +4723,31 @@ function armShrugTimer(){
 }
 function tapShrug(){
   if (state.locked || !state.currentItem || !state.domain) return;
+  const it = state.currentItem;
+  const ds = state.domain;
+  // v14 (Feature 1): in Play mode, the FIRST shrug tap on a given item gives a hint instead of
+  // the full reveal — the 🤷 stays visible (never hidden below) so a SECOND tap on the SAME item
+  // falls through to the unchanged full-reveal flow. Eval ("Check-in") sessions skip this
+  // entirely — `ds.mode` is locked once per domain in beginDomain(), so a toggle flip mid-session
+  // (not reachable from the UI anyway, but defensively) can never change this mid-item.
+  if (ds.mode !== "eval" && !it.hintGiven){
+    it.hintGiven = true;
+    // cancel the auto-show timer WITHOUT hiding the button (cancelShrugTimer() would hide it) —
+    // the button is already visible (this tap came from it) and must STAY visible per the task.
+    if (_shrugTimer){ clearTimeout(_shrugTimer.timeoutId); _shrugTimer = null; }
+    ttsCancel(); stopClip(); // sanctioned interrupt — clears any still-playing praise/prompt first
+    const hintText = it.zh ? HINT_LINE_ZH : pick(HINT_LINES);
+    const speakFn = it.zh ? speakZh : speak;
+    setTimeout(() => {
+      speakFn(hintText, () => {
+        if (state.domain !== ds || state.currentItem !== it || state.locked) return; // stale/resolved-mid-speech guard
+        applyHint(it);
+      });
+    }, 150);
+    return;
+  }
   cancelShrugTimer();
   state.locked = true;
-  const it = state.currentItem;
   // reveal the correct answer with the SAME styling every second-miss reveal already uses,
   // dispatched by board type exactly like tapTile/tapSeekObj/tapBodyPart's own reveal branches.
   if (it.seekfind){
@@ -4683,6 +4782,86 @@ function tapShrug(){
       }
     });
   }, 150);
+}
+
+/* ---------- v14 (Feature 1): hint nudge — visual dispatched by board type, mirroring the same
+   `it.seekfind`/`it.body`/tile-grid branching tapShrug's own full-reveal uses. Never touches
+   `it.c` (the item's base guess-rate) — narrowing is expressed purely through DOM state
+   (disabled tiles/objects, or the mybody glow) plus `it.hintRemaining`, an ADDITIONAL field the
+   correct-answer scoring path reads to compute an adjusted c' (see recordResult()'s cOverride
+   param) without mutating the item object other tapShrug-adjacent code (queueComeback, which
+   stores this SAME `it` by reference for an unscored replay) still relies on being pristine. */
+function applyHint(it){
+  if (!state.domain || state.currentItem !== it || state.locked) return; // staleness guard, same shape as renderItem's own ds-null check
+  if (it.seekfind){
+    hintSeekfind(it);
+  } else if (it.body){
+    hintBody(it);
+  } else if (it.tiles && it.tiles.length > 2){
+    hintTiles(it);
+  } else {
+    // 2-tile items (opposites/time, or any future 2-choice domain) — nothing to eliminate.
+    // Per the task: re-speak the prompt encouragingly instead of a no-op hint tap.
+    setTimeout(() => { if (state.currentItem === it && !state.locked) sayItem(it); }, 250);
+  }
+}
+// Generic multi-tile domains: eliminate every wrong tile but one (leaves 2 live: correct + 1
+// distractor), greyed + disabled via .tile.hint-elim (CSS: opacity+grayscale+pointer-events:none,
+// same "load-bearing, not cosmetic" disabling `.seek-obj.found` already established). Never
+// touches the correct tile, so the child can always still find/tap it.
+function hintTiles(it){
+  const tiles = [...$("board").children];
+  const wrongIdx = tiles.map((_, i) => i).filter(i => i !== it.correct);
+  if (!wrongIdx.length) return; // defensive — can't happen for a >2-tile item, but never throw
+  const keep = pick(wrongIdx);
+  wrongIdx.forEach(i => { if (i !== keep) tiles[i].classList.add("hint-elim"); });
+  it.hintRemaining = 2;
+}
+// Seek & find: dim/disable every object except the target + up to 2 decoys (fewer than 2 if the
+// scene has fewer than 3 live objects left — `.found` ones are already excluded/inert, never
+// re-counted as a decoy). Reuses the exact "pointer-events:none is load-bearing" pattern
+// `.seek-obj.found` already established (see that class's own comment).
+function hintSeekfind(it){
+  const wrap = $("seekBoard");
+  const live = [...wrap.querySelectorAll(".seek-obj")].filter(el => !el.classList.contains("found"));
+  const decoyPool = live.filter(el => el.dataset.word !== it.label);
+  const decoys = shuffle(decoyPool).slice(0, Math.min(2, decoyPool.length));
+  const keepWords = new Set([it.label, ...decoys.map(el => el.dataset.word)]);
+  live.forEach(el => { if (!keepWords.has(el.dataset.word)) el.classList.add("hint-elim"); });
+  it.hintRemaining = keepWords.size; // target + however many decoys survived (1-3)
+}
+// My Body: the figure has no tiles to eliminate (some zones only hold 4 regions — disabling down
+// to 2 would make the hint the answer), so instead a soft pulsing glow appears over the general
+// head/torso/legs zone containing the target — see BODY_ZONES/zoneOf below. Positioned in %
+// against `.body-fig` (already position:relative — same containing block renderBodyFigure's own
+// .body-hit divs use), vertically centered via CSS translateY so only a top/height pair is
+// needed here.
+const BODY_ZONES = {
+  head:  ["hair", "eyebrow", "eyes", "ears", "nose", "mouth", "chin"],
+  torso: ["neck", "shoulders", "elbow", "tummy", "wrist", "hands", "fingers"],
+  legs:  ["knees", "ankle", "feet", "heel"],
+};
+function zoneOf(part){
+  for (const [zone, parts] of Object.entries(BODY_ZONES)) if (parts.includes(part)) return zone;
+  return null; // defensive only — every BODY_DEFS label is in exactly one zone above (18 total, verified by the dev-time self-test)
+}
+function hintBody(it){
+  const zone = zoneOf(it.label);
+  if (!zone){ it.hintRemaining = undefined; return; } // can't happen — belt-and-braces, no visual rather than a wrong one
+  const parts = BODY_ZONES[zone];
+  const wrap = $("seekBoard");
+  const fig = wrap && wrap.querySelector(".body-fig");
+  if (!fig) return;
+  const cys = parts.map(k => BODY_REGIONS[k].visCy ?? BODY_REGIONS[k].cy);
+  const minCy = Math.min(...cys) - 10, maxCy = Math.max(...cys) + 10; // small padding so the glow doesn't hug the edge regions exactly
+  const topPct = ((minCy + maxCy) / 2) / BODY_VB.h * 100;
+  const heightPct = (maxCy - minCy) / BODY_VB.h * 100;
+  const glow = document.createElement("div");
+  glow.className = "body-hint-glow";
+  glow.style.top = topPct + "%";
+  glow.style.height = heightPct + "%";
+  fig.appendChild(glow); // cleared automatically on the next renderItem()/renderBodyRound() — those rebuild #seekBoard's whole innerHTML
+  it.hintRemaining = parts.length;
 }
 
 /* ---------- v12: "brave guess" micro-reward (req 3) ----------
@@ -4727,7 +4906,38 @@ function startGame(){
   const bday = $("childBday").value;
   const creating = state.pendingNewProfile || !state.activeProfileId;
   const p = creating ? createProfile(name, bday, age) : updateProfileFields(state.activeProfileId, name, bday, age);
+  applyPendingMode(p); // v14 (Feature 2): bakes the #startScreen toggle's current selection into this profile
   enterPlayForProfile(p, age, name);
+}
+// v14 (Feature 2): writes state.pendingMode (the #startScreen toggle's own selection — see its
+// own comment) onto the profile actually about to play, persisting only on an actual change (so
+// this never bumps updatedAt/triggers a sync PUT for the common "toggle wasn't touched" case).
+// Mutates `p` too so the caller's copy (about to feed enterPlayForProfile) is already correct.
+function applyPendingMode(p){
+  if (!p) return;
+  const mode = state.pendingMode === "eval" ? "eval" : "play";
+  if (p.mode !== mode){
+    const d = loadProfiles();
+    const rec = d.profiles.find(x => x.id === p.id);
+    if (rec){ rec.mode = mode; rec.updatedAt = new Date().toISOString(); saveProfiles(d); scheduleSyncPut(); }
+  }
+  p.mode = mode;
+}
+// v14 (Feature 2): the #startScreen toggle's own click handler — updates the in-progress
+// selection + its own visual state. Does NOT touch a profile directly (see applyPendingMode(),
+// called from startGame() on an actual Play! tap) — flipping the toggle while just looking at
+// the form must never retroactively change an already-running session (see state.pendingMode's
+// own comment).
+function setPendingMode(mode){
+  state.pendingMode = mode === "eval" ? "eval" : "play";
+  syncModeToggleUI();
+}
+function syncModeToggleUI(){
+  const playBtn = $("modeChipPlay"), evalBtn = $("modeChipEval");
+  if (!playBtn || !evalBtn) return;
+  const isEval = state.pendingMode === "eval";
+  playBtn.classList.toggle("on", !isEval);
+  evalBtn.classList.toggle("on", isEval);
 }
 // Bug fix (2026-08-19): shared tail of "we have a concrete profile + a valid age, put the
 // child into gameplay" — factored out of startGame() so selectProfile()'s chooser-card fast
@@ -4740,6 +4950,10 @@ function startGame(){
 function enterPlayForProfile(p, age, name, silent){
   state.activeProfileId = p.id;
   state.pendingNewProfile = false;
+  // v14 (Feature 2): LOCKED for this entire play session (picker + every domain played from it,
+  // including "Play everything!") — see state.mode's own comment. Read once, here, from
+  // whatever's already persisted on the profile; never re-read mid-session.
+  state.mode = (p && p.mode) || "play";
   state.age = age;
   state.name = name || p.name || "friend";
   state.arity = age < 30 ? 2 : (age <= 41 ? 3 : 4); // 2AFC <30mo, 3AFC 30-41, 4AFC 42+
@@ -4864,6 +5078,8 @@ function selectProfile(id, opts){
   $("childName").value = p.name || "";
   if (p.bday){ $("childBday").value = p.bday; $("childAge").value = ""; }
   else { $("childBday").value = ""; $("childAge").value = p.ageMonths || ""; }
+  state.pendingMode = p.mode === "eval" ? "eval" : "play"; // v14: keep the toggle in sync too, same reasoning as the inputs above
+  syncModeToggleUI();
   refreshSwitchChildLink();
   // Same age derivation renderWhoScreen() uses for the card's own "age N" caption, so the
   // fast path and the chooser agree on what age this child is right now.
@@ -4887,6 +5103,8 @@ function selectProfile(id, opts){
 function showAddChildForm(){
   state.pendingNewProfile = true;
   $("childName").value = ""; $("childBday").value = ""; $("childAge").value = "";
+  state.pendingMode = "play"; // v14: a brand-new sibling always starts on the default
+  syncModeToggleUI();
   refreshSwitchChildLink();
   show("startScreen");
 }
@@ -5040,7 +5258,8 @@ function beginDomain(idx){
   const dom = DOMAINS[idx];
   const { mu, sigma } = priorFor(dom.key, state.age);
   state.domain = { key: dom.key, grid: THETA_GRID, post: normalPostFor(THETA_GRID, mu, sigma), n: 0, presented: 0, used: new Set(), log: [],
-    streak: 0, floorB: undefined, missAboveFloor: 0 }; // v5 (Issue 1 fix): see pickNextItem
+    streak: 0, floorB: undefined, missAboveFloor: 0, // v5 (Issue 1 fix): see pickNextItem
+    mode: state.mode === "eval" ? "eval" : "play" }; // v14 (Feature 2): LOCKED for this whole domain — see state.mode's own comment on why it's snapshotted here rather than read live elsewhere
   // v5 adversarial-review fix (pre-existing since v2/v3, unrelated to any v5 mod, caught
   // during v5's mixed-playthrough testing): the PREVIOUS domain's tiles stay in #board
   // (still visible AND clickable — #board itself doesn't get cleared until the new domain's
@@ -5145,6 +5364,7 @@ function finalizeDomain(ds){
 function queueComeback(it, kind){
   const ds = state.domain;
   if (!ds) return;
+  if (ds.mode === "eval") return; // v14 (Feature 2): Check-in sessions skip comeback cards — clean measurement only, per the task
   ds.comebackQueue = ds.comebackQueue || [];
   if (ds.comebackQueue.some(e => e.it.label === it.label)) return; // no duplicate comeback for the same item
   ds.comebackQueue.push({ kind, it });
@@ -5456,6 +5676,13 @@ function renderSeekfindScene(scene, tapHandler){
 }
 function renderSeekfindRound(dom, ds){
   if (!ds.sf) ds.sf = { sceneIdx: -1, scene: null, roundInScene: 0 };
+  // v14 (Feature 1) adversarial-review fix: a seekfind SCENE persists across several rounds (the
+  // while-loop below only re-renders on a NEW scene, via renderSeekfindScene) — a hint's
+  // .hint-elim dimming from the PREVIOUS round would otherwise silently carry over and stay
+  // permanently un-tappable for every later round in the same scene. Clearing at the top of
+  // every round (not just new-scene starts) is a no-op whenever nothing was hinted last round.
+  const prevSeekWrap = $("seekBoard");
+  if (prevSeekWrap) prevSeekWrap.querySelectorAll(".seek-obj.hint-elim").forEach(el => el.classList.remove("hint-elim"));
   while (!ds.sf.scene || ds.sf.roundInScene >= ROUNDS_PER_SCENE || !ds.sf.scene.remaining.length){
     ds.sf.sceneIdx++;
     if (ds.sf.sceneIdx >= SEEKFIND_SCENES.length){ domainDone(); return; } // all scenes done
@@ -5518,7 +5745,7 @@ function tapSeekObj(word, el){
     if (state.domain && state.domain.sf && state.domain.sf.scene) state.domain.sf.scene.resolved++;
     chimeGood();
     if (state.firstTry){ addStar(); confetti(8); }
-    recordResult(it, state.firstTry);
+    scoreAnswer(it, state.firstTry);
     $("mascot").classList.remove("bounce"); void $("mascot").offsetWidth; $("mascot").classList.add("bounce");
     speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]));
     setTimeout(()=>{ renderItem(); }, 1300);
@@ -5579,7 +5806,7 @@ function tapTile(i, tileEl){
     tiles.forEach((t,j)=>{ if(j!==i) t.classList.add("dim"); });
     chimeGood();
     if (state.firstTry){ addStar(); confetti(8); }
-    recordResult(it, state.firstTry);
+    scoreAnswer(it, state.firstTry);
     $("mascot").classList.remove("bounce"); void $("mascot").offsetWidth; $("mascot").classList.add("bounce");
     // v13: within a Mandarin domain, ~half the time speak a Mandarin praise line (bundled clip
     // only, via speakZh) instead of the usual English one — every other domain is byte-identical
@@ -5635,11 +5862,27 @@ function tapTile(i, tileEl){
   }
 }
 
-function recordResult(it, firstTry, extra){
+// v14 (Feature 1): shared by tapTile/tapSeekObj/tapBodyPart's correct-answer branches — a plain
+// pass-through to recordResult() unless this item was hinted, in which case it also logs
+// {hinted:true} and computes the adjusted c' (see recordResult()'s own comment on scope: only
+// the correct-after-hint case gets the override, never a wrong final answer).
+function scoreAnswer(it, firstTry){
+  const extra = it.hintGiven ? { hinted: true } : undefined;
+  const cOverride = (it.hintGiven && it.hintRemaining) ? 1 / it.hintRemaining : undefined;
+  recordResult(it, firstTry, extra, cOverride);
+}
+// v14 (Feature 1): `cOverride` — passed ONLY by scoreAnswer() above when `it.hintGiven &&
+// it.hintRemaining`, as `1/it.hintRemaining` (the task's "c' = 1/(remaining choices)"). Scoped
+// deliberately narrow: a WRONG final answer after a hint (the child still misses following the
+// remediation tap, or ends up in the ordinary second-miss reveal) is scored with the item's
+// original base `it.c`, unchanged — the task only specifies the adjustment for "if he ANSWERS
+// after the hint", and `it.c` itself is never mutated either way (see pCorrect()'s own comment on
+// why: queueComeback() keeps this exact object for an unscored replay).
+function recordResult(it, firstTry, extra, cOverride){
   const ds = state.domain;
   ds.log.push({ label: it.label, b: it.b, correct: firstTry, ...(extra || {}) });
   ds.n++;
-  updatePosterior(ds, it, firstTry);
+  updatePosterior(ds, it, firstTry, cOverride);
   // v5 (Issue 1 fix): streak/floor bookkeeping that pickNextItem's computeTarget/applyFloorRule
   // read. A shrug (tapShrug, extra.dontKnow) reuses this same path with firstTry=false, so it
   // resets the streak and counts toward the floor exactly like any other miss, with no
@@ -5842,7 +6085,7 @@ function endGame(){
   // v13: `isZh` suppresses the "(Xmo)" suffix — b here is an exposure rank, not months, and
   // showing it with a "mo" unit would read as age-equivalent language (the thing this domain is
   // explicitly excluded from anywhere in the UI).
-  const fmtItem = (r, isZh) => `${r.comeback ? "🔁 " : ""}${r.skipped ? "⏭" : (r.dontKnow ? "❌ᴰᴷ" : (r.correct ? "✅" : "❌"))} ${r.label}${isZh ? "" : ` <span style="color:#bbb">(${r.b}mo)</span>`}`;
+  const fmtItem = (r, isZh) => `${r.comeback ? "🔁 " : ""}${r.skipped ? "⏭" : (r.dontKnow ? "❌ᴰᴷ" : (r.correct ? "✅" : "❌"))} ${r.label}${r.hinted ? " 💡" : ""}${isZh ? "" : ` <span style="color:#bbb">(${r.b}mo)</span>`}`; // v14: 💡 marks a hint-assisted correct answer
   for (const dom of DOMAINS){
     const fd = state.finalDomains[dom.key];
     if (!fd) continue;
@@ -5881,7 +6124,11 @@ function saveSession(ageMonths, name, vocabEstimate, vocabChecked){
   }
   if (!Object.keys(domains).length && vocabEstimate === null) return; // nothing scored this session
   const sessions = loadSessions();
-  sessions.push({ v: 1, date: new Date().toISOString(), ageMonths, name, domains, vocabChecked, vocabEstimate });
+  // v14 (Feature 2): tags the whole session, not per-domain — state.mode is locked for the
+  // entire play session (see its own comment), so every domain played within it already shares
+  // the same mode; a missing field on an OLDER session (pre-v14) just reads as falsy/"play"
+  // everywhere this is checked (renderSessionList/domainChartSVG), no migration needed.
+  sessions.push({ v: 1, date: new Date().toISOString(), ageMonths, name, domains, vocabChecked, vocabEstimate, mode: state.mode === "eval" ? "eval" : "play" });
   persistSet(pk("tg_sessions"), JSON.stringify(sessions)); // v9.3: dual-write; v11: per-profile
   renderStorageDiagnostic(); // keep the "n sessions saved" readout current if it's on screen
   scheduleSyncPut(); // v11: debounced full-state PUT after every save point
@@ -5912,7 +6159,11 @@ function domainChartSVG(pts){
   const sy = y => H - pad - (y - lo) / (hi - lo) * (H - 2*pad);
   const band = `${sx(lo)},${sy(lo-8)} ${sx(hi)},${sy(hi-8)} ${sx(hi)},${sy(hi+8)} ${sx(lo)},${sy(lo+8)}`;
   const line = pts.map(p => `${sx(p.x)},${sy(p.y)}`).join(" ");
-  const dots = pts.map(p => `<circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="4" fill="#ff8a3d"/>`).join("");
+  // v14 (Feature 2): a point from an eval ("Check-in") session gets a tiny 🎓 above its dot, so a
+  // parent reading the trend can tell which points are clean measures vs everyday Play-mode data
+  // (gentler difficulty targeting, hints available). `pts` entries without a `.mode` (every call
+  // site predates v14, or the underlying session predates it) just render the plain dot.
+  const dots = pts.map(p => `<circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="4" fill="#ff8a3d"/>${p.mode === "eval" ? `<text x="${sx(p.x)}" y="${sy(p.y) - 8}" font-size="10" text-anchor="middle">🎓</text>` : ""}`).join("");
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;background:#fffdf8;border-radius:12px;border:1px solid var(--tile-border)">
     <polygon points="${band}" fill="#4ecdc4" opacity=".15"/>
     <line x1="${sx(lo)}" y1="${sy(lo)}" x2="${sx(hi)}" y2="${sy(hi)}" stroke="#bbb" stroke-dasharray="4 3"/>
@@ -5927,7 +6178,7 @@ function renderDomainCharts(){
   for (const dom of DOMAINS){
     if (dom.lang === "zh") continue; // v13: Mandarin gets its own cluster — see renderMandarinCharts()
     const pts = sessions.filter(s => s.domains && s.domains[dom.key])
-      .map(s => ({ x: s.ageMonths, y: s.domains[dom.key].theta }));
+      .map(s => ({ x: s.ageMonths, y: s.domains[dom.key].theta, mode: s.mode }));
     if (!pts.length) continue;
     const card = document.createElement("div");
     card.innerHTML = `<div style="font-weight:700;font-size:13px;margin-bottom:4px">${dom.emoji} ${dom.label}</div>` + domainChartSVG(pts);
@@ -5951,7 +6202,7 @@ function renderMandarinCharts(){
     if (dom.lang !== "zh") continue;
     const entries = sessions.filter(s => s.domains && s.domains[dom.key]);
     if (!entries.length) continue;
-    const pts = entries.map((s, i) => ({ x: i + 1, y: s.domains[dom.key].theta }));
+    const pts = entries.map((s, i) => ({ x: i + 1, y: s.domains[dom.key].theta, mode: s.mode }));
     const lastN = entries[entries.length - 1].domains[dom.key].n || 0;
     const card = document.createElement("div");
     card.innerHTML = `<div style="font-weight:700;font-size:13px;margin-bottom:4px">${dom.emoji} ${dom.label}</div>`
@@ -5994,12 +6245,12 @@ function renderSessionList(){
     const detail = Object.entries(s.domains || {}).map(([k,d]) => {
       const dom = DOMAINS.find(x => x.key === k);
       const isZh = dom && dom.lang === "zh";
-      const items = (d.items || []).map(r => `${r.comeback ? "🔁 " : ""}${r.skipped ? "⏭" : (r.dontKnow ? "❌ᴰᴷ" : (r.correct ? "✅" : "❌"))} ${r.label}${isZh ? "" : ` (${r.b}mo)`}`).join(" · ");
+      const items = (d.items || []).map(r => `${r.comeback ? "🔁 " : ""}${r.skipped ? "⏭" : (r.dontKnow ? "❌ᴰᴷ" : (r.correct ? "✅" : "❌"))} ${r.label}${r.hinted ? " 💡" : ""}${isZh ? "" : ` (${r.b}mo)`}`).join(" · "); // v14: 💡 marks a hint-assisted correct answer
       return `<p><b>${dom ? dom.label : k}:</b> ${items}</p>`;
     }).join("");
     const dateStr = new Date(s.date).toLocaleDateString();
     return `<details style="margin-bottom:8px">
-      <summary><b>${dateStr}</b> — age ${s.ageMonths}mo${s.vocabEstimate != null ? `, ~${s.vocabEstimate} words` : ""}</summary>
+      <summary><b>${dateStr}</b> — age ${s.ageMonths}mo${s.vocabEstimate != null ? `, ~${s.vocabEstimate} words` : ""}${s.mode === "eval" ? " 🎓" : ""}</summary>
       <div style="font-size:13px;color:#8a7d66;margin:4px 0">${domSummary || "no domains played"}</div>
       ${detail}
     </details>`;
@@ -7401,9 +7652,11 @@ function stillOnEntryScreen(){
     $("childName").value = activeP.name || "";
     if (activeP.bday) $("childBday").value = activeP.bday;
     else if (activeP.ageMonths) $("childAge").value = activeP.ageMonths;
+    state.pendingMode = activeP.mode === "eval" ? "eval" : "play"; // v14: old profiles (no `mode` yet) fall back to "play"
   } else {
     state.pendingNewProfile = true; // zero profiles yet — the form will CREATE profile #1 on Play
   }
+  syncModeToggleUI(); // v14: reflect whatever state.pendingMode ended up above onto #startScreen's toggle
   state.muted = localStorage.getItem("tg_muted") === "1";
   updateMuteBtn();
   refreshProgressBtn();
