@@ -1580,30 +1580,30 @@ const BODY_VB = { minX:-5, w:110, h:215 };
 // match. See NOTES.md v9.6.
 // Bug fix (2026-08-23, req 7): cy values nudged from their original bodyFigureSVG-aligned
 // positions (comments show the delta) to clear NEW cross-region collisions introduced by
-// widening TOUCH_BIAS below — see resolveBodyTapProbe()'s own comment for the exact search
+// widening TOUCH_BIAS below — probe method: dead-center + biased sample over every region, nearest-resolution asserted
 // method. Every nudge is small (≤3 units, all well inside each region's own radius) and was
 // found by an automated hill-climb that pushes exactly the colliding pair apart in 0.5-unit
 // steps until BOTH the new-bias probe AND the existing dead-center (mouse/no-bias) probe are
 // clean — dead-center accuracy (desktop mouse taps, no bias applied) is unchanged/still perfect.
 const BODY_REGIONS = {
   hair:      { cy:6,   r:6, cx:[50] },
-  eyebrow:   { cy:17,  r:4, cx:[37,63] }, // was 18
-  eyes:      { cy:31,  r:6, cx:[38,62] }, // was 30
+  eyebrow:   { cy:17,  r:4, cx:[37,63], visCy:18 }, // hit cy nudged for bias-collision math; visCy = drawn feature
+  eyes:      { cy:31,  r:6, cx:[38,62], visCy:30 },
   ears:      { cy:32,  r:8, cx:[15,85] },
-  nose:      { cy:42,  r:6, cx:[50] },    // was 44
-  mouth:     { cy:55.5,r:5, cx:[50] },    // was 57
-  chin:      { cy:69,  r:4, cx:[50] },    // was 68
-  neck:      { cy:82.5,r:6, cx:[50] },    // was 80
+  nose:      { cy:42,  r:6, cx:[50], visCy:44 },
+  mouth:     { cy:55.5,r:5, cx:[50], visCy:57 },
+  chin:      { cy:69,  r:4, cx:[50], visCy:68 },
+  neck:      { cy:82.5,r:6, cx:[50], visCy:80 },
   shoulders: { cy:93,  r:7, cx:[27,73] },
   elbow:     { cy:114, r:6, cx:[8,92] },
   tummy:     { cy:118, r:14,cx:[50] },
   wrist:     { cy:133, r:5, cx:[17,83] },
-  hands:     { cy:146.5,r:7,cx:[17,83] }, // was 147
-  fingers:   { cy:160.5,r:5,cx:[17,83] }, // was 160
+  hands:     { cy:146.5,r:7,cx:[17,83], visCy:147 },
+  fingers:   { cy:160.5,r:5,cx:[17,83], visCy:160 },
   knees:     { cy:167, r:7, cx:[31,69] },
-  ankle:     { cy:184, r:5, cx:[36,64] }, // was 187 — the v9.6.1 heel/ankle sensitive spot, re-verified clean (see resolveBodyTapProbe())
+  ankle:     { cy:184, r:5, cx:[36,64], visCy:187 }, // v9.6.1 heel/ankle sensitive spot, probe-verified clean
   feet:      { cy:197, r:7, cx:[19,81] },
-  heel:      { cy:198.5,r:6,cx:[32,68] }, // was 195.5 — inner rear of foot, just below the ankle (no drawn ball — v9.6.1)
+  heel:      { cy:198.5,r:6,cx:[32,68], visCy:195.5 }, // inner rear of foot (no drawn ball — v9.6.1)
 };
 // ladder per the task: nose/eyes/mouth/ears/hair/hands/feet/tummy 20-30 (kept low
 // for younger-sibling use), knees/fingers/neck 34-42, elbow/ankle/wrist/shoulders
@@ -1717,7 +1717,7 @@ function renderBodyFigure(tapHandler){
   tapHandler = tapHandler || tapBodyPart;
   const wrap = $("seekBoard");
   const hits = Object.entries(BODY_REGIONS).map(([key,r]) => r.cx.map(cx => {
-    const left = (cx - BODY_VB.minX) / BODY_VB.w * 100, top = r.cy / BODY_VB.h * 100, wpct = r.r*2 / BODY_VB.w * 100;
+    const left = (cx - BODY_VB.minX) / BODY_VB.w * 100, top = (r.visCy ?? r.cy) / BODY_VB.h * 100, wpct = r.r*2 / BODY_VB.w * 100; // visCy: ring sits on the drawn feature even where hit cy was nudged (v13.2)
     return `<div class="body-hit" data-part="${key}" style="position:absolute;left:${left}%;top:${top}%;width:${wpct}%;aspect-ratio:1/1;transform:translate(-50%,-50%);border-radius:50%;cursor:pointer"></div>`;
   }).join("")).join("");
   wrap.innerHTML = `<div style="position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center">
@@ -7063,6 +7063,12 @@ function celebrateArcadeStreak(sess, level, cb){
   else { confetti(40); fanfare(); speak(pick(ARCADE_STREAK_LINES_10PLUS), cb); }
 }
 function finishArcadeQuestion(sess, firstTryCorrect, missDelayMs){
+  // exit-during-explanation guard: exitArcadeSession() deactivates the session
+  // and then stopClip() synchronously fires the in-flight explanation's callback,
+  // which lands here — without this check that phantom completion would bump
+  // persisted play stats and answeredSinceInterlude for a question the child
+  // already left. (Adversarial-review finding, v13.2.)
+  if (!sess.active) return;
   sess.answeredSinceInterlude++;
   recordArcadePlay(sess.mode);
   if (firstTryCorrect){
