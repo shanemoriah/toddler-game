@@ -75,7 +75,16 @@
      identical to before. */
   #categoryAnchors { display: none; text-align: center; padding: 4px 0 2px; align-self: stretch; }
   #categoryAnchors .anchor-label { font-size: 14px; color: #8a7d66; margin-bottom: 4px; }
-  #categoryAnchors .anchor-row { font-size: 58px; display: flex; gap: 18px; justify-content: center; }
+  /* Bug fix (2026-08-23, req 3): align-items defaults to `stretch` for flex children — every
+     patDot()/patGrow() emoji span (patterns' strip) was silently stretching to the row's full
+     cross-axis height regardless of its own font-size/line-height, leaving an oversized,
+     unpredictable invisible layout box around each dot (verified via getBoundingClientRect: a
+     0.5em nested dot measured 65.5px tall against a 25px-wide box, ~2.6x its own font-size) —
+     exactly the kind of untrustworthy sizing that lets a glyph's actual paint crowd its
+     neighbors/edges at some font/platform combinations. `center` makes every dot's box hug its
+     own natural (font-size-driven) size instead, matching categories' 3-icon row's existing
+     (already centered) look.  */
+  #categoryAnchors .anchor-row { font-size: 58px; display: flex; align-items: center; gap: 18px; justify-content: center; }
 
   /* ---------- screens ---------- */
   /* v6: "safe center" (not plain "center") — with overflow-y:auto + justify-content:center, a
@@ -117,8 +126,23 @@
   #speakBtn { font-size: 30px; background: none; border: none; cursor: pointer; transition: transform .15s; }
   #speakBtn.pulse { animation: speakPulse .55s ease-in-out infinite; }
   @keyframes speakPulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.25)} }
+  /* Bug fix (2026-08-23, req 3 follow-up): #board (a flex item of `.screen`, which uses
+     `align-items: center` — NOT stretch) had no explicit width and no `align-self: stretch`, so
+     its actual rendered width was always just shrink-to-fit around its own CONTENT's natural
+     size — never guaranteed to match the true available cross-axis width. This happened to
+     "work" only because a `.tile svg` sized via normal-flow `width:82%/height:82%` coincidentally
+     contributed enough intrinsic/min-content width for the `1fr 1fr` grid tracks to size
+     sensibly — switching that SVG to `position:absolute` (a few lines below, this same fix)
+     removes it from intrinsic-sizing contribution entirely, collapsing #board to ~8px wide
+     (caught live via CDP: `gridTemplateColumns` computed to "8px 8px" instead of filling the
+     screen). This is exactly the same bug class #categoryAnchors already had and fixed in v9.3
+     (see that rule's own comment) and #seekBoard always avoided via its own explicit
+     `width:100%` — #board gets the same explicit `width:100%` here, so its size is never again
+     accidentally dependent on a child's replaced-element intrinsic sizing (which is itself
+     inconsistent across browsers — plausibly the ORIGINAL, cross-device source of the reported
+     swatch-overflow bug, not just something this specific edit could have introduced). */
   #board {
-    flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    flex: 1; width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
     padding: 8px; align-content: center; max-height: 70vh;
   }
   /* ---------- v6: domain-transition loader ----------
@@ -246,7 +270,36 @@
      a second-miss's non-correct tiles already used); no shake, no red border, in ANY mode. */
   .tile.dim { opacity: .35; }
   @keyframes pop { 0%{transform:scale(1)} 40%{transform:scale(1.12)} 100%{transform:scale(1)} }
-  .tile svg { width: 82%; height: 82%; }
+  /* Bug fix (2026-08-23, req 3 — color-swatch/shape overflow): was `width:82%;height:82%` on a
+     normal-flow (non-positioned) SVG inside `.tile` (a flex/grid item whose own height comes
+     from `height:100%` + `min-height` — not a fully definite value in every layout engine).
+     Percentage height on a non-absolutely-positioned replaced element is only reliably resolved
+     when its containing block has a DEFINITE height; when that's ambiguous (a known cross-
+     browser inconsistency, worse on older WebKit, for a flex/grid item whose height is itself
+     `auto`-derived), the SVG can fall back to an oversized intrinsic default box, which then
+     only gets visually cropped (not truly scaled) by `.tile`'s `overflow:hidden` — reading as
+     "the swatch doesn't fit." Absolute positioning against `.tile` (already `position:relative`)
+     sidesteps the ambiguity entirely: percentages on an absolutely positioned element always
+     resolve against the containing block's PADDING BOX, a well-defined, consistently-implemented
+     code path in every browser.
+     CAUGHT LIVE (CDP) after the first pass of this fix: an `inset:9%` shorthand alone leaves
+     `width`/`height` at their default `auto` — and per spec, an ABSOLUTELY POSITIONED REPLACED
+     ELEMENT with `width:auto`/`height:auto` AND a known intrinsic aspect ratio (every one of
+     these SVGs has a square `viewBox`) does NOT simply honor all four inset percentages at once;
+     it derives a size from the aspect ratio instead, which measured out SQUARE (130x130) even
+     though the tile itself was a 167x120 rect — taller than the tile, overflowing despite
+     `overflow:hidden` visually cropping it. Setting `width`/`height` to explicit percentages
+     (not `auto`) sidesteps that replaced-element special case entirely: `top`/`left` position
+     the box, `width`/`height` size it against the padding box, full stop — no aspect-ratio
+     fallback involved. Verified via CDP after this fix: 0 overflow, ~20%+ margin, across every
+     arity (2/3/4) and domain (colors incl. all 10 new second-tier colors, shapes, adjectives
+     5-6-tile compact grid) at both 390px and 1280px viewports.
+     colorSwatch()/shapeSVG()/adjSVG() all use a square `viewBox` with
+     `preserveAspectRatio="xMidYMid meet"` (SVG default, now stated explicitly on each — see
+     their own definitions), which guarantees the drawn shape can never actually escape its own
+     `<svg>` box regardless of the box's own aspect ratio — only the OUTER box's size was ever in
+     question, which this (and the `#board` width fix just above) fixes. */
+  .tile svg { position: absolute; top: 9%; left: 9%; width: 82%; height: 82%; }
   .tile .txt { font-weight: 800; }
 
   /* ---------- v8: voice recording booth ---------- */
@@ -886,10 +939,24 @@ const SEEKFIND_SCENES = SEEKFIND_SCENES_RAW.map(scene => {
 const ROUNDS_PER_SCENE = 4;
 
 // ---- colors ---- (RESEARCH: red/blue/green/yellow 33-36, orange/purple/pink 39)
+// Bug fix (2026-08-23, req 6): second-tier/nuanced colors (b=55-79 — late-preschool/
+// kindergarten per RESEARCH.md, well above the b=33-48 basics above). Hexes were adversarially
+// tuned against every existing basic AND against each other (redmean color-distance check, see
+// worklog) specifically for the pairs a distractor window will naturally place side by side:
+// navy vs blue/purple/black, lime vs green/yellow, magenta vs pink/purple/red, teal vs green/
+// blue, gold vs yellow/orange, silver vs gray/white, lavender vs purple/pink, maroon vs brown/
+// red, tan vs brown/orange/gold, olive vs green/brown/gray — every pair landed at a safely
+// distinguishable redmean distance (~105+, most 150+) at these tile sizes; a few (navy's
+// original near-black hex, gold's original near-yellow hex, olive's original near-green hex)
+// were deliberately lightened/darkened/shifted off their textbook value specifically to clear
+// this bar without losing the color's true identity.
 const COLOR_DEFS = [
   ["red","#e63946",33],["blue","#1d6fd6",34],["yellow","#f4c614",36],["green","#3fa34d",35],
   ["orange","#f77f1e",39],["pink","#f26bb5",39],["purple","#8e5bd1",39],["black","#222222",44],
   ["white","#fafafa",45],["brown","#8b5a2b",46],["gray","#9a9a9a",48],
+  ["gold","#b8860b",55],["silver","#d4d4d4",57],["navy","#14328f",59],["teal","#0a8a8a",61],
+  ["maroon","#7b1e26",64],["lime","#9ee62f",66],["tan","#d2a679",69],["magenta","#e619a3",72],
+  ["olive","#6b8e23",75],["lavender","#c8a2e8",79],
 ];
 
 // ---- shapes (SVG) ---- (RESEARCH: circle 31, square 37, triangle 42, rectangle 50)
@@ -1511,25 +1578,32 @@ const BODY_VB = { minX:-5, w:110, h:215 };
 // bend (forearm angles back inward after the elbow, with a joint-bump ellipse at
 // the pivot) — elbow/wrist/hands/fingers/ankle/heel/feet coords below updated to
 // match. See NOTES.md v9.6.
+// Bug fix (2026-08-23, req 7): cy values nudged from their original bodyFigureSVG-aligned
+// positions (comments show the delta) to clear NEW cross-region collisions introduced by
+// widening TOUCH_BIAS below — see resolveBodyTapProbe()'s own comment for the exact search
+// method. Every nudge is small (≤3 units, all well inside each region's own radius) and was
+// found by an automated hill-climb that pushes exactly the colliding pair apart in 0.5-unit
+// steps until BOTH the new-bias probe AND the existing dead-center (mouse/no-bias) probe are
+// clean — dead-center accuracy (desktop mouse taps, no bias applied) is unchanged/still perfect.
 const BODY_REGIONS = {
   hair:      { cy:6,   r:6, cx:[50] },
-  eyebrow:   { cy:18,  r:4, cx:[37,63] },
-  eyes:      { cy:30,  r:6, cx:[38,62] },
+  eyebrow:   { cy:17,  r:4, cx:[37,63] }, // was 18
+  eyes:      { cy:31,  r:6, cx:[38,62] }, // was 30
   ears:      { cy:32,  r:8, cx:[15,85] },
-  nose:      { cy:44,  r:6, cx:[50] },
-  mouth:     { cy:57,  r:5, cx:[50] },
-  chin:      { cy:68,  r:4, cx:[50] },
-  neck:      { cy:80,  r:6, cx:[50] },
+  nose:      { cy:42,  r:6, cx:[50] },    // was 44
+  mouth:     { cy:55.5,r:5, cx:[50] },    // was 57
+  chin:      { cy:69,  r:4, cx:[50] },    // was 68
+  neck:      { cy:82.5,r:6, cx:[50] },    // was 80
   shoulders: { cy:93,  r:7, cx:[27,73] },
   elbow:     { cy:114, r:6, cx:[8,92] },
   tummy:     { cy:118, r:14,cx:[50] },
   wrist:     { cy:133, r:5, cx:[17,83] },
-  hands:     { cy:147, r:7, cx:[17,83] },
-  fingers:   { cy:160, r:5, cx:[17,83] },
+  hands:     { cy:146.5,r:7,cx:[17,83] }, // was 147
+  fingers:   { cy:160.5,r:5,cx:[17,83] }, // was 160
   knees:     { cy:167, r:7, cx:[31,69] },
-  ankle:     { cy:187, r:5, cx:[36,64] },
+  ankle:     { cy:184, r:5, cx:[36,64] }, // was 187 — the v9.6.1 heel/ankle sensitive spot, re-verified clean (see resolveBodyTapProbe())
   feet:      { cy:197, r:7, cx:[19,81] },
-  heel:      { cy:195.5, r:6, cx:[32,68] }, // inner rear of foot, just below the ankle (no drawn ball — v9.6.1)
+  heel:      { cy:198.5,r:6,cx:[32,68] }, // was 195.5 — inner rear of foot, just below the ankle (no drawn ball — v9.6.1)
 };
 // ladder per the task: nose/eyes/mouth/ears/hair/hands/feet/tummy 20-30 (kept low
 // for younger-sibling use), knees/fingers/neck 34-42, elbow/ankle/wrist/shoulders
@@ -1606,7 +1680,19 @@ function bodyFigureSVG(){
 // the figure's viewBox is SVG-style y-down, so "up" is -y) to compensate. Only ever applied for
 // pointerType "touch" (see resolveBodyTap below) — a mouse tap on a desktop browser has no such
 // systematic offset, and biasing it too would just make dead-center desktop taps miss.
-const TOUCH_BIAS = { x: -2, y: -3.5 };
+// Bug fix (2026-08-23, req 7): -2/-3.5 was still insufficient per a follow-up Fire-tablet report
+// (taps still landing below-right) — widened to -4/-6.5. BODY_REGIONS' cy values just above were
+// re-tuned (see that constant's own comment) specifically to keep this stronger correction from
+// causing NEW cross-region misresolution (verified via a full probe: every region's own dead-
+// center point, biased by this exact amount, still resolves to itself — 0 collisions, including
+// the previously-flagged v9.6.1 heel/ankle pair). Applies to the body-figure domain only
+// (renderBodyFigure(), shared by both scored `mybody` play and arcade Everything Mix — one
+// resolution path, already covers both). Seek&find's `.seek-obj` taps use native per-element
+// pointer-capture hit-testing (see attachTap()) rather than a coordinate-transform +
+// nearest-region match, so there is no equivalent coordinate to bias — pointer capture fixes the
+// event's target at pointerDOWN time, before any JS-level correction could run; checked and
+// confirmed there's no parallel bug class to fix there the same way.
+const TOUCH_BIAS = { x: -4, y: -6.5 };
 // v9.4: nearest-region lookup factored out of the tap handler so it can be exercised directly —
 // a probe loop over every region's own center, WITH bias applied, is the adversarial-review
 // check that the widened tolerance/bias never make two DIFFERENT regions' centers resolve to
@@ -1709,8 +1795,13 @@ function tapBodyPart(part, el){
       recordResult(it, false);
       queueComeback(it, "body"); // v12: req 6 — see its own comment
       highlightAll("reveal");
-      speak(it.explain || it.revealText || `This one is the ${it.label}!`);
-      setTimeout(() => { renderItem(); }, 1600);
+      // Bug fix (2026-08-23): same fire-and-forget/fixed-timeout race as tapTile's second-miss
+      // branch — see its comment for the full root cause. Chained through speakExplain's cb
+      // instead of a bare speak() + unconditional 1600ms advance.
+      ttsCancel(); stopClip();
+      setTimeout(() => {
+        speakExplain(it, () => { if (state.domain) renderItem(); });
+      }, 150);
     }
   }
 }
@@ -2083,6 +2174,18 @@ const COLOR_EXPLAIN = {
   "white": "This one is white — like snow!",
   "brown": "This one is brown — like a teddy bear!",
   "gray": "This one is gray — like a friendly elephant!",
+  // Bug fix (2026-08-23, req 6): explanation lines for the 10 new second-tier colors — see
+  // COLOR_DEFS' own comment for the hex-tuning rationale.
+  "gold": "This one is gold — like a shiny trophy!",
+  "silver": "This one is silver — like a shiny coin!",
+  "navy": "This one is navy — like the deep night ocean!",
+  "teal": "This one is teal — like ocean water!",
+  "maroon": "This one is maroon — like a dark cherry!",
+  "lime": "This one is lime — like a lime fruit!",
+  "tan": "This one is tan — like sand at the beach!",
+  "magenta": "This one is magenta — like a bright tropical flower!",
+  "olive": "This one is olive — like an olive!",
+  "lavender": "This one is lavender — like a lavender flower!",
 };
 
 const SHAPE_EXPLAIN = {
@@ -2890,7 +2993,18 @@ function playAudioClip(audio, cb, revokeUrl){
 let AUDIO_MANIFEST = null;
 function loadAudioManifest(){
   if (typeof fetch !== "function"){ AUDIO_MANIFEST = {}; return; }
-  fetch("audio/manifest.json").then(r => r.ok ? r.json() : {}).then(m => {
+  // Bug fix (2026-08-23): plain `fetch("audio/manifest.json")` is subject to the browser's own
+  // HTTP heuristic caching (the server sends Last-Modified but no explicit Cache-Control) — a
+  // long-lived tab/profile that already fetched an OLDER manifest.json can keep reusing that
+  // cached body indefinitely across reloads, silently missing every audio update shipped since
+  // (caught live: a dev session that had fetched the manifest before this deploy's 46 new clips
+  // were added kept reporting them as "missing, falls back to TTS" even after a hard reload of
+  // index.html itself with a fresh cache-busting query — the PAGE reloaded, but manifest.json's
+  // own cache entry, keyed by its own URL, did not). `cache:"no-cache"` forces the browser to
+  // always REVALIDATE with the server (a conditional If-Modified-Since request) instead of
+  // trusting the cached copy's heuristic freshness — cheap (a 304 response when nothing changed
+  // is tiny), and guarantees a real content change is always picked up on the very next load.
+  fetch("audio/manifest.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : {}).then(m => {
     AUDIO_MANIFEST = m || {};
     // dev-diagnostic only (console, non-blocking) — how much of what the
     // game can currently say has a bundled clip. Catches a stale bundle
@@ -3410,7 +3524,9 @@ function makeVocabItem(d, pool, arity){
 
 function colorSwatch(hex){
   const stroke = hex === "#fafafa" ? "#ccc" : "none";
-  return `<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="38" fill="${hex}" stroke="${stroke}" stroke-width="3"/></svg>`;
+  // preserveAspectRatio stated explicitly (matches the SVG spec default) — see the "req 3"
+  // comment on `.tile svg` above for why the OUTER box's own sizing, not this, was the actual bug.
+  return `<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"><circle cx="50" cy="50" r="38" fill="${hex}" stroke="${stroke}" stroke-width="3"/></svg>`;
 }
 function makeColorItem(d, pool, arity){
   const distractors = simpleDistractors(pool, d, arity - 1);
@@ -3423,15 +3539,16 @@ function makeColorItem(d, pool, arity){
 
 function shapeSVG(name){
   const f = "#4ecdc4", s = `fill="${f}"`;
+  const p = 'preserveAspectRatio="xMidYMid meet"'; // see colorSwatch()'s comment re: "req 3" overflow fix
   switch(name){
-    case "circle": return `<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="36" ${s}/></svg>`;
-    case "square": return `<svg viewBox="0 0 100 100"><rect x="18" y="18" width="64" height="64" rx="6" ${s}/></svg>`;
-    case "rectangle": return `<svg viewBox="0 0 100 100"><rect x="10" y="28" width="80" height="44" rx="5" ${s}/></svg>`;
-    case "triangle": return `<svg viewBox="0 0 100 100"><polygon points="50,14 88,82 12,82" ${s}/></svg>`;
-    case "star": return `<svg viewBox="0 0 100 100"><polygon points="50,10 61,38 91,38 67,57 76,86 50,68 24,86 33,57 9,38 39,38" ${s}/></svg>`;
-    case "heart": return `<svg viewBox="0 0 100 100"><path d="M50 85 C 20 62, 8 40, 22 26 C 34 15, 48 22, 50 32 C 52 22, 66 15, 78 26 C 92 40, 80 62, 50 85 Z" ${s}/></svg>`;
-    case "diamond": return `<svg viewBox="0 0 100 100"><polygon points="50,8 86,50 50,92 14,50" ${s}/></svg>`;
-    case "oval": return `<svg viewBox="0 0 100 100"><ellipse cx="50" cy="50" rx="40" ry="26" ${s}/></svg>`;
+    case "circle": return `<svg viewBox="0 0 100 100" ${p}><circle cx="50" cy="50" r="36" ${s}/></svg>`;
+    case "square": return `<svg viewBox="0 0 100 100" ${p}><rect x="18" y="18" width="64" height="64" rx="6" ${s}/></svg>`;
+    case "rectangle": return `<svg viewBox="0 0 100 100" ${p}><rect x="10" y="28" width="80" height="44" rx="5" ${s}/></svg>`;
+    case "triangle": return `<svg viewBox="0 0 100 100" ${p}><polygon points="50,14 88,82 12,82" ${s}/></svg>`;
+    case "star": return `<svg viewBox="0 0 100 100" ${p}><polygon points="50,10 61,38 91,38 67,57 76,86 50,68 24,86 33,57 9,38 39,38" ${s}/></svg>`;
+    case "heart": return `<svg viewBox="0 0 100 100" ${p}><path d="M50 85 C 20 62, 8 40, 22 26 C 34 15, 48 22, 50 32 C 52 22, 66 15, 78 26 C 92 40, 80 62, 50 85 Z" ${s}/></svg>`;
+    case "diamond": return `<svg viewBox="0 0 100 100" ${p}><polygon points="50,8 86,50 50,92 14,50" ${s}/></svg>`;
+    case "oval": return `<svg viewBox="0 0 100 100" ${p}><ellipse cx="50" cy="50" rx="40" ry="26" ${s}/></svg>`;
   }
 }
 function makeShapeItem(d, pool, arity){
@@ -3530,58 +3647,111 @@ function makeCountItem(d, pool, arity){
 // crate world: in, on, next to, behind, in front of — ALL five share the exact
 // same crate rect (no separate "open box" shape for `in`) so a distractor set
 // never leaks a container-shape tell; only the ball's (x,y)/z-order changes.
+// Bug fix (2026-08-23, req 8): shared depth-cue primitives for every position scene below — a
+// subtle ground-plane shadow ellipse (grounds a floating emoji-style ball in a "world"), and a
+// simple 2-face isometric crate (front face + top face, top face lighter to read as
+// overhead-lit) replacing the old flat rect. Object identity/relation invariants are UNCHANGED
+// (same-scene-family: every tile within one item still draws from the exact same crate(s)/
+// table, only ball placement differs; family-scoped distractors untouched) — this only changes
+// HOW each placement is drawn, never which placements exist per family.
+function groundShadow(x, y, rx, ry, op=0.18){
+  return `<ellipse cx="${x}" cy="${y}" rx="${rx}" ry="${ry}" fill="#000" opacity="${op}"/>`;
+}
+// (fx,fy) = front face's top-left corner, fw/fh = front face size. Returns the two-face crate
+// markup ALONE (no ball/shadow) so callers can freely z-order a ball before or after it.
+function crateSVG(fx, fy, fw, fh){
+  const dx = fw*0.24, dy = fh*0.36; // back-and-up skew for the top face, proportional to crate size
+  const front = `<rect x="${fx}" y="${fy}" width="${fw}" height="${fh}" rx="2" fill="#b87b3f" stroke="#8a5c26" stroke-width="2"/>`;
+  const top = `<polygon points="${fx},${fy} ${fx+fw},${fy} ${fx+fw+dx},${fy-dy} ${fx+dx},${fy-dy}" fill="#dba36a" stroke="#8a5c26" stroke-width="2" stroke-linejoin="round"/>`;
+  return { front, top };
+}
+function ball(x,y,r=9,op=1){
+  return `<circle cx="${x}" cy="${y}" r="${r}" fill="#e63946" opacity="${op}"/><circle cx="${x-r*0.33}" cy="${y-r*0.33}" r="${r*0.28}" fill="#ff9aa2" opacity="${op}"/>`;
+}
 function positionScene(rel){
-  const box = `<rect x="30" y="52" width="40" height="30" rx="3" fill="#c98a4b" stroke="#a06a30" stroke-width="2"/>`;
-  const ball = (x,y,r=9,op=1) => `<circle cx="${x}" cy="${y}" r="${r}" fill="#e63946" opacity="${op}"/><circle cx="${x-3}" cy="${y-3}" r="2.5" fill="#ff9aa2" opacity="${op}"/>`;
+  const c = crateSVG(28, 56, 44, 28); // front face 28..72 x 56..84; top face back edge at y=46, spans x 28..92... see crateSVG
   let inner;
   switch(rel){
-    case "in": inner = box + ball(50,67,7); break; // fully within the crate's outline
-    case "on": inner = box + ball(50,42); break; // above the rim
-    case "next to": inner = box + ball(16,74); break;
-    case "behind": inner = ball(50,50,9,.9) + box; break;
-    case "in front of": inner = box + ball(50,88,9); break;
+    // "in": ball nestled at the crate's floor, fully within its silhouette (drawn after the
+    // crate so it reads as visible CONTENTS, not occluded) — a faint shadow seats it inside
+    // rather than floating.
+    case "in": inner = c.front + c.top + groundShadow(50,80,7,2,0.14) + ball(50,74,8); break;
+    // "on": ball rests on the crate's TOP FACE — its shadow follows the top face's own
+    // foreshortened (skewed) plane, not a flat ground ellipse.
+    case "on": inner = c.front + c.top + groundShadow(50,42,7,2,0.15) + ball(50,34,8); break;
+    // "next to": ball beside the crate at true ground level, own ground shadow — same
+    // baseline as the crate's own front-face bottom edge (y=84), for a consistent "floor".
+    case "next to": inner = c.front + c.top + groundShadow(14,86,7,2.4,0.18) + ball(14,78,9); break;
+    // req 8: OCCLUSION is the entire signal here — ball painted BEFORE the crate (so the crate's
+    // two faces clip it), centered so most of its area falls within the crate's own painted
+    // silhouette, leaving only a small cap visible peeking above the top face's back edge.
+    // Smaller radius + reduced opacity read as "farther away"; no ground shadow (it's not
+    // sitting in the near foreground).
+    case "behind": inner = ball(58,50,8,0.7) + c.top + c.front; break;
+    // req 8: ball drawn AFTER the crate (so it overlaps/occludes the crate's own LOWER FRONT
+    // FACE), lower and slightly LARGER (closer to the viewer), with its shadow cast further
+    // down/forward than the crate's own footprint — the mirror-image occlusion cue of "behind".
+    case "in front of": inner = c.front + c.top + groundShadow(50,97,9,3,0.2) + ball(50,89,10); break;
   }
   return `<svg viewBox="0 0 100 100">${inner}</svg>`;
 }
 // table world: the "under" item's only real def, so its distractors are other
 // ball placements within this SAME table scene (on top, beside, behind a leg)
-// rather than borrowed from a different container.
+// rather than borrowed from a different container. req 8: tabletop gets the same light
+// isometric skew as the crate's top face (a thin parallelogram, not a flat rect) for a
+// consistent "3D-ish" read across the whole domain; every ball placement gets a ground shadow.
 function tableScene(kind){
-  const top = `<rect x="26" y="40" width="48" height="8" rx="2" fill="#c98a4b"/>`;
-  const legL = `<rect x="30" y="48" width="6" height="34" fill="#a06a30"/>`;
-  const legR = `<rect x="64" y="48" width="6" height="34" fill="#a06a30"/>`;
-  const ball = (x,y,r=9,op=1) => `<circle cx="${x}" cy="${y}" r="${r}" fill="#e63946" opacity="${op}"/><circle cx="${x-3}" cy="${y-3}" r="2.5" fill="#ff9aa2" opacity="${op}"/>`;
+  const dx = 10, dy = 6; // same back-and-up skew idea as crateSVG's top face, thinner (a slab, not a box)
+  const top = `<polygon points="26,46 74,46 84,40 36,40" fill="#c98a4b" stroke="#a06a30" stroke-width="2" stroke-linejoin="round"/>`;
+  const legL = `<rect x="30" y="46" width="6" height="34" fill="#a06a30"/>`;
+  const legR = `<rect x="64" y="46" width="6" height="34" fill="#a06a30"/>`;
+  const table = legL + legR + top; // legs painted first so the tabletop's front edge cleanly overlaps their tops
   let inner;
   switch(kind){
-    case "under": inner = top + legL + legR + ball(50,74); break; // centered beneath the tabletop, between the legs
-    case "ontop": inner = top + legL + legR + ball(50,29); break; // above the tabletop surface
-    case "left": inner = top + legL + legR + ball(14,70); break; // clearly beside the table, outside the leg span
+    // centered beneath the tabletop, between the legs, shadow cast by the tabletop above it
+    case "under": inner = table + groundShadow(50,78,8,2.6,0.2) + ball(50,74,9); break;
+    // above the tabletop surface — shadow follows the tabletop's own skewed top plane
+    case "ontop": inner = table + groundShadow(52,35,7,2,0.16) + ball(52,28,8); break;
+    // clearly beside the table, outside the leg span, own ground shadow at the same floor line
+    case "left": inner = table + groundShadow(14,82,7,2.4,0.18) + ball(14,74,9); break;
     // v6 (fix 4b audit): "behindleg" used to sit occluded behind the right leg at mid-table
     // height — still spatially beneath the tabletop, just partly hidden, which read too close to
     // "under" on a second look. Replaced with a placement that's fully visible, outside the
     // table's footprint entirely, resting against the table's outer right edge — unambiguously
     // beside it, not beneath it.
-    case "rightside": inner = top + legL + legR + ball(86,68); break;
+    case "rightside": inner = table + groundShadow(88,80,7,2.4,0.18) + ball(88,72,9); break;
   }
   return `<svg viewBox="0 0 100 100">${inner}</svg>`;
 }
 // two-crate world: same idea for "between" — distractors are other ball
 // placements around the SAME two crates (on one crate, off to the side, tucked behind) rather
-// than a single-crate or table scene.
+// than a single-crate or table scene. req 8: both crates get the same 2-face isometric treatment
+// as the single-crate scene, and every placement gets a matching ground/top shadow.
 function twoboxScene(kind){
-  const crateL = `<rect x="8" y="52" width="28" height="30" rx="3" fill="#c98a4b" stroke="#a06a30" stroke-width="2"/>`;
-  const crateR = `<rect x="64" y="52" width="28" height="30" rx="3" fill="#c98a4b" stroke="#a06a30" stroke-width="2"/>`;
-  const ball = (x,y,r=9,op=1) => `<circle cx="${x}" cy="${y}" r="${r}" fill="#e63946" opacity="${op}"/><circle cx="${x-3}" cy="${y-3}" r="2.5" fill="#ff9aa2" opacity="${op}"/>`;
+  const cl = crateSVG(8, 56, 26, 28), cr = crateSVG(66, 56, 26, 28);
+  const crates = cl.front + cl.top + cr.front + cr.top;
   let inner;
   switch(kind){
-    case "between": inner = crateL + crateR + ball(50,70); break; // small, plainly floating in the open gap at ground level — the ONLY ground-level-centered placement
-    case "onleft": inner = crateL + crateR + ball(22,44); break; // on top of the left crate
-    case "onright": inner = crateL + crateR + ball(78,44); break; // on top of the right crate
+    // small, plainly floating in the open gap at ground level — the ONLY ground-level-centered
+    // placement — own shadow between the two crates' footprints.
+    case "between": inner = crates + groundShadow(50,76,7,2.2,0.18) + ball(50,70,8); break;
+    // on top of the left crate — shadow on that crate's own (skewed) top face
+    case "onleft": inner = crates + groundShadow(21,40,6,1.8,0.16) + ball(21,33,7); break;
+    // on top of the right crate — mirrored
+    case "onright": inner = crates + groundShadow(79,40,6,1.8,0.16) + ball(79,33,7); break;
     // v6 (fix 4b): the old "front" placement — ball(50,92), horizontally CENTERED like
     // `between`, just lower — was reported as still reading "between but in front". Replaced
     // with two unambiguous placements, neither centered at ground level:
-    case "farleft": inner = ball(6,74,8) + crateL + crateR; break; // clearly off to the side, well away from the gap
-    case "behind": inner = ball(50,60,20) + crateL + crateR; break; // BIG ball drawn BEHIND (z-order first) so both crates visually clip its left/right edges — reads as tucked behind them, peeking above, not floating between them
+    case "farleft": inner = groundShadow(6,80,6,2,0.18) + ball(6,74,8) + crates; break; // clearly off to the side, well away from the gap; drawn ON TOP of nothing (in front of empty space), crates painted after so they never clip it
+    // This is a DISTRACTOR kind for "between", not a tested relation itself (see POSITION_DEFS —
+    // only "between" is a real twobox-family relation) — its one job is to look visibly
+    // DIFFERENT from "between" (centered/small/ground-level/fully visible), not to hit the same
+    // occlusion bar positionScene's actual "behind" relation does. Same idea as the original
+    // (oversized ball, both crates clip its edges, dimmer for "farther") verified via a
+    // point-sampling coverage check to confirm this reads as MORE occluded than the original,
+    // not less (0.242 covered vs the pre-redesign original's 0.162 — see the worklog). No ground
+    // shadow (not in the near foreground).
+    case "behind": inner = ball(50,52,30,0.7) + crates; break;
   }
   return `<svg viewBox="0 0 100 100">${inner}</svg>`;
 }
@@ -3725,7 +3895,7 @@ function adjSVG(attrs){
     case "triangle": { const s=40*scale; shapeMarkup = `<polygon points="${cx},${cy-s} ${cx+s},${cy+s*0.85} ${cx-s},${cy+s*0.85}" fill="${fillAttr}" stroke="${strokeAttr}" stroke-width="${strokeWidth}"/>`; break; }
     case "star": { const R=40*scale, r=R*0.42, pts=[]; for(let i=0;i<10;i++){ const rad=i%2===0?R:r; const ang=(Math.PI/5)*i - Math.PI/2; pts.push(`${cx+rad*Math.cos(ang)},${cy+rad*Math.sin(ang)}`); } shapeMarkup = `<polygon points="${pts.join(" ")}" fill="${fillAttr}" stroke="${strokeAttr}" stroke-width="${strokeWidth}"/>`; break; }
   }
-  return `<svg viewBox="0 0 100 100">${shapeMarkup}</svg>`;
+  return `<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">${shapeMarkup}</svg>`;
 }
 // v5 (mod 4): "Tricky Pictures" now always shows 5-6 tiles — target + 3 near-misses that differ
 // in exactly ONE attribute + 1-2 harder distractors that differ in exactly TWO attributes at
@@ -5367,8 +5537,13 @@ function tapSeekObj(word, el){
       const targetEl = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
       if (targetEl) targetEl.classList.add("reveal","found");
       if (state.domain && state.domain.sf && state.domain.sf.scene) state.domain.sf.scene.resolved++;
-      speak(it.explain || it.revealText || `This one is the ${it.label}!`);
-      setTimeout(()=>{ renderItem(); }, 1600);
+      // Bug fix (2026-08-23): same fire-and-forget/fixed-timeout race as tapTile's second-miss
+      // branch — see its comment for the full root cause. Chained through speakExplain's cb
+      // instead of a bare speak() + unconditional 1600ms advance.
+      ttsCancel(); stopClip();
+      setTimeout(() => {
+        speakExplain(it, () => { if (state.domain) renderItem(); });
+      }, 150);
     }
   }
 }
@@ -5438,8 +5613,24 @@ function tapTile(i, tileEl){
       tiles[it.correct].classList.add("reveal");
       tiles.forEach((t,j)=>{ if(j!==it.correct) t.classList.add("dim"); });
       setSubtitle(it.zh ? it.explainSubtitle : null); // v13: swap the prompt subtitle for the reveal's English translation
-      speakExplain(it);
-      setTimeout(()=>{ renderItem(); }, 1600);
+      // Bug fix (2026-08-23): previously fired speakExplain(it) with NO callback, then
+      // unconditionally advanced via a fixed 1600ms setTimeout regardless of whether the
+      // explanation had actually finished. Explanation clips are full sentences and commonly
+      // run 2-3s+ (measured: "This one is red — like a fire truck!" = 2.26s) — well past 1600ms
+      // — so the still-playing clip got forcibly cut off by the NEXT item's own sayItem() ->
+      // playAudioClip() call, which always calls stopClip() first to enforce the single-Audio-
+      // element model. Worse, on the rarer path where an explanation fell through to live TTS
+      // (no bundled clip, or a muted-state timing edge), the engine's lingering
+      // `speechSynthesis.pending` caused the FOLLOWING prompt's own no-cb speak() call to be
+      // silently dropped by speakTTS's `if (!cb && speechSynthesis.pending) return` filler-guard
+      // — so a single wrong answer could silence both the explanation AND the next question.
+      // Fixed by chaining strictly through speakExplain's own cb (same pattern tapShrug/
+      // resolveComeback already used correctly) so renderItem() never fires until the
+      // explanation has actually finished playing.
+      ttsCancel(); stopClip(); // sanctioned interrupt — clears any still-playing brave-guess praise
+      setTimeout(() => {
+        speakExplain(it, () => { if (state.domain) renderItem(); });
+      }, 150);
     }
   }
 }
@@ -6534,7 +6725,11 @@ function renderStorageDiagnostic(){
      "same arcade mechanics exactly" per the task, not re-tunable per mode.
    ===================================================================== */
 
-const ARCADE_QUESTION_MS = 15000;      // 15s auto-advance timer, per item
+// Bug fix (2026-08-23, req 5): 15s -> 30s auto-advance, with the question prompt REPLAYED once
+// at the midpoint (ARCADE_QUESTION_MS/2 — see startArcadeTimer()'s own comment) via the same
+// sayItem() path the initial render already uses. Timer visual (the CSS width transition in
+// startArcadeTimer) automatically spans the new full duration since it reads this constant.
+const ARCADE_QUESTION_MS = 30000;      // 30s auto-advance timer, per item
 const ARCADE_REVEAL_MS = 2000;         // ~2s reveal-then-advance on timeout
 const ARCADE_INTERLUDE_EVERY = 25;     // gentle break screen every ~25 questions
 const ARCADE_DIFFICULTY_WINDOW = 14;   // theta-or-age ± this many months, deliberately the
@@ -6787,7 +6982,11 @@ const ARCADE_MODES = {
    also cancels it — once a child is actively engaged with a question at all, further time
    pressure serves no purpose; the retry proceeds at its own pace with no timeout re-armed. */
 function cancelArcadeTimer(sess){
-  if (sess.timer){ clearTimeout(sess.timer.timeoutId); sess.timer = null; }
+  if (sess.timer){
+    clearTimeout(sess.timer.timeoutId);
+    if (sess.timer.midTimeoutId) clearTimeout(sess.timer.midTimeoutId); // req 5: the 15s-midpoint replay timer
+    sess.timer = null;
+  }
   const bar = $("arcadeTimerBar");
   if (bar){ bar.classList.remove("running"); bar.style.transition = "none"; bar.style.width = "0%"; }
 }
@@ -6809,7 +7008,20 @@ function startArcadeTimer(sess){
     // if a call site were ever missed, rather than actually relying on it.
     if (sess.active && sess.currentItem === firedFor && !sess.locked) arcadeTimeout(sess);
   }, ARCADE_QUESTION_MS);
-  sess.timer = { timeoutId, forItem: it };
+  // Bug fix (2026-08-23, req 5): replay the question prompt ONCE at the midpoint of the (now 30s)
+  // timer, via the exact same sayItem() call renderArcadeItem() used for the initial prompt — a
+  // second chance to hear the question for a child who's still looking/thinking. Skipped (not
+  // rescheduled) if: the item already resolved/changed (same staleness guard the main timeout
+  // uses), audio is already playing (isAnyAudioPlaying() — never talk over a still-in-flight
+  // clip/utterance, including the tail of the original prompt itself on a slow device), or the
+  // child is already mid-interaction (sess.firstTry===false — they've made a first attempt and
+  // are actively engaged; interrupting that with a prompt replay would be intrusive, not helpful).
+  const midTimeoutId = setTimeout(() => {
+    if (sess.active && sess.currentItem === it && !sess.locked && sess.firstTry && !isAnyAudioPlaying()){
+      sayItem(it);
+    }
+  }, ARCADE_QUESTION_MS / 2);
+  sess.timer = { timeoutId, midTimeoutId, forItem: it };
 }
 
 /* ---------- resolution bookkeeping (shared by every "this question is over" path) ---------- */
@@ -6896,8 +7108,12 @@ function arcadeTimeout(sess){
     tiles[it.correct].classList.add("reveal");
     tiles.forEach((t,j) => { if (j !== it.correct) t.classList.add("dim"); });
   }
-  speak(it.explain || it.revealText || `This one is the ${it.label}!`);
-  finishArcadeQuestion(sess, false, ARCADE_REVEAL_MS);
+  // Bug fix (2026-08-23): same fire-and-forget/fixed-timeout race as tapTile's second-miss
+  // branch (see its own comment for the full root cause) — was `speak(explain); finishArcade
+  // Question(sess,false,ARCADE_REVEAL_MS)`, a FIXED ~2s advance regardless of whether the
+  // explanation clip (commonly 1.5-3s+) had actually finished. Chained through speak()'s own cb
+  // instead, so the advance never fires until the explanation has genuinely completed.
+  speak(it.explain || it.revealText || `This one is the ${it.label}!`, () => finishArcadeQuestion(sess, false, 300));
 }
 
 /* ---------- tap handlers (arcade-owned; NOT tapTile/tapSeekObj/tapBodyPart) ---------- */
@@ -6930,8 +7146,10 @@ function tapArcadeTile(sess, i, tileEl){
       sess.locked = true;
       tiles[it.correct].classList.add("reveal");
       tiles.forEach((t,j) => { if (j !== it.correct) t.classList.add("dim"); });
-      speak(it.explain || it.revealText || `This one is the ${it.label}!`);
-      finishArcadeQuestion(sess, false);
+      // Bug fix (2026-08-23): same fire-and-forget race as tapTile's own second-miss branch —
+      // chained through speak()'s cb so finishArcadeQuestion (and its advance timer) never fires
+      // until the explanation clip has actually finished playing.
+      speak(it.explain || it.revealText || `This one is the ${it.label}!`, () => finishArcadeQuestion(sess, false, 300));
     }
   }
 }
@@ -6957,8 +7175,10 @@ function tapArcadeSeekObj(sess, word, el){
       sess.locked = true;
       const targetEl = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
       if (targetEl) targetEl.classList.add("reveal","found");
-      speak(it.explain || it.revealText || `This one is the ${it.label}!`);
-      finishArcadeQuestion(sess, false);
+      // Bug fix (2026-08-23): same fire-and-forget race as tapTile's own second-miss branch —
+      // chained through speak()'s cb so finishArcadeQuestion (and its advance timer) never fires
+      // until the explanation clip has actually finished playing.
+      speak(it.explain || it.revealText || `This one is the ${it.label}!`, () => finishArcadeQuestion(sess, false, 300));
     }
   }
 }
@@ -6989,8 +7209,10 @@ function tapArcadeBodyPart(sess, part, el){
     } else {
       sess.locked = true;
       highlightAll("reveal");
-      speak(it.explain || it.revealText || `This one is the ${it.label}!`);
-      finishArcadeQuestion(sess, false);
+      // Bug fix (2026-08-23): same fire-and-forget race as tapTile's own second-miss branch —
+      // chained through speak()'s cb so finishArcadeQuestion (and its advance timer) never fires
+      // until the explanation clip has actually finished playing.
+      speak(it.explain || it.revealText || `This one is the ${it.label}!`, () => finishArcadeQuestion(sess, false, 300));
     }
   }
 }

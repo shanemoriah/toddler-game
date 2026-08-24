@@ -82,23 +82,47 @@ const strings = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
 process.stdout.write(strings.map(s => s + "\0").join(""));
 ' "$STRINGS_JSON")
 
-# assemble manifest.json (exact string -> filename) from the sha\0text\0 pairs
-# collected above — one node call handles all JSON string-escaping correctly.
+# Bug fix (2026-08-23): this used to WRITE manifest.json from scratch (English-only content)
+# and prune every .m4a not in ITS OWN keep_files — fine back when this was the only audio
+# pipeline, but v13 added tools/gen_audio_zh.sh (Mandarin, MERGES into this same manifest.json /
+# audio/ dir — see its own header comment). Running this script after gen_audio_zh.sh silently
+# WIPED every Mandarin manifest entry AND deleted all 181 Mandarin .m4a files, since neither was
+# in this script's own (English) string set — caught live during the v13.1 second-tier-colors
+# regen (had to re-run gen_audio_zh.sh a second time to recover). Fixed by MERGING into the
+# existing manifest rather than overwriting it, and by identifying "foreign" (Mandarin) entries
+# via a CJK-character heuristic on the manifest KEY (English `say`/`explain` strings never
+# contain CJK ideographs; every Mandarin string does) — foreign entries, and the audio files they
+# reference, are now preserved through both the merge and the prune step, regardless of whether
+# this run's own (English-only) string set mentions them.
 node -e '
 const fs = require("fs");
 const parts = fs.readFileSync(process.argv[1], "utf8").split("\0");
+const isForeign = (key) => /[㐀-鿿]/.test(key); // CJK ideograph range — Mandarin strings only
+let existing = {};
+try { existing = JSON.parse(fs.readFileSync(process.argv[2], "utf8")); } catch(e){ existing = {}; }
 const manifest = {};
+// keep every foreign (Mandarin) entry untouched
+for (const [k, v] of Object.entries(existing)) if (isForeign(k)) manifest[k] = v;
+// this run'"'"'s own (English) entries — full replace of the English subset, same as before
 for (let i = 0; i + 1 < parts.length; i += 2){
   const sha = parts[i], text = parts[i + 1];
   if (!sha) continue;
   manifest[text] = sha + ".m4a";
 }
 fs.writeFileSync(process.argv[2], JSON.stringify(manifest));
+console.error(`manifest: ${Object.keys(manifest).length} total entries (${Object.keys(existing).filter(isForeign).length} foreign/Mandarin preserved)`);
 ' "$PAIRS_FILE" "$OUT_DIR/manifest.json"
 
 echo "Strings processed: $total_count | new clips synthesized: $new_count"
 
-# prune orphaned .m4a files no longer referenced by any current string
+# prune orphaned .m4a files no longer referenced by any current string OR by a preserved
+# foreign (Mandarin) manifest entry (see the merge step's comment above for why this matters).
+preserved_files=$(node -e '
+const fs = require("fs");
+const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const isForeign = (key) => /[㐀-鿿]/.test(key);
+for (const [k, v] of Object.entries(manifest)) if (isForeign(k)) console.log(v);
+' "$OUT_DIR/manifest.json")
 pruned=0
 shopt -s nullglob
 for f in "$OUT_DIR"/*.m4a; do
@@ -107,6 +131,7 @@ for f in "$OUT_DIR"/*.m4a; do
   for k in "${keep_files[@]}"; do
     if [ "$k" = "$base" ]; then found=1; break; fi
   done
+  if [ "$found" -eq 0 ] && grep -qxF "$base" <<< "$preserved_files"; then found=1; fi
   if [ "$found" -eq 0 ]; then
     rm -f "$f"
     pruned=$((pruned + 1))

@@ -30,11 +30,24 @@
 #
 # Safe to re-run any time: a clip's filename is the first 16 hex chars of sha256(exact string), so
 # an unchanged string always re-resolves to the same filename and is skipped (not re-synthesized).
+#
+# Bug fix (2026-08-23, req 4): Edge-TTS's default zh-CN-YunxiaNeural pace reads WAY too fast for a
+# toddler starting from zero Mandarin exposure (the parent's report: "half speed" needed) —
+# --rate="-50%" is now the pipeline DEFAULT (RATE below), not a one-off flag, so every future
+# regen stays at the slowed pace with no extra step. Because the output filename is
+# sha256(text)-keyed (NOT rate-keyed), an existing fast clip's filename is IDENTICAL to its
+# slow replacement's — this script's own "skip if file exists" optimization (see the main loop
+# below) would otherwise skip re-synthesizing every already-bundled Mandarin string forever.
+# Regenerating at the new rate REQUIRES deleting the existing zh .m4a files first (see the
+# one-time force-regen note in NOTES.md v13.1 / the worklog) — this script itself has no
+# "--force" flag by design, to keep its normal safe/idempotent re-run behavior for everyday use
+# (adding a NEW word later must stay a cheap, skip-existing operation).
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
 VOICE="zh-CN-YunxiaNeural"
+RATE="-50%"            # req 4: half speed — see the comment block above
 BITRATE=48000
 OUT_DIR="audio"
 STRINGS_JSON="${1:-}"
@@ -65,7 +78,10 @@ synth_one() {
   rm -f "$tmp_mp3"
   local attempt
   for attempt in 1 2; do
-    if uvx edge-tts --voice "$VOICE" --text "$text" --write-media "$tmp_mp3" >/dev/null 2>"$WORK_DIR/edge-tts.err"; then
+    # Bug fix (2026-08-23): `--rate "$RATE"` (space-separated) broke argparse — a value starting
+    # with `-` (e.g. "-50%") passed as a separate argv token is misread as another flag ("expected
+    # one argument"). The `--rate=VALUE` single-token form sidesteps this entirely.
+    if uvx edge-tts --voice "$VOICE" --rate="$RATE" --text "$text" --write-media "$tmp_mp3" >/dev/null 2>"$WORK_DIR/edge-tts.err"; then
       if [ -s "$tmp_mp3" ]; then
         if afconvert "$tmp_mp3" -f m4af -d aac -b "$BITRATE" "$OUT_DIR/$outfile" 2>"$WORK_DIR/afconvert.err"; then
           rm -f "$tmp_mp3"
