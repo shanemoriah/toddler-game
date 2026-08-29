@@ -550,6 +550,7 @@
   <div id="progressScreen" class="screen">
     <h2 id="progressTitle">📈 Progress over time</h2>
     <div id="storageDiag" style="font-size:12px;color:#8a7d66"></div>
+    <div id="bugLine" style="display:none;font-size:11px;color:#b66;max-width:700px;word-break:break-word"></div>
     <div class="res-card" style="max-width:760px">
       <h3>🧠 Concept domains — age-equivalent vs chronological age</h3>
       <div id="domainCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px"></div>
@@ -7611,6 +7612,29 @@ function startEverything(){ // v10.1: Everything Mix — picker tile onclick tar
   startArcadeSession(state.everything);
 }
 function exitEverything(){ exitArcadeSession(state.everything); } // v10.1
+
+/* ---------- crash catcher + auto-recovery (v14.1) ----------
+   The user reported an unreproducible in-game break on the Fire tablet.
+   Since kids-browser storage is wiped between launches, diagnosis must
+   happen IN-session: capture every uncaught error with game context,
+   show it under a 🐞 line on the Progress screen, and auto-recover the
+   current question instead of freezing. */
+window.__gameErrors = [];
+function recordGameError(kind, msg){
+  try{
+    const sessA = state.arcade && state.arcade.active ? state.arcade : (state.everything && state.everything.active ? state.everything : null);
+    const ctx = sessA ? `arcade:${sessA.mode}/${sessA.currentItem && sessA.currentItem.label}`
+      : (state.domain ? `scored:${DOMAINS[state.domainIdx] && DOMAINS[state.domainIdx].key}/${state.currentItem && state.currentItem.label}` : "menu");
+    window.__gameErrors.push(`[${new Date().toISOString().slice(11,19)}] ${kind}: ${String(msg).slice(0,300)} @ ${ctx}`);
+    if (window.__gameErrors.length > 5) window.__gameErrors.shift();
+    const el = $("bugLine"); if (el){ el.style.display = "block"; el.textContent = "🐞 " + window.__gameErrors.join(" ‖ "); }
+    // auto-recover: never leave the child staring at a frozen question
+    if (sessA){ try{ cancelArcadeTimer(sessA); sessA.locked = true; setTimeout(() => { if (sessA.active){ sessA.locked = false; advanceArcade(sessA); } }, 800); }catch(e){} }
+    else if (state.domain){ try{ state.locked = true; setTimeout(() => { if (state.domain){ state.locked = false; renderItem(); } }, 800); }catch(e){} }
+  }catch(e){}
+}
+window.addEventListener("error", ev => recordGameError("error", (ev.message||"?") + " @" + (ev.lineno||"?")));
+window.addEventListener("unhandledrejection", ev => recordGameError("promise", ev.reason && (ev.reason.message || ev.reason)));
 
 /* ---------- init ---------- */
 // v11: true only while the user is still looking at the entry screens this init() function
