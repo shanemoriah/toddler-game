@@ -7397,8 +7397,35 @@ function arcadeTimeout(sess){
 // here gets the SAME gentle-dim + brave-guess treatment as scored play (see tapTile's own v12
 // comment for the full reasoning); the only arcade-specific bit is that a MISS still needs to
 // cancel/not-restart the 15s arcade timer, unchanged from before this pass.
-function tapArcadeTile(sess, i, tileEl){
-  if (sess.locked || !sess.currentItem) return;
+// v14.1 (QA pass 2): `forItem` — the item this specific tile/tap listener was built for, captured
+// by renderArcadeItem() at render time and threaded through the attachTap() closure — is a
+// REQUIRED staleness check, not decoration. Confirmed live (direct handler calls, not simulated
+// pointer events — see QA-LOG.md pass 2): calling this handler with a stale i/tileEl/forItem
+// while sess.currentItem has already moved on to a DIFFERENT item reliably corrupts that new
+// item — best case a harmless mutation on a now-hidden/detached tile; worst case (old item was
+// tile-kind, new item is seek/body-kind, whose render path does NOT clear #board — see
+// renderArcadeItem()'s own kind-branch) a phantom "wrong tap" against the brand-new item: it
+// cancels that item's own just-started timer (never re-armed), flips its `firstTry` to false,
+// and later makes a genuine correct answer on THAT item score as a miss
+// (`finishArcadeQuestion(sess, false, ...)` — silent streak reset despite the success chime
+// already having played). The suspected real-world DELIVERY mechanism is attachTap()'s
+// setPointerCapture() on pointerdown (see its own comment) racing arcade's autonomous 30s
+// auto-advance timer — a child's finger down on the old tile when the timer fires, released
+// after the new item has rendered — though this couldn't be conclusively proven against a real
+// touch/pointer sequence in this environment (synthetic PointerEvents don't establish real
+// capture, and it's plausible the exact release semantics differ across engines/hidden-vs-removed
+// elements). What IS proven is that if ANY path ever delivers a stale tap here — this mechanism
+// or another — the corruption above follows, and this check closes that off unconditionally with
+// no regression risk (a tap on the truly-current item always has `sess.currentItem === forItem`).
+// Logged as the leading candidate for the reported unreproduced "game broke on a wrong answer for
+// a 2-option Tap Tomorrow item in an
+// arcade" — 2-tile time/opposites items are the fastest to tap and the vulnerable window is any
+// stray touch mid-flight when the timer fires, more likely the longer a session runs (more timer
+// firings, more item-kind transitions). Mirrors the identical-in-spirit guard the timer callback
+// itself already uses (`sess.currentItem === firedFor` in startArcadeTimer) and applyHint's own
+// `state.currentItem !== it` staleness check — same codebase idiom, just missing here until now.
+function tapArcadeTile(sess, i, tileEl, forItem){
+  if (sess.locked || !sess.currentItem || sess.currentItem !== forItem) return;
   cancelArcadeTimer(sess); // ANY tap (right or wrong) cancels — see startArcadeTimer()'s own comment
   const it = sess.currentItem;
   const tiles = [...$("board").children];
@@ -7429,8 +7456,8 @@ function tapArcadeTile(sess, i, tileEl){
     }
   }
 }
-function tapArcadeSeekObj(sess, word, el){
-  if (sess.locked || !sess.currentItem) return;
+function tapArcadeSeekObj(sess, word, el, forItem){
+  if (sess.locked || !sess.currentItem || sess.currentItem !== forItem) return;
   cancelArcadeTimer(sess);
   const it = sess.currentItem;
   if (word === it.label){
@@ -7463,8 +7490,8 @@ function tapArcadeSeekObj(sess, word, el){
 // being) and reads/writes `sess`, not state.domain. Used only by Everything Mix today (Mix-It-Up
 // doesn't include mybody in its content mix), but takes `sess` like every other arcade tap
 // handler for consistency and in case a future mode wants it too.
-function tapArcadeBodyPart(sess, part, el){
-  if (sess.locked || !sess.currentItem) return;
+function tapArcadeBodyPart(sess, part, el, forItem){
+  if (sess.locked || !sess.currentItem || sess.currentItem !== forItem) return;
   cancelArcadeTimer(sess);
   const it = sess.currentItem;
   const highlightAll = (cls) => { $("seekBoard").querySelectorAll(`.body-hit[data-part="${it.label}"]`).forEach(e => e.classList.add(cls)); };
@@ -7503,7 +7530,7 @@ function renderArcadeSeekfindBoard(sess, it){
   // (harmless — a brief re-layout, not a bug) rather than visually "continuing" the same board.
   const sceneDef = SEEKFIND_SCENES.find(s => s.key === it.sceneKey);
   const scene = { def: sceneDef, slots: seekfindSlots(sceneDef.words.length) };
-  renderSeekfindScene(scene, (word, el) => tapArcadeSeekObj(sess, word, el)); // v10: 2nd-arg override — see that function's own comment
+  renderSeekfindScene(scene, (word, el) => tapArcadeSeekObj(sess, word, el, it)); // v10: 2nd-arg override — see that function's own comment; v14.1: `it` threaded through for the stale-pointer-capture staleness check, see tapArcadeSeekObj's own comment
 }
 function renderArcadeItem(sess){
   if (!sess.active) return; // stale callback after exitArcade()/exitEverything()/endGame() — see their own comments
@@ -7534,7 +7561,7 @@ function renderArcadeItem(sess){
     // state.domain). See buildEverythingItem()'s own comment on this domain.
     $("board").style.display = "none";
     $("seekBoard").style.display = "block";
-    renderBodyFigure((part, el) => tapArcadeBodyPart(sess, part, el));
+    renderBodyFigure((part, el) => tapArcadeBodyPart(sess, part, el, it)); // v14.1: `it` threaded through for the stale-pointer-capture staleness check, see tapArcadeBodyPart's own comment
   } else {
     $("seekBoard").style.display = "none";
     $("board").style.display = "grid";
@@ -7547,7 +7574,7 @@ function renderArcadeItem(sess){
       const tile = document.createElement("div");
       tile.className = "tile";
       tile.innerHTML = html;
-      attachTap(tile, () => tapArcadeTile(sess, i, tile));
+      attachTap(tile, () => tapArcadeTile(sess, i, tile, it)); // v14.1: `it` threaded through for the stale-pointer-capture staleness check, see tapArcadeTile's own comment
       board.appendChild(tile);
     });
     // v10.1: patterns' growing-dot-cluster tiles can overflow a tile's own clamp()'d font-size,
