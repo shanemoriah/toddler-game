@@ -239,7 +239,10 @@
      via pointer-events, same load-bearing reasoning as `.seek-obj.found` above. */
   .seek-obj.hint-elim { opacity: .15; animation: none; pointer-events: none; }
   .seek-obj.reveal { animation: pop .5s; filter: drop-shadow(0 0 0 var(--good)) drop-shadow(0 2px 2px rgba(0,0,0,.12)); outline: 4px solid var(--good); outline-offset: 4px; border-radius: 50%; }
-  @keyframes seekbob { 0%,100%{transform:translate(-50%,-50%) translateY(0)} 50%{transform:translate(-50%,-50%) translateY(-8px)} }
+  /* v14.5 (QA pass 14, fix for pass 13's own flagged DECISION): amplitude halved from 8px to 4px so
+     the static placement margin in seekfindSlots() (below) can provably absorb it at every animation
+     phase — see that function's own comment for the cushion math. */
+  @keyframes seekbob { 0%,100%{transform:translate(-50%,-50%) translateY(0)} 50%{transform:translate(-50%,-50%) translateY(-4px)} }
   /* ---------- picker (Feature 1) ---------- */
   #pickerScreen { justify-content: flex-start; padding-top: 14px; }
   #pickerGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 14px; width: 100%; max-width: 760px; padding: 8px; }
@@ -5952,20 +5955,30 @@ function seekfindSlots(n){
   // caught this comment's own earlier border-box arithmetic error). Verified empirically with 0
   // overlaps across 50+ trials per scene x 4 viewports (375x812/600x1024/1024x600/1280x800),
   // including one run that organically hit the literal 320px-tall board floor.
-  // KNOWN NOT COVERED by this static math: `.seek-obj`'s own `seekbob` animation (below) adds an
-  // 8px vertical bob on top of this static layout — bigger than either axis's static cushion — so a
-  // mid-bob VISUAL near-touch between two objects at their closest static placement is possible;
-  // pre-existing since before this pass (independent of size/jitter), and if anything marginally
-  // IMPROVED by this pass's smaller jitter (objects sit closer to cell centers, farther from a
-  // neighbor's cell) rather than worsened — flagged as a DECISION in QA-LOG, not fixed here.
-  const jitterFactor = 0.16;
+  // v14.5 (QA pass 14, fix for pass 13's own flagged DECISION): `.seek-obj`'s `seekbob` animation
+  // (below) moves each object UP by up to its amplitude (never down — the keyframe only goes from
+  // translateY(0) to translateY(-amplitude)), on an independent random phase per object
+  // (`animationDelay`). For two vertically-stacked objects (same column, adjacent rows) that means
+  // the worst case is the LOWER object at full bob (moving toward the upper one) while the upper
+  // object sits at rest — i.e. the vertical gap can shrink by up to the FULL amplitude at some point
+  // in the cycle, on top of the static jitter/size cushion. Rather than pad the height-axis budget
+  // (already the tightest axis — see the cushion math this comment used to carry) further, the bob
+  // amplitude itself was halved to 4px (`seekbob` keyframe, above) AND vertical jitter was dropped
+  // to 0 (only cellH/2 centering, no per-object Y jitter) so the full 4px bob comes entirely out of
+  // slack that pure size variance already has to spare: at the tightest viewport (#seekBoard's
+  // 320px min-height CSS floor, 312px padding box after its 4px border), half-cell height is
+  // 312/4/2=39px; with size_max=62 (size_max/2=31) and zero Y jitter, static cushion is 39-31=8px,
+  // and reserving the bob's 4px against that leaves a 4px margin at every phase, at every required
+  // viewport (skinnier viewports only make the WIDTH axis tighter, and the bob is vertical-only so
+  // it never touches that axis's own unrelated cushion). X jitter is untouched (bob doesn't move
+  // objects horizontally) so horizontal visual variety is unaffected.
+  const jitterFactorX = 0.16;
   return shuffle(cells).slice(0, n).map(({r,c}) => {
     const cellW = 100/cols, cellH = 100/rows;
-    const jitterX = (Math.random()-0.5) * cellW * jitterFactor;
-    const jitterY = (Math.random()-0.5) * cellH * jitterFactor;
+    const jitterX = (Math.random()-0.5) * cellW * jitterFactorX;
     return {
       left: c*cellW + cellW/2 + jitterX,
-      top: r*cellH + cellH/2 + jitterY,
+      top: r*cellH + cellH/2,
       size: 44 + Math.random()*18,
     };
   });
