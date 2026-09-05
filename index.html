@@ -6744,7 +6744,14 @@ async function syncPullAndMerge(){
   if (!syncEnabled() || !code) { setSyncStatus(code ? "offline" : "idle"); return; }
   setSyncStatus("syncing");
   try {
-    const res = await fetch(`${syncUrl()}/v1/state/${code}`, { method: "GET" });
+    // QA pass 5 fix (2026-09-05): explicit no-store — the worker's json() helper (sync-worker/
+    // src/index.js) sets no Cache-Control on any response, including a 404, so a default-mode
+    // fetch is technically eligible to serve a heuristically-cached 404 straight from the
+    // browser's HTTP cache on a later call to this SAME url — silently defeating init()'s
+    // deferred confirmation-retry below (see its own comment), which exists specifically to get
+    // a FRESH read past a possible KV-propagation-lag false-404, not a second look at the same
+    // cached one.
+    const res = await fetch(`${syncUrl()}/v1/state/${code}`, { method: "GET", cache: "no-store" });
     if (res.status === 404){ setSyncStatus("synced"); return; } // brand-new code, nothing to pull yet — not an error
     if (!res.ok) throw new Error(`GET ${res.status}`);
     const remote = await res.json();
@@ -6910,7 +6917,7 @@ async function reconcileProfileKeys(id, idbOk){
 
   return { sessionsChanged, checklistChanged };
 }
-async function reconcileStorage(){
+async function reconcileStorage(willAttemptSyncPull){
   const idbOk = await audioDBAvailable();
 
   // v11: tg_profiles FIRST (via mergeProfiles — a real union-by-id merge, not just "backfill
@@ -6921,7 +6928,7 @@ async function reconcileStorage(){
   let idbProfiles = null; if (idbProfilesRaw){ try { idbProfiles = JSON.parse(idbProfilesRaw); } catch(e){} }
   let lsProfilesData = loadProfiles(); // read fresh, right after the awaits above — matches the read-order discipline every other block in this function already follows
   const mergedProfileList = mergeProfiles(lsProfilesData.profiles, (idbProfiles && idbProfiles.profiles) || []);
-  const profilesChanged = mergedProfileList.length !== lsProfilesData.profiles.length;
+  let profilesChanged = mergedProfileList.length !== lsProfilesData.profiles.length; // QA pass 5: was const — the legacy-migration retry below also needs to flip this, see its own comment
   if (profilesChanged){
     // re-read activeProfileId fresh (rather than trusting the possibly-microtask-old
     // lsProfilesData above) right at the point of writing — cheap belt-and-suspenders so a
@@ -6951,9 +6958,57 @@ async function reconcileStorage(){
   // tg_profile from before the wipe. The backfill loop just above may have just recovered that
   // tg_profile into localStorage — if so, and no profile exists yet, retry the migration now
   // that there's something to migrate from.
-  if (!profileIds.length){
+  // QA pass 5 fix (2026-09-05): this retry used to fire unconditionally whenever profileIds was
+  // empty, racing init()'s OWN separate syncPullAndMerge() call (kicked off independently,
+  // around the same time, per its own comment). Reproduced live: a device with zero LOCAL
+  // profiles (both localStorage AND the IndexedDB tg_profiles mirror wiped) but with (a) a
+  // stale legacy tg_profile singular key still sitting in its IndexedDB mirror (an EXPECTED,
+  // permanent artifact of the "additive migration, never delete" policy — see
+  // migrateLegacyProfile()'s own comment — so this isn't a contrived setup, it's the natural
+  // state of any family that ever ran a pre-v11 install) AND (b) a configured family sync code
+  // whose server copy already holds the REAL, already-migrated profile(s) — ends up running
+  // THIS retry (which resurrects the stale tg_profile into a BRAND NEW profile id from scratch)
+  // concurrently with syncPullAndMerge() recovering the real profile(s) from the server. Neither
+  // call is aware of the other, so mergeProfiles()'s union-by-id semantics (correctly, by
+  // design, for the actual two-different-devices case) keep BOTH: the real profile AND a
+  // freshly-minted duplicate/"sibling" carrying the same name and a snapshot of the real
+  // profile's stale pre-migration history — a permanent fork, confirmed reproducible on a single
+  // device/single load (no second tab needed), and confirmed to persist through a subsequent
+  // sync PUT. Fixed by deferring this retry when a real recovery is already in flight: skip it
+  // here whenever sync is enabled with a family code configured (syncPullAndMerge() is about to
+  // run, or already has) and instead let init()'s syncPullAndMerge().then() callback attempt the
+  // SAME retry, but only as a genuine last resort AFTER the network pull has had its chance to
+  // supply the real profile list — see that callback for the mirror-image other half of this
+  // fix. When sync is disabled or no code is configured (the original single-device scenario
+  // this block was written for), nothing changes: the retry still fires right here, synchronously.
+  // Deliberately gated on `willAttemptSyncPull` (a snapshot taken by init() BEFORE either this
+  // function or syncPullAndMerge() started running — see init()'s own comment) rather than a
+  // fresh `loadFamilyCode()` call made right here: this function's OWN tg_family backfill loop
+  // just above can resurrect tg_family from a stale IndexedDB mirror into localStorage moments
+  // before this line runs, which would make a live re-check here see a family code that
+  // DIDN'T exist yet when syncPullAndMerge() made its own (separate, synchronous, already-
+  // final-by-now) decision of whether to attempt a real pull — re-introducing a narrower version
+  // of the exact same race this fix closes, just shifted one level down. The snapshot guarantees
+  // this function's decision always matches what syncPullAndMerge() actually decided.
+  if (!profileIds.length && !willAttemptSyncPull){
     const retried = migrateLegacyProfile();
-    if (retried.profiles.length) profileIds.push(...retried.profiles.map(p => p.id));
+    if (retried.profiles.length){
+      profileIds.push(...retried.profiles.map(p => p.id));
+      // QA pass 5 fix (2026-09-05): this retry used to leave `profilesChanged` at its earlier
+      // (false) value even when it just created a brand-new profile from recovered legacy data
+      // — the ONLY signal init()'s own reconcileStorage().then() callback uses to decide whether
+      // to re-render past the blank #startScreen bootstrap form into the real chooser/picker.
+      // Reproduced live: a device that recovers a profile via exactly this path stayed stuck on
+      // the blank "create a profile" form (state.pendingNewProfile still true, no re-render
+      // triggered) even though tg_profiles/tg_sessions etc. were correctly populated in storage
+      // — self-healing only on a SECOND reload (init()'s own synchronous top-of-function check
+      // finds the now-nonempty tg_profiles directly). Worse than cosmetic: a parent seeing what
+      // looks like a first-run form could fill it in and tap Play, minting a genuine SECOND
+      // profile alongside the just-recovered one. Fixed by flipping profilesChanged here too, so
+      // the existing `if (profilesChanged && stillOnEntryScreen())` block below does its normal
+      // job on the very first load.
+      profilesChanged = true;
+    }
   }
 
   // tg_visits: merged via mergeVisits (max count / min first) — see its own comment. Stays
@@ -7755,11 +7810,32 @@ function stillOnEntryScreen(){
   if (hashInfo.code && hashInfo.code !== storedCode) saveFamilyCode(hashInfo.code);
   else if (!hashInfo.code && storedCode) location.hash = `f=${storedCode}`;
 
+  // QA pass 5 fix (2026-09-05, found by a THIRD adversarial-review pass on the two fixes below —
+  // this is the same duplicate-profile fork bug, reached through a path neither of those two
+  // fixes touched): computed here, right after the hash/stored-code precedence above resolves
+  // (loadFamilyCode() below must see whatever saveFamilyCode() on the previous line just wrote),
+  // and reused by every gate this fix needs — see reconcileStorage()'s and syncPullAndMerge()'s
+  // own comments for the other two uses.
+  const willAttemptSyncPull = syncEnabled() && !!loadFamilyCode();
+
   // ---- v11: one-time, synchronous, localStorage-only profile migration — see
   // migrateLegacyProfile()'s own comment for why this runs before the async IDB-aware pass
   // below, matching this file's pre-existing "fast synchronous baseline, then async correction"
   // pattern (previously used for tg_profile/tg_muted alone).
-  migrateLegacyProfile();
+  // QA pass 5 fix (2026-09-05): this call used to be unconditional — on ANY device with zero
+  // tg_profiles and a legacy tg_profile sitting in localStorage (the ordinary, ungated, first-
+  // ever-v11-load case this was originally written for), it ran synchronously before sync ever
+  // got a chance to run at all. That's correct and unchanged when no family code is configured.
+  // But on a device that ALSO has a family sync code already set (e.g. a second household device
+  // that never ran v11 before, given a bookmark/link to a family whose OTHER device already
+  // migrated and synced this same child) it minted a brand-new profile id from the stale local
+  // legacy data before syncPullAndMerge() ever got to pull the REAL, already-migrated profile —
+  // the identical duplicate-fork bug the rest of this fix targets, just reached synchronously at
+  // the very top of init() instead of via reconcileStorage()'s own retry. Gated the same way:
+  // skip here, defer to sync, and let syncPullAndMerge()'s own deferred last-resort retry (see
+  // its callback below) recover from the legacy key if — and only if — sync genuinely found
+  // nothing after its confirmation retries.
+  if (!willAttemptSyncPull) migrateLegacyProfile();
   let profilesData = loadProfiles();
   state.activeProfileId = (hashInfo.profileId && profilesData.profiles.some(p => p.id === hashInfo.profileId))
     ? hashInfo.profileId
@@ -7807,7 +7883,13 @@ function stillOnEntryScreen(){
   // reconciles tg_profiles + every per-profile key now (see reconcileStorage()'s own updated
   // comment) — profilesChanged drives the same "don't clobber a parent who moved on" guard via
   // stillOnEntryScreen() as the sync-pull callback below.
-  reconcileStorage().then(({ sessionsChanged, profilesChanged }) => {
+  // QA pass 5 fix (2026-09-05): `willAttemptSyncPull` — computed once, near the top of init()
+  // (see its own comment there for the full reasoning) — is reused here unchanged. Passed into
+  // reconcileStorage() so its own legacy-migration retry can defer to an in-flight sync pull
+  // without re-reading a family code that its own tg_family backfill loop might have JUST
+  // resurrected from a stale IndexedDB mirror — see reconcileStorage()'s own comment on that
+  // block for the full race this prevents.
+  reconcileStorage(willAttemptSyncPull).then(({ sessionsChanged, profilesChanged }) => {
     stampVisit();
     if (sessionsChanged) refreshProgressBtn();
     if (profilesChanged && stillOnEntryScreen()){
@@ -7826,10 +7908,48 @@ function stillOnEntryScreen(){
   // device that just booted with ZERO local profiles but a valid #f=code recovers everything
   // here, moments after first paint, then (if the parent hasn't already navigated away) lands
   // exactly where the URL asked — a specific child via #p=, or the chooser otherwise.
-  syncPullAndMerge().then(() => {
+  syncPullAndMerge().then(async () => { // QA pass 5: async — see the deferred-retry confirmation pull below, which awaits
     refreshProgressBtn(); renderFamilyCard(); renderStorageDiagnostic();
+    // QA pass 5 fix (2026-09-05): mirror-image half of reconcileStorage()'s own fix above — see
+    // that block's comment for the full race this closes. reconcileStorage() deliberately did
+    // NOT retry migrateLegacyProfile() while a sync pull was in flight (to avoid racing it and
+    // forking a duplicate profile from a stale legacy tg_profile mirror); this is that deferred
+    // retry, now safe to attempt because the network pull above has already had its one chance
+    // to supply the real, canonical profile list. Only fires as a genuine last resort — if sync
+    // already recovered anything (the expected outcome whenever the family code's server copy
+    // has data), d.profiles.length is already nonzero and this is a no-op.
+    let d = loadProfiles();
+    if (!d.profiles.length && willAttemptSyncPull){
+      // Adversarial-review fix (2026-09-05, then hardened in a second review pass): a first GET
+      // returning 404 does NOT reliably mean "this family code genuinely has nothing yet" — the
+      // worker's own KV store is documented as eventually consistent (see sync-worker/src/
+      // index.js's rate-limit comment for the same caveat applied elsewhere), and Cloudflare's
+      // own docs describe KV propagation as taking up to roughly a minute in the worst case, not
+      // milliseconds. Falling straight through to migrateLegacyProfile() on a false-404 would
+      // reproduce the exact duplicate-profile fork this whole fix exists to prevent, just via a
+      // KV-timing trigger instead of a same-load race. A bounded couple of confirmation pulls
+      // (each a genuinely fresh GET — see syncPullAndMerge()'s own `cache: "no-store"` fix) meaningfully
+      // improves the odds for the common case (a same-edge/same-region propagation lag, typically
+      // sub-second to a few seconds) without meaningfully harming the ALSO-common, perfectly
+      // legitimate case this branch mostly exists to serve (a brand-new family code with nothing
+      // to recover) — this whole path doesn't block first paint, so a few extra seconds of delay
+      // before falling back is an acceptable trade. It is explicitly NOT a guarantee: a
+      // cross-region propagation lag near the documented worst case would still exceed this
+      // budget and fall through to a fork, same as the pre-existing, deliberately-not-fully-closed
+      // two-tab legacy-migration race documented elsewhere in this file (NOTES.md v11) — judged
+      // not worth blocking first paint for tens of seconds to fully close, for the same reason.
+      for (const delayMs of [1000, 3000]){
+        await new Promise(r => setTimeout(r, delayMs));
+        await syncPullAndMerge();
+        d = loadProfiles();
+        if (d.profiles.length) break;
+      }
+    }
+    if (!d.profiles.length){
+      const retried = migrateLegacyProfile();
+      if (retried.profiles.length) d = retried;
+    }
     if (!stillOnEntryScreen()) return;
-    const d = loadProfiles();
     if (!state.activeProfileId && d.activeProfileId) state.activeProfileId = d.activeProfileId;
     refreshSwitchChildLink();
     if (hashInfo.profileId && d.profiles.some(p => p.id === hashInfo.profileId)) selectProfile(hashInfo.profileId, { silent: true }); // adversarial-review fix (2026-08-19): async sync-pull auto-select, no user gesture — see selectProfile()'s own comment
