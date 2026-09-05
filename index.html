@@ -3387,7 +3387,25 @@ function priorFor(domainKey, age){
       // clamp to the grid range so a corrupted/hand-edited backup can't seed an out-of-range
       // mu (which would underflow normalPostFor's densities to all-zero)
       const mu = Math.min(THETA_MAX, Math.max(THETA_MIN, d.theta));
-      return { mu, sigma: 6 };
+      // QA pass 1 fix: a domain finalized via an early bail (Finish/map-out with n as low as 1,
+      // or the 3-consecutive-shrug graceful end at n=3 — both below MIN_ITEMS=4, see
+      // finalizeDomain()'s only gate being ds.n===0) writes a real theta/sd pair to this same
+      // session shape as a normal converged run, and this loop used to trust it exactly as much
+      // (flat sigma=6) as a normal completed session — so a noisy 1-item theta got treated as a
+      // high-confidence anchor for the next session's adaptive targeting. Scoped deliberately
+      // narrow to n < MIN_ITEMS (not "any high sd"): a session that ran the full MAX_ITEMS/
+      // PRESENT_CAP budget without converging below STOP_SD also exits with sd > 3, but it has
+      // real multi-item evidence behind mu already — widening sigma for THAT case is untested
+      // and risks reopening the "wide prior + a few lucky guesses = wild jump" failure mode the
+      // v5 sigma-sweep found for fresh priors (see this function's own sigma=10 comment above).
+      // Only the specific under-powered case (n<MIN_ITEMS) gets widened, using the actual
+      // measured sd (already computed in finalizeDomain via sdOf() and carried through
+      // saveSession) as the width — falling back to the old flat 6 if sd/n is missing
+      // (pre-existing session saved before those fields existed) or if sd happens to be small.
+      const n = typeof d.n === "number" ? d.n : Infinity;
+      const measuredSd = (typeof d.sd === "number" && isFinite(d.sd)) ? d.sd : 0;
+      const sigma = (n < MIN_ITEMS) ? Math.max(6, measuredSd) : 6;
+      return { mu, sigma };
     }
   }
   // v5 (Issue 1 fix): 8 -> 10. A fresh/no-history prior centered on chronological age is
