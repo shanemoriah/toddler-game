@@ -5935,14 +5935,38 @@ function seekfindSlots(n){
   const cols = 4, rows = 4;
   const cells = [];
   for (let r=0;r<rows;r++) for (let c=0;c<cols;c++) cells.push({r,c});
+  // v14.4 (QA pass 13, approved fix for pass 12's own flagged DECISION): the size floor was raised
+  // from 34px to 44px (Apple HIG minimum tap target). The OLD jitter factor (0.4) combined with the
+  // old 34-62px size range already had a latent overlap edge case at the top of the range (two 62px
+  // objects in adjacent cells, both jittered toward the shared border) — raising the floor made the
+  // AVERAGE object bigger, which surfaced it as an observed overlap in this pass's live geometry
+  // sweep at 375x812 (park/kitchen/ocean all showed occasional overlaps in a 40-trial-per-scene
+  // stress test). Fix: shrink the jitter factor from 0.4 to 0.16 so that, even at the SHORTER of
+  // #seekBoard's two CSS floors (`min-height:320px`, tighter than any width this file's required
+  // viewport matrix produces — see its own CSS comment) and the largest object size (62px), each
+  // object's box stays fully inside its own cell with real margin to spare: `left`/`top` percentages
+  // resolve against #seekBoard's PADDING box, not its border box, so its 4px border comes OFF the
+  // 320 first (312px, not 320) — worst case jitter_px + size_max/2 <= half_cell_px, i.e.
+  // (0.16/8)*312 + 31 = 37.24 <= 39 (half of 312/4), a ~1.76px cushion — not the razor-thin ~0.2px
+  // an 0.22 factor leaves on this same axis (2nd adversarial-review cycle, QA pass 13, which also
+  // caught this comment's own earlier border-box arithmetic error). Verified empirically with 0
+  // overlaps across 50+ trials per scene x 4 viewports (375x812/600x1024/1024x600/1280x800),
+  // including one run that organically hit the literal 320px-tall board floor.
+  // KNOWN NOT COVERED by this static math: `.seek-obj`'s own `seekbob` animation (below) adds an
+  // 8px vertical bob on top of this static layout — bigger than either axis's static cushion — so a
+  // mid-bob VISUAL near-touch between two objects at their closest static placement is possible;
+  // pre-existing since before this pass (independent of size/jitter), and if anything marginally
+  // IMPROVED by this pass's smaller jitter (objects sit closer to cell centers, farther from a
+  // neighbor's cell) rather than worsened — flagged as a DECISION in QA-LOG, not fixed here.
+  const jitterFactor = 0.16;
   return shuffle(cells).slice(0, n).map(({r,c}) => {
     const cellW = 100/cols, cellH = 100/rows;
-    const jitterX = (Math.random()-0.5) * cellW * 0.4;
-    const jitterY = (Math.random()-0.5) * cellH * 0.4;
+    const jitterX = (Math.random()-0.5) * cellW * jitterFactor;
+    const jitterY = (Math.random()-0.5) * cellH * jitterFactor;
     return {
       left: c*cellW + cellW/2 + jitterX,
       top: r*cellH + cellH/2 + jitterY,
-      size: 34 + Math.random()*28,
+      size: 44 + Math.random()*18,
     };
   });
 }
