@@ -64,6 +64,18 @@ const sandbox = {
   },
   localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
   navigator: { userAgent: 'node' },
+  // Bug fix (QA pass 4): v14.1's global crash catcher added two bare top-level
+  // `window.addEventListener("error"/"unhandledrejection", ...)` calls (index.html, right before
+  // the `/* ---------- init ---------- */` marker this dumper strips FROM) — same "runs during
+  // mere top-level evaluation, not inside init()'s IIFE" situation as v11's setInterval fix right
+  // below. The stub sandbox had no addEventListener at all, so `window.addEventListener is not a
+  // function` made the WHOLE script fail to evaluate (collectAllSayStrings() never even got
+  // defined) — silently breaking gen_audio.sh (`set -euo pipefail` + this dumper piped straight
+  // into it) for every deploy since v14.1, undetected because nobody had needed to add a new
+  // speakable string (and thus rerun the regen pipeline) until this pass. No-op is correct here:
+  // this dumper only cares about collectAllSayStrings()'s pure return value, never about an
+  // `error`/`unhandledrejection` event actually firing during the sandboxed evaluation.
+  addEventListener() {}, removeEventListener() {},
   Math, JSON, Array, Object, Set, Map, String, Number, Date, RegExp, Promise,
   // Bug fix: v11's family-sync code has a bare top-level `setInterval(...)` call (polling
   // renderSyncStatus) — not inside init()'s IIFE, so it executes during mere top-level

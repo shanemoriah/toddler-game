@@ -2687,6 +2687,13 @@ function collectAllSayStrings(){
   // never be pre-bundled, so startGame() now speaks this fixed line instead
   // (the on-screen flow is unaffected; only the SPOKEN greeting changed).
   add("Hi friend! Let's play!");
+  // QA pass 4: testVoice() (start-screen "Test voice" diagnostic) calls speak() with this fixed
+  // line on RAW-utterance success (index.html ~4585) — never reachable on a Fire tablet (the
+  // function returns early at its own top when `speechSynthesis` is absent, before ever calling
+  // speak()), so this was never a live Fire-tablet miss. Added anyway for completeness/enumerator
+  // correctness — "every string the game can ever hand to speak()" per this function's own header
+  // comment, and free to bundle since it's a single fixed string.
+  add("And this is the game's own voice path.");
   MASCOT_LINES.forEach(add); // v9.3: tapMascot() encouragement lines — see its own comment
   add(LOCKED_DOMAIN_LINE); // v9.5: locked picker tile tap — see lockedTileTap()'s own comment
   // v10: Mix-It-Up arcade — intro/interlude/streak-celebration lines (defined further down,
@@ -3019,6 +3026,23 @@ function playAudioClip(audio, cb, revokeUrl){
     }
   };
   return audio.play().then(() => true).catch(() => {
+    // QA pass 4 fix: Chrome rejects a still-pending play() promise with "interrupted by a
+    // call to pause()" when something ELSE pauses this same audio element before playback
+    // actually began — which is exactly what happens when a LATER speak()/sayCue() call's own
+    // stopClip() supersedes this one while its play() is still settling (confirmed live: two
+    // 🔊 taps ~150ms apart is enough — Chrome's play() promise commonly hasn't resolved yet
+    // when the second tap's stopClip() lands). In that case `finish()` above has ALREADY run
+    // (done===true) and already fired `cb()` correctly — this rejection is just the FIRST
+    // call's own play() promise catching up late, not a real playback failure. The pre-fix
+    // code always reported `started=false` here regardless, which made playBundledText()'s
+    // caller (speak()'s bundled tier) ALSO invoke onMiss (a redundant speakTTS() fallback for
+    // the SAME text) on top of the cb that finish() already delivered — observed live as a
+    // spurious extra `speechSynthesis.speak()` of the just-interrupted prompt's text queued
+    // up after the interrupting clip had already taken over. Only report a genuine miss
+    // (`false`) when finish() never ran — i.e. audio.play() itself actually failed on its own
+    // (autoplay policy block, corrupt/missing file, never-superseded) — the original
+    // never-started cleanup path below is unchanged for that case.
+    if (done) return true;
     // never actually started — neutralize every handler so a later stray
     // event on this same <audio> can't fire finish()/cb() a second time
     // after the caller has already moved on to its own next fallback tier.
@@ -5322,12 +5346,30 @@ function backToMap(){
   // returns to the picker. Setting sessionMode to "single" converts a "Play
   // everything!" run into picker-mode going forward, per the spec. Works safely
   // mid-interlude and mid-seek&find scene too: finalizeDomain only touches
-  // ds.grid/post/log (ignores ds.sf entirely), and any stale in-flight speak()
-  // callback that fires renderItem() afterward is already guarded by the existing
-  // `if (!ds) return` check (showPicker nulls state.domain).
+  // ds.grid/post/log (ignores ds.sf entirely).
   if (state.domain) finalizeDomain(state.domain);
   cancelShrugTimer(); // v12: map-out cancels any running shrug timer
   state.sessionMode = "single";
+  // QA pass 4 fix: null state.domain/state.currentItem HERE, before ttsCancel()/stopClip() —
+  // NOT after, via showPicker() alone (the old order). stopClip() can synchronously invoke
+  // _currentClipFinish(), which fires whatever cb was registered for the in-flight clip; during
+  // the domain-intro narration that cb is beginDomain()'s own `renderItem` (see
+  // `speak(..., renderItem)` above), which only bails via `if (!ds) return` when state.domain is
+  // ALREADY null. The old order called showPicker() (which nulls state.domain/currentItem) only
+  // AFTER stopClip() had already fired that stale renderItem() synchronously — so renderItem()
+  // saw the OLD domain still set, happily rendered a brand-new item, and started playing ITS
+  // audio prompt via its own fresh playAudioClip() call, which nothing then stopped. Net effect,
+  // reproduced live: tapping map-out during "Now let's play with X!" left an unstoppable phantom
+  // item prompt audibly playing OVER the picker screen (confirmed via isAnyAudioPlaying()===true
+  // and a live Audio element mid-playback right after backToMap() returned). Nulling first makes
+  // renderItem()'s existing `if (!ds) return` guard actually fire in time, exactly the way
+  // endGame() (Finish) already does it correctly — see its own `state.domain = null` comment,
+  // same "guard against a stale ...->speak() callback firing renderItem() late" reasoning, just
+  // never applied to this sibling exit path until now. exitArcadeSession() already nulls
+  // sess.currentItem before its own stopClip() call for the same reason — this brings scored
+  // map-out in line with both of its siblings instead of being the one exception.
+  state.domain = null;
+  state.currentItem = null;
   ttsCancel(); stopClip(); // v8: map-out is a sanctioned interrupt path — stop any playing recorded clip too
   showPicker();
 }

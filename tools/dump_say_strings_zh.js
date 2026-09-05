@@ -53,6 +53,10 @@ const sandbox = {
   },
   localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
   navigator: { userAgent: 'node' },
+  // Bug fix (QA pass 4) — see dump_say_strings.js's identical fix/comment: v14.1's global crash
+  // catcher's bare top-level `window.addEventListener(...)` calls need a stub or the whole
+  // sandboxed evaluation throws before collectMandarinSayStrings() is even defined.
+  addEventListener() {}, removeEventListener() {},
   Math, JSON, Array, Object, Set, Map, String, Number, Date, RegExp, Promise,
   // Real (unref'd) timers — see dump_say_strings.js's identical fix for v11's top-level setInterval.
   setInterval: (...a) => { const h = setInterval(...a); h.unref && h.unref(); return h; },
