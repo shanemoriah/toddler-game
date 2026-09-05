@@ -1420,11 +1420,20 @@ function syncEnabled(){ return !!syncUrl(); }
    handlers directly (bypassing attachTap) remains a valid, unchanged way to
    exercise game logic without simulating real pointer events.
    ===================================================================== */
-function attachTap(el, handler){
-  let active = null; // { id, x, y, type } of the one pointer currently tracked, or null
+function attachTap(el, handler, snapshotFn){
+  // v14.2 (QA pass 9): optional 3rd param — a function evaluated at POINTERDOWN time (gesture
+  // start), whose return value is threaded through to `handler` as a 5th arg. Exists specifically
+  // for scored seek&find's `renderSeekfindScene`, whose object listeners are attached ONCE per
+  // scene and then persist across several rounds/targets (see renderSeekfindRound's own comment)
+  // — a plain render-time closure can't capture "the item current when THIS gesture started"
+  // there the way tapTile/tapBodyPart's per-round-recreated listeners already can (see tapTile's
+  // own forItem comment). Every pre-existing 2-arg call site is unaffected: snapshotFn is
+  // undefined, `a.snap` is undefined, and the handler either ignores the extra arg or never
+  // declared a 5th parameter in the first place.
+  let active = null; // { id, x, y, type, snap } of the one pointer currently tracked, or null
   el.addEventListener("pointerdown", (ev) => {
     if (active) return; // a pointer is already down — ignore every additional simultaneous one
-    active = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, type: ev.pointerType };
+    active = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, type: ev.pointerType, snap: snapshotFn ? snapshotFn() : undefined };
     try { el.setPointerCapture(ev.pointerId); } catch(e){} // best-effort — see comment above
   });
   el.addEventListener("pointerup", (ev) => {
@@ -1432,7 +1441,7 @@ function attachTap(el, handler){
     const a = active; active = null;
     try { el.releasePointerCapture(ev.pointerId); } catch(e){}
     const moved = Math.hypot(ev.clientX - a.x, ev.clientY - a.y);
-    if (moved < 12) handler(a.x, a.y, a.type, ev);
+    if (moved < 12) handler(a.x, a.y, a.type, ev, a.snap);
   });
   el.addEventListener("pointercancel", (ev) => {
     if (!active || ev.pointerId !== active.id) return;
@@ -1519,7 +1528,14 @@ const state = {
 
 const THETA_MIN = 8, THETA_MAX = 100; // v4: extended from 75 -> 100 (numbers/feelings ladders reach b~85)
 const THETA_GRID = Array.from({ length: THETA_MAX - THETA_MIN + 1 }, (_, i) => THETA_MIN + i);
-const MIN_ITEMS = 4, MAX_ITEMS = 10, STOP_SD = 3; // per-domain stop rule (v5: 8->10, see mod 1d)
+// v14.2 (QA pass 9): STOP_SD 3->4.3 — pass 8's 28,800-run dataset measured the old SD<=3 stop
+// firing before MAX_ITEMS in only 0.03% of runs (effectively dead code, every session ground to
+// the full item budget regardless of how quickly the posterior actually converged). A dedicated
+// 4,200-run sweep found SD<=4.3 gives ~39% early-stop with no measured bias/RMSE cost (today's
+// full-10-item sessions already routinely finish with a final SD of 4-8mo anyway — this just lets
+// the app stop once it's reached that same quality instead of always grinding to item 10). See
+// QA-LOG.md pass 8 (d) for the full threshold sweep and pass 9 for the confirmation re-run.
+const MIN_ITEMS = 4, MAX_ITEMS = 10, STOP_SD = 4.3; // per-domain stop rule (v5: 8->10, see mod 1d; v14.2: 3->4.3)
 const PRESENT_CAP = 14; // v5: 12->14, so accelerated runs have room to reach the wall
 
 /* =====================================================================
@@ -1868,13 +1884,19 @@ function resolveBodyTap(viewX, viewY){
     }
   return best;
 }
-function renderBodyFigure(tapHandler){
+function renderBodyFigure(tapHandler, forItem){
   // v10.1: optional param — defaults to the scored-mode tapBodyPart, but Everything Mix arcade
   // passes tapArcadeBodyPart so this SAME pure figure-builder can be reused for an arcade round
   // without wiring taps into the scored engine (which reads/writes state.domain). Scored call
   // sites are unaffected: they don't pass an arg, so this defaults exactly to prior behavior —
   // same pattern renderSeekfindScene's own optional 2nd param established in v10.
-  tapHandler = tapHandler || tapBodyPart;
+  // v14.2 (QA pass 9): `forItem` — only used by the DEFAULT handler branch below (comeback and
+  // arcade both supply their own handler already closed over their own item, so this 2nd param is
+  // simply unused/undefined for those call sites). renderBodyRound calls this fresh every round
+  // (unlike seekfind's persisting scene), so a plain render-time closure over `forItem` already
+  // captures "the item current when this listener was created" correctly — see tapBodyPart's own
+  // comment for why that's equivalent to a pointerdown-time snapshot here.
+  tapHandler = tapHandler || ((part, el) => tapBodyPart(part, el, forItem));
   const wrap = $("seekBoard");
   const hits = Object.entries(BODY_REGIONS).map(([key,r]) => r.cx.map(cx => {
     const left = (cx - BODY_VB.minX) / BODY_VB.w * 100, top = (r.visCy ?? r.cy) / BODY_VB.h * 100, wpct = r.r*2 / BODY_VB.w * 100; // visCy: ring sits on the drawn feature even where hit cy was nudged (v13.2)
@@ -1912,7 +1934,6 @@ function renderBodyRound(dom, ds){
   const d = pickAmongTopN(pool, target, x => x.age, 3, { avoid, getLabel: c => c.label });
   ds.used.add(d.label);
   ds.presented = (ds.presented || 0) + 1;
-  renderBodyFigure();
   // c reflects how many hit-regions actually count as correct for this target — bilateral
   // parts (2 taps count) get double the guess rate of singular parts (1 tap counts), out of
   // 18 total body-part concepts on the figure.
@@ -1921,14 +1942,23 @@ function renderBodyRound(dom, ds){
     prompt: `Tap the ${d.label}!`, say: `Can you find the ${d.label}? Tap it!`,
     explain: BODY_EXPLAIN[d.label],
     body: true };
+  // v14.2 (QA pass 9): `it` built BEFORE renderBodyFigure() (was after) specifically so it can be
+  // threaded through as forItem — see renderBodyFigure's and tapBodyPart's own comments. Purely a
+  // reordering of pre-existing statements; no behavior change to the figure/DOM it builds.
+  renderBodyFigure(undefined, it);
   state.currentItem = it; state.locked = false; state.firstTry = true;
   $("promptText").textContent = it.prompt;
   $("progressBar").style.width = progressPct(ds) + "%";
   sayItem(it); // v8: no-op fallback to speak() — mybody items never set cueKey
   armShrugTimer(); // v12: see its own comment
 }
-function tapBodyPart(part, el){
-  if (state.locked || !state.domain) return;
+function tapBodyPart(part, el, forItem){
+  // v14.2 (QA pass 9): `forItem` — the item this figure's tap listener was built for, captured by
+  // renderBodyRound() at render time (renderBodyFigure() is called fresh every round, so this is
+  // a plain closure capture, equivalent to tapTile's own forItem — see its comment for the full
+  // race this closes: an old, already-removed figure's captured-but-not-yet-released pointer
+  // landing after state.locked has been reset false for a NEW item).
+  if (state.locked || !state.domain || state.currentItem !== forItem) return;
   const it = state.currentItem;
   if (!it || !it.body) return;
   const highlightAll = (cls) => { $("seekBoard").querySelectorAll(`.body-hit[data-part="${it.label}"]`).forEach(e => e.classList.add(cls)); };
@@ -3525,7 +3555,7 @@ function priorFor(domainKey, age){
       // (flat sigma=6) as a normal completed session — so a noisy 1-item theta got treated as a
       // high-confidence anchor for the next session's adaptive targeting. Scoped deliberately
       // narrow to n < MIN_ITEMS (not "any high sd"): a session that ran the full MAX_ITEMS/
-      // PRESENT_CAP budget without converging below STOP_SD also exits with sd > 3, but it has
+      // PRESENT_CAP budget without converging below STOP_SD also exits with sd > STOP_SD, but it has
       // real multi-item evidence behind mu already — widening sigma for THAT case is untested
       // and risks reopening the "wide prior + a few lucky guesses = wild jump" failure mode the
       // v5 sigma-sweep found for fresh priors (see this function's own sigma=10 comment above).
@@ -5569,8 +5599,15 @@ function renderComebackItem(){
     const sceneDef = SEEKFIND_SCENES.find(s => s.words.includes(it.label));
     const scene = { def: sceneDef, slots: seekfindSlots(sceneDef.words.length) };
     $("board").style.display = "none"; $("seekBoard").style.display = "block";
-    renderSeekfindScene(scene, (word, el) => {
-      if (ds.comebackLocked) return; ds.comebackLocked = true;
+    // v14.2 (QA pass 9): `ds.comebackLocked !== true` alone isn't enough — it's reset to false by
+    // the NEXT round's own renderComebackItem() call, so a stale pointer captured on THIS round's
+    // (now removed) object, released late, would otherwise sail past that check during round 2's
+    // window and call resolveComeback() with round 1's stale `it`/`correct`, shifting round 2's
+    // entry off ds.comebackPending using round 1's data. `state.currentItem !== it` catches this
+    // exactly like tapTile/tapSeekObj's own forItem checks — state.currentItem is set to THIS
+    // round's `it` once at the top of this function and only changes when the NEXT round renders.
+    renderSeekfindScene(scene, (word, el, forItem) => {
+      if (ds.comebackLocked || state.currentItem !== it) return; ds.comebackLocked = true;
       const correct = word === it.label;
       const targetEl = $("seekBoard").querySelector(`.seek-obj[data-word="${it.label}"]`);
       resolveComeback(it, correct, () => { if (targetEl) targetEl.classList.add(correct ? "correct" : "reveal", "found"); });
@@ -5578,7 +5615,7 @@ function renderComebackItem(){
   } else if (entry.kind === "body"){
     $("board").style.display = "none"; $("seekBoard").style.display = "block";
     renderBodyFigure((part, el) => {
-      if (ds.comebackLocked) return; ds.comebackLocked = true;
+      if (ds.comebackLocked || state.currentItem !== it) return; ds.comebackLocked = true; // v14.2 (QA pass 9): see the seek branch's comment above
       const correct = part === it.label;
       resolveComeback(it, correct, () => {
         $("seekBoard").querySelectorAll(`.body-hit[data-part="${it.label}"]`).forEach(e => e.classList.add(correct ? "correct" : "reveal"));
@@ -5598,7 +5635,7 @@ function renderComebackItem(){
       tile.className = "tile";
       tile.innerHTML = it.tiles[origIdx];
       attachTap(tile, () => {
-        if (ds.comebackLocked) return; ds.comebackLocked = true;
+        if (ds.comebackLocked || state.currentItem !== it) return; ds.comebackLocked = true; // v14.2 (QA pass 9): see the seek branch's comment above
         const correct = i === newCorrect;
         const tiles = [...board.children];
         resolveComeback(it, correct, () => {
@@ -5788,7 +5825,7 @@ function renderItem(){
     const tile = document.createElement("div");
     tile.className = "tile";
     tile.innerHTML = html;
-    attachTap(tile, () => tapTile(i, tile)); // v9.4: child-tappable
+    attachTap(tile, () => tapTile(i, tile, it)); // v9.4: child-tappable; v14.2: `it` threaded through as forItem — see tapTile's own comment
     board.appendChild(tile);
   });
   if (dom.key === "patterns"){
@@ -5845,7 +5882,18 @@ function renderSeekfindScene(scene, tapHandler){
     el.style.fontSize = slot.size + "px";
     el.style.animationDelay = (Math.random()*2).toFixed(2) + "s";
     el.textContent = info ? info.emoji : "❓";
-    attachTap(el, () => tapHandler(w, el)); // v9.4: child-tappable; pointer capture in attachTap matters
+    // v14.2 (QA pass 9): unlike tile-grid/mybody (a fresh listener per round), a scored seek&find
+    // SCENE's object listeners are attached ONCE and persist across up to ROUNDS_PER_SCENE rounds
+    // (see renderSeekfindRound's own comment) — a plain render-time closure can't capture "the
+    // item current when this gesture started" here, since the target item for a later round
+    // doesn't exist yet when these listeners are created. Passing a snapshotFn to attachTap (see
+    // its own comment) captures state.currentItem at POINTERDOWN time instead, which tapSeekObj
+    // then compares against state.currentItem at resolution time — closing the same
+    // stale-pointer-capture-across-an-item-swap race tapTile closes via simple closure capture.
+    // Arcade's own seekfind never needed this: renderArcadeSeekfindBoard rebuilds a fresh scene +
+    // fresh listeners every single turn, so its plain `it`-closure (passed to tapArcadeSeekObj)
+    // is already gesture-start-accurate.
+    attachTap(el, (x, y, type, ev, forItem) => tapHandler(w, el, forItem), () => state.currentItem); // v9.4: child-tappable; pointer capture in attachTap matters
     // here specifically since these objects bob via the seekbob animation — see attachTap's comment.
     wrap.appendChild(el);
   });
@@ -5904,14 +5952,22 @@ function renderSeekfindRound(dom, ds){
   sayItem(it); // v8: no-op fallback to speak() — seekfind items never set cueKey
   armShrugTimer(); // v12: see its own comment
 }
-function tapSeekObj(word, el){
+function tapSeekObj(word, el, forItem){
   // v6 adversarial-review fix: mirrors the domain-nulled-mid-flight guard every other tap
   // handler here also checks — without it, a click that lands after backToMap()/endGame() has
   // nulled state.domain (the tile itself can outlive that: switching screens only toggles a CSS
   // class, it doesn't clear #board/#seekBoard, so a click dispatched programmatically or via a
   // late-arriving event on an old, now-hidden element was still reaching recordResult() and
   // crashing on `ds.log.push` with ds===null.
-  if (state.locked || !state.domain) return;
+  // v14.2 (QA pass 9): `forItem` — state.currentItem as of this gesture's POINTERDOWN, see
+  // renderSeekfindScene's snapshotFn comment — closes the stale-tap-across-an-item-swap race for
+  // scored seek&find specifically (its object listeners persist across several rounds, unlike
+  // tapTile/tapBodyPart's per-round-recreated ones). Without this, a stale release on some OTHER
+  // still-live object from an earlier round (while the CURRENT item has already advanced) would
+  // fall into the wrong-tap branch below using the CURRENT item's state.firstTry — silently
+  // consuming its first try, or worse, scoring a genuine second-miss against an item the child
+  // never actually tapped.
+  if (state.locked || !state.domain || state.currentItem !== forItem) return;
   const it = state.currentItem;
   if (!it || !it.seekfind) return;
   if (word === it.label){
@@ -5967,12 +6023,29 @@ function repeatPrompt(){
   setTimeout(() => { if (holder.currentItem === it) sayItem(it); }, 150);
 }
 
-function tapTile(i, tileEl){
+function tapTile(i, tileEl, forItem){
   // v6 adversarial-review fix: same stale-click guard as tapSeekObj above — tapTile previously
   // checked ONLY state.locked, unlike its siblings which also check !state.currentItem/
   // !state.domain. A click reaching this handler after navigation nulled state.domain (or
   // state.currentItem) crashed inside recordResult's `ds.log.push`.
-  if (state.locked || !state.currentItem || !state.domain) return;
+  // v14.2 (QA pass 9) adversarial-review fix: `forItem` — the item this specific tile's tap
+  // listener was built for, captured by renderItem() at render time and threaded through the
+  // attachTap() closure — closes the same stale-pointer-capture-across-an-async-item-swap race
+  // pass 2 fixed for arcade (tapArcadeTile's own `forItem`, see its comment for the full
+  // mechanism). Scored play has no autonomous timer like arcade's 30s auto-advance, but every one
+  // of the FOCUS's own listed swap sources (the correct-answer 1300ms setTimeout->renderItem(),
+  // the wrong-twice explanation chain's speakExplain callback->renderItem(), tapShrug's own
+  // full-reveal->renderItem() chain, and a comeback round transitioning via renderComebackItem())
+  // resets `state.locked` to false for the NEW item — so a captured-but-not-yet-released pointer
+  // from an OLD, already-removed tile (e.g. a second finger held down on a tile that lost, while
+  // a DIFFERENT tile resolved the round) can reach this handler with `state.locked===false` again
+  // and no other guard to stop it, using the OLD tile's positional index against the NEW item's
+  // `correct` index/DOM — a false correct/wrong score with no real tap on the current item.
+  // Proven live (direct handler calls, not simulated pointer events): rendering item A, capturing
+  // its tile index/element, advancing to item B via a real renderItem() call, then calling
+  // tapTile(staleI, staleTileEl, itemA) reliably no-ops with this guard in place (score/streak/
+  // firstTry/ds.n all unchanged) and would otherwise have scored B using A's stale index.
+  if (state.locked || !state.currentItem || !state.domain || state.currentItem !== forItem) return;
   const it = state.currentItem;
   const tiles = [...$("board").children];
   if (i === it.correct){
@@ -6336,10 +6409,31 @@ function endGame(){
 }
 
 /* ---------- session history (localStorage "tg_sessions:<profileId>", v11) ---------- */
+// v14.2 (QA pass 9): every consumer of a sessions array (priorFor, renderDomainCharts,
+// renderSessionList, the vocab-checklist chart, buildLocalSyncBlob, etc.) already guards
+// individual FIELDS defensively (`s.domains && ...`, `typeof d.theta === "number"`) on the
+// assumption that each element `s` is at least a real object — none of them expected a literal
+// `null`/non-object ELEMENT inside the array itself. Found live: a malformed/corrupted
+// tg_sessions entry (e.g. a botched hand-edit, a partially-written import, or a future bug
+// elsewhere) containing a bare `null` crashed showProgress() outright
+// (`Cannot read properties of null (reading 'domains')` in renderDomainCharts' `s.domains && ...`
+// filter — `s` itself was null, not `s.domains`). Factored out as its own function (not just
+// inlined in loadSessions()) so EVERY raw read of a `tg_sessions*` array gets the same guard —
+// loadSessions() reads the ACTIVE profile's own sessions via pk(), but buildLocalSyncBlob() reads
+// every OTHER profile's `tg_sessions:<id>` directly (it has to: sync covers the whole family, not
+// just whichever profile is currently selected on this device) — a version of this fix that only
+// patched loadSessions() would have left that second read path exposed to the exact same crash
+// class, just reachable through doSyncPut()/showProgress() with an inactive profile's corrupted
+// data instead. A session that's merely missing some FIELDS (e.g. `{}`, `{v:1}` with no domains)
+// is left alone — those already degrade gracefully wherever they're read, and dropping
+// partially-valid data would lose real information.
+function sanitizeSessionsArr(arr){
+  return Array.isArray(arr) ? arr.filter(s => s && typeof s === "object") : [];
+}
 function loadSessions(){
   try {
     const arr = JSON.parse(localStorage.getItem(pk("tg_sessions")) || "[]"); // v11: per-profile
-    return Array.isArray(arr) ? arr : [];
+    return sanitizeSessionsArr(arr);
   } catch(e){ return []; }
 }
 function saveSession(ageMonths, name, vocabEstimate, vocabChecked){
@@ -6860,7 +6954,7 @@ function buildLocalSyncBlob(){
   const perProfile = {};
   for (const p of d.profiles){
     let sessions = [], checklist = [], completions = { total: 0, lockedUntil: {} }, arcade = {};
-    try { sessions = JSON.parse(localStorage.getItem(`tg_sessions:${p.id}`) || "[]"); } catch(e){}
+    try { sessions = sanitizeSessionsArr(JSON.parse(localStorage.getItem(`tg_sessions:${p.id}`) || "[]")); } catch(e){} // v14.2 (QA pass 9): see sanitizeSessionsArr's own comment — this profile may not be the active one loadSessions() covers
     try { checklist = JSON.parse(localStorage.getItem(`tg_checklist:${p.id}`) || "[]"); } catch(e){}
     try { completions = JSON.parse(localStorage.getItem(`tg_completions:${p.id}`) || "{}") || completions; } catch(e){}
     try { arcade = JSON.parse(localStorage.getItem(`tg_arcade:${p.id}`) || "{}") || {}; } catch(e){}
@@ -6885,6 +6979,96 @@ function applySyncBlobLocally(blob){
     persistSet(`tg_completions:${id}`, JSON.stringify(bundle.completions || {}));
     persistSet(`tg_arcade:${id}`, JSON.stringify(normalizeArcadeStats(bundle.arcade)));
   }
+}
+// v14.2 (QA pass 9): sync-worker/src/index.js enforces a hard 1MB (MAX_BODY_BYTES) cap on BOTH
+// the incoming PUT body AND the MERGED result (existing-on-server ∪ incoming) — a family with
+// enough history (a long-running install, or several children, each accumulating sessions with
+// their own per-item logs) can genuinely cross that with real data, not just a synthetic stress
+// test (confirmed live: ~300 sessions across 3 profiles serializes well past 1MB). Before this
+// fix, doSyncPut() treated the resulting 413 exactly like any other network failure —
+// `!res.ok` -> throw -> setSyncStatus("offline") — which is silent and, worse, PERMANENT: the
+// local blob only grows over time, so every future scheduleSyncPut() call hits the identical 413
+// forever, and family sync quietly stops working for that device with no recovery path.
+//
+// TWO real bugs found in this fix by adversarial review, both now closed:
+//
+// (1) CRITICAL — the first version stripped `items` (the per-item detail log) IN PLACE from the
+// oldest sessions' own content before PUTting. That is unsafe — mergeSessionsArr() (sync-worker/
+// src/merge.js, pasted verbatim into this file too, see mergeState() below) unions sessions by
+// `date` with the INCOMING side winning ties. PUTting a stripped copy of an ALREADY-SYNCED session
+// (same date, now with `items` emptied) would overwrite the server's full-fidelity copy with the
+// stripped one — and the PUT response then gets applied locally via applySyncBlobLocally(),
+// overwriting this device's own full copy too. Net effect: the first time a family's history
+// crossed 1MB, every old session's item-level detail would have been PERMANENTLY destroyed
+// everywhere. Fixed direction: NEVER mutate a session's own content — see below.
+//
+// (2) The second version (drop whole OLD sessions from the payload, newest-first, until the LOCAL
+// blob alone fit under 1MB) was still wrong in a way live-testing against the REAL deployed worker
+// caught immediately: the cap check is on the MERGED result, and the server always re-unions its
+// OWN already-stored sessions back in regardless of what this device sends. Dropping an
+// already-synced OLD session from the outgoing payload does NOT shrink the eventual merged total
+// — the server still has it, and the union just re-adds it. Trimming based on "does MY payload
+// alone fit under 1MB" can easily produce a payload that, once merged with what the server
+// ALREADY has, exceeds the cap anyway (confirmed live: a 60-old-session baseline already synced,
+// then a 500-new-session update whose PRUNED payload measured under 1MB on its own still got a
+// real 413 — "merged state exceeds 1048576 byte cap" — because the server's own merge added back
+// the 60 old sessions my payload had dropped, on top of my new ones). Fixed by having doSyncPut()
+// GET the server's actual current state on a 413 and re-prune against a client-side simulation of
+// the EXACT SAME merge the server performs (mergeState(), reusing the merge functions this file
+// already keeps textually identical to sync-worker/src/merge.js for precisely this reason — the
+// pre-existing syncPullAndMerge() pull-then-merge-on-load path already established the same
+// "simulate the server's own merge client-side" pattern) — see doSyncPut()'s own comment for the
+// GET-on-413 orchestration.
+//
+// Both fixes verified live against the REAL deployed worker (never a local wrangler-dev stand-in),
+// with a fresh TEST_-only family code: PUT a 60-session full-fidelity history -> PUT a 500-session
+// update that pushes the family's TRUE merged total over 1MB -> GET confirms every one of the
+// original 60 sessions still has its full, untouched `items` array, new sessions that fit are
+// included, and doSyncPut() reaches "synced" (not stuck "offline") — see QA-LOG.md pass 9.
+const SYNC_MAX_BODY_BYTES = 1024 * 1024; // mirrors sync-worker/src/index.js's MAX_BODY_BYTES exactly
+function syncBlobByteLength(blob){ return new TextEncoder().encode(JSON.stringify(blob)).length; }
+// `serverBlob` is the CURRENT authoritative state fetched fresh via GET (or null if unreachable/
+// a brand-new code, in which case mergeState(null, localBlob) degrades to just localBlob — correct
+// for a fresh code, since there's nothing already stored to worry about). NEVER mutates a
+// session's own content — only drops whole sessions from `localBlob`'s own arrays, newest-first,
+// re-verifying against the EXACT real merge (mergeState) at each candidate size rather than a
+// local-only size estimate that can't see what the server already has (see this function's own
+// big comment above for the real bug that shipped without this).
+function pruneSyncBlobForSize(localBlob, serverBlob){
+  if (syncBlobByteLength(mergeState(serverBlob, localBlob)) <= SYNC_MAX_BODY_BYTES) return localBlob; // the true merge already fits — nothing to drop
+  const tagged = [];
+  for (const [pid, bundle] of Object.entries(localBlob.perProfile || {})){
+    (bundle.sessions || []).forEach(s => { if (s && s.date) tagged.push({ pid, s }); });
+  }
+  tagged.sort((a, b) => new Date(b.s.date) - new Date(a.s.date)); // NEWEST first — newest sessions are what we most want to get synced
+  const applyTopN = (n) => {
+    const keptByPid = {};
+    for (const pid of Object.keys(localBlob.perProfile || {})) keptByPid[pid] = [];
+    for (let i = 0; i < n && i < tagged.length; i++) keptByPid[tagged[i].pid].push(tagged[i].s);
+    for (const pid of Object.keys(localBlob.perProfile || {})){
+      // restore chronological (oldest-first) order within the kept subset — matches the shape
+      // every sessions array in this blob normally has, so nothing downstream has to special-case it.
+      localBlob.perProfile[pid].sessions = keptByPid[pid].sort((a, b) => new Date(a.date) - new Date(b.date));
+    }
+  };
+  // Binary-searching the largest N (newest-first) that fits needs only O(log n) EXACT
+  // mergeState()+stringify measurements instead of checking every session one at a time — a prior
+  // version of this loop re-stringified the whole blob after every single session considered,
+  // measured at ~18s of synchronous main-thread work on a 300-session/3-profile stress load.
+  let lo = 0, hi = tagged.length;
+  while (lo < hi){
+    const mid = Math.ceil((lo + hi) / 2);
+    applyTopN(mid);
+    if (syncBlobByteLength(mergeState(serverBlob, localBlob)) <= SYNC_MAX_BODY_BYTES) lo = mid; else hi = mid - 1;
+  }
+  applyTopN(lo);
+  return localBlob; // if even the single newest session per profile doesn't fit merged with what
+                     // the server already has (pathological): lo=0, every profile's OUTGOING
+                     // sessions end up [] (still merges in whatever the server already has,
+                     // unaffected) — the PUT below may still legitimately 413 if profiles/
+                     // checklist/completions/arcade ALONE, merged with the server's existing
+                     // state, exceed the cap, falling through to the existing offline-status path.
+                     // No session content is ever altered either way.
 }
 function setSyncStatus(s){ state.syncStatus = { state: s, lastSyncedAt: s === "synced" ? Date.now() : state.syncStatus.lastSyncedAt }; renderSyncStatus(); }
 // On-load pull: GET the family blob, merge it into local (same mergeState() the server itself
@@ -6935,8 +7119,23 @@ async function doSyncPut(){
   _syncPutInFlight = true;
   setSyncStatus("syncing");
   try {
-    const body = JSON.stringify(buildLocalSyncBlob());
-    const res = await fetch(`${syncUrl()}/v1/state/${code}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body });
+    let localBlob = buildLocalSyncBlob();
+    let res = await fetch(`${syncUrl()}/v1/state/${code}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(localBlob) });
+    if (res.status === 413){
+      // v14.2 (QA pass 9): the server enforces its 1MB cap on the MERGED result (existing ∪
+      // incoming), not just the incoming body — see pruneSyncBlobForSize's own comment for the
+      // real bug this fixes (a size-aware retry that doesn't know the server's CURRENT stored
+      // size can still produce a merge that exceeds the cap even when the outgoing payload alone
+      // looked fine). Only pay for the extra GET when the fast path above actually 413s — the
+      // overwhelmingly common case (a normal-sized PUT) never takes this branch at all.
+      let serverBlob = null;
+      try {
+        const getRes = await fetch(`${syncUrl()}/v1/state/${code}`, { cache: "no-store" });
+        if (getRes.ok) serverBlob = await getRes.json();
+      } catch(e){ /* serverBlob stays null — pruneSyncBlobForSize degrades to "fit under cap alone", correct for a brand-new/unreachable code */ }
+      localBlob = pruneSyncBlobForSize(buildLocalSyncBlob(), serverBlob); // re-read fresh, in case anything saved mid-flight
+      res = await fetch(`${syncUrl()}/v1/state/${code}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(localBlob) });
+    }
     if (!res.ok) throw new Error(`PUT ${res.status}`);
     const merged = await res.json();
     applySyncBlobLocally(merged); // server is authoritative — adopt whatever it merged back (may include another device's concurrent writes)
