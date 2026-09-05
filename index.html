@@ -469,7 +469,7 @@
     <div id="braveChip">💪 <span id="braveCount">0</span></div>
     <div id="arcadeStreak">🔥 <span id="arcadeStreakCount">0</span></div>
     <span id="syncGlyph" style="font-size:11px;color:#a99;white-space:nowrap"></span>
-    <button id="muteBtn" onclick="toggleMute()" aria-label="Mute">🔊</button>
+    <button id="muteBtn" onclick="toggleMute()" aria-label="Mute" title="Turn sound off">🔊</button>
     <button id="quitBtn" onclick="endGame()" style="display:none">Finish</button>
   </div>
   <div id="progressWrap" style="display:none"><div id="progressBar"></div></div>
@@ -610,7 +610,24 @@
       <div id="mandarinBars"></div>
       <div style="font-size:11px;color:#a99;margin-top:8px">Just starting out — this is a raw progress level for your immersion program, not compared to any age norm.</div>
     </div>
-    <details><summary>Item-by-item detail</summary><div id="itemDetail"></div></details>
+    <details><summary>Item-by-item detail</summary>
+      <!-- QA pass 10: legend for fmtItem()'s glyphs — no explanation existed anywhere for a
+           parent opening this section for the first time. Omits ⏭ (r.skipped) deliberately:
+           grepped confirms nothing in the file ever sets skipped:true, so it can never actually
+           appear — listing it would only add a marker a parent will never see and might worry
+           about looking for.
+           Adversarial-review fix: an earlier draft of this legend said "❌ missed after two
+           tries," which is only true for the genuine wrong-twice-then-revealed case. `recordResult`
+           logs `correct: firstTry` (see its own call sites in tapTile/tapSeekObj/tapBodyPart) —
+           `scoreAnswer(it, state.firstTry)` fires on ANY correct tap, including a correct tap on a
+           RETRY after one earlier wrong tap (the "brave guess" remediation path, where
+           `state.firstTry` is flipped to false on the first wrong tap and stays false), which also
+           logs `correct:false`. So ❌ can mean either "revealed after two misses" OR "got it right,
+           just not on the very first try" — genuinely indistinguishable in this log, and the same
+           ambiguity applies to a hinted item that needed a retry (❌ 💡 together). Reworded to be
+           accurate for BOTH cases instead of claiming the narrower, sometimes-false one. -->
+      <p style="font-size:11px;color:#a99;margin:4px 0 8px">Legend: ✅ got it right away &nbsp;·&nbsp; ❌ didn't get it on the first try &nbsp;·&nbsp; ❌ᴰᴷ child didn't know (shrugged) &nbsp;·&nbsp; 💡 a hint was used to get there &nbsp;·&nbsp; 🔁 revisited at the end, just for fun (not scored)</p>
+      <div id="itemDetail"></div></details>
     <p class="disclaimer">⚠️ This is a parent-facing play activity inspired by the structure of professional tools (MacArthur-Bates CDI word checklists; age-anchored concept items in the spirit of ASQ-3 / PLS-5 style screeners). It is <b>not</b> a validated or diagnostic instrument, one session is a snapshot, and toddler performance varies hugely day to day. If you ever have concerns about language development, talk to your pediatrician or ask about a free early-intervention evaluation.</p>
     <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">
       <button class="bigbtn" onclick="location.reload()">🔁 Play again</button>
@@ -626,7 +643,12 @@
     <div class="res-card" style="max-width:760px">
       <h3>🧠 Concept domains — age-equivalent vs chronological age</h3>
       <div id="domainCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px"></div>
-      <div style="font-size:12px;color:#a99;margin-top:8px">Dashed line = chronological age (typical pace). Shaded band = ±8 months, a rough "typical variation" range — this mirrors how growth-score charts track development.</div>
+      <!-- QA pass 10: domainChartSVG() has drawn a 🎓 above any Check-in-mode dot since v14, but
+           nothing on-screen ever explained it — a parent scanning this caption for "what does the
+           graduation cap mean?" found nothing. Adding it here alongside the existing dashed-
+           line/band explanation rather than a separate line, since it's the same "how to read
+           this chart" caption. -->
+      <div style="font-size:12px;color:#a99;margin-top:8px">Dashed line = chronological age (typical pace). Shaded band = ±8 months, a rough "typical variation" range — this mirrors how growth-score charts track development. 🎓 marks a Check-in session (no hints, a cleaner read).</div>
     </div>
     <!-- v13: Mandarin — its own chart cluster, deliberately separate from the English domains
          above (raw level trend, no chronological-age line, no percentile framing — see
@@ -637,7 +659,7 @@
       <div style="font-size:12px;color:#a99;margin-top:8px">A raw progress trend for your immersion program — not compared to any age norm.</div>
     </div>
     <div class="res-card" style="max-width:760px">
-      <h3>🗣 Vocabulary growth vs CDI median</h3>
+      <h3>🗣 Vocabulary growth vs typical (CDI) median</h3>
       <div id="vocabChart"></div>
     </div>
     <div class="res-card" style="max-width:760px">
@@ -4730,7 +4752,12 @@ function testVoice(){
   box.style.display = "block";
   const t0 = Date.now();
   const line = (msg) => { box.textContent += `[${((Date.now()-t0)/1000).toFixed(1)}s] ${msg}\n`; };
-  box.textContent = "";
+  // QA pass 10: this box's every line below is a raw technical log (speechSynthesis internals,
+  // "RAW utterance", etc.) meant for troubleshooting — useful for us, but a parent tapping this
+  // button just wants to know "does the voice work?" A one-line plain-language header up front
+  // means they don't have to parse the log to get that answer; the technical detail stays
+  // available underneath for anyone who wants it (or for a support conversation).
+  box.textContent = "You should hear a voice in a moment. The lines below are technical details — mainly useful if the sound doesn't play.\n";
   if (!("speechSynthesis" in window)){ line("❌ speechSynthesis not available in this browser"); return; }
   const vs = speechSynthesis.getVoices();
   line(`voices loaded: ${vs.length} | picked: ${voice ? voice.name + (voice.localService ? " (local)" : " (NETWORK)") : "none"} | muted flag: ${state.muted}`);
@@ -4775,6 +4802,12 @@ function updateMuteBtn(){
   const btn = $("muteBtn");
   btn.textContent = state.muted ? "🔇" : "🔊";
   btn.setAttribute("aria-label", state.muted ? "Unmute" : "Mute");
+  // QA pass 10: added alongside the existing aria-label toggle — #mapBtn already has a visible
+  // `title` tooltip ("Back to the map") but this button never did, and its icon-only meaning
+  // (speaker vs. muted-speaker) is otherwise only confirmed by the aria-label a sighted parent
+  // never sees. A touch tablet won't show `title` on tap, but it's a free win for desktop/mouse
+  // parents and keeps this button consistent with its HUD sibling.
+  btn.title = state.muted ? "Turn sound on" : "Turn sound off";
 }
 function toggleMute(){
   state.muted = !state.muted;
@@ -6330,16 +6363,29 @@ function endGame(){
     const pct = Math.min(100, Math.max(0, fd.theta / maxScale * 100));
     const chronoPct = Math.min(100, age / maxScale * 100);
     const pctBand = clampPct(normalCdf((fd.theta - age) / 8) * 100);
+    // QA pass 10: pass 1 flagged this note as the ONLY signal that a domain result came from a
+    // short/partial read (map-out or the 3-shrug graceful end below MIN_ITEMS), and it was
+    // rendered identically to a full read at 11px/#a99 (very light gray) — easy to miss,
+    // especially the "N items" figure at N=1-3. Below MIN_ITEMS, add a small non-alarming
+    // "quick peek" badge next to the label and swap the note for plain-language guidance instead
+    // of the percentile-band framing (a 1-3-item read isn't precise enough for a percentile
+    // claim to be meaningful anyway — see priorFor()'s own sigma-widening for the same n<MIN_ITEMS
+    // cutoff). A full (n>=MIN_ITEMS) read keeps the original wording/styling unchanged.
+    const isQuickPeek = fd.n < MIN_ITEMS;
     const row = document.createElement("div");
     row.className = "bar-row";
-    row.innerHTML = `<div class="lbl">${dom.emoji} ${dom.label}</div>
+    row.innerHTML = `<div class="lbl">${dom.emoji} ${dom.label}${isQuickPeek ? ' <span style="font-size:10px;font-weight:700;color:#a9690f;background:#fdecc8;border-radius:6px;padding:1px 6px;vertical-align:middle">quick peek</span>' : ""}</div>
       <div class="bar-track"><div class="bar-fill${fd.theta < age-6 ? " low" : ""}" style="width:${pct}%"></div>
       <div class="chrono-mark" style="left:${chronoPct}%"></div></div>
       <div class="bar-val">${fd.theta} mo</div>`;
     bars.appendChild(row);
     const note = document.createElement("div");
-    note.style.cssText = "font-size:11px;color:#a99;margin:-4px 0 8px 118px";
-    note.textContent = `around the ${pctBand}${ordinalSuffix(pctBand)} percentile band for his age (±${fd.sd}mo, ${fd.n} items)`;
+    note.style.cssText = isQuickPeek
+      ? "font-size:12px;color:#8a6d3b;font-weight:600;margin:-4px 0 8px 118px"
+      : "font-size:11px;color:#a99;margin:-4px 0 8px 118px";
+    note.textContent = isQuickPeek
+      ? `Only ${fd.n} item${fd.n===1?"":"s"} answered before this ended (±${fd.sd}mo) — too quick for a solid read. Play this one a bit longer next time.`
+      : `around the ${pctBand}${ordinalSuffix(pctBand)} percentile band for his age (±${fd.sd}mo, ${fd.n} items)`;
     bars.appendChild(note);
   }
 
@@ -6470,7 +6516,15 @@ function showProgress(){
   renderStorageDiagnostic();
   show("progressScreen");
 }
-function domainChartSVG(pts){
+// QA pass 10: added the optional `showAxisLabels` param — this chart had ZERO numeric
+// anchoring (no ticks/labels anywhere), just an unlabeled line/band, so a parent could see the
+// SHAPE of a trend but not read an actual month value off it. Defaults to off (existing
+// behavior, unchanged) so the Mandarin reuse (renderMandarinCharts(), whose x-axis is a session
+// COUNT, not months — see that function's own comment on why age language is deliberately
+// avoided there) isn't affected; only the English domain-chart call site below opts in, where
+// both axes genuinely are months (x=chronological age, y=age-equivalent) so an "Nmo" label is
+// correct for either one.
+function domainChartSVG(pts, showAxisLabels){
   const W = 240, H = 150, pad = 26;
   const xs = pts.map(p=>p.x), ys = pts.map(p=>p.y);
   let lo = Math.min(...xs, ...ys) - 6, hi = Math.max(...xs, ...ys) + 6;
@@ -6484,11 +6538,26 @@ function domainChartSVG(pts){
   // (gentler difficulty targeting, hints available). `pts` entries without a `.mode` (every call
   // site predates v14, or the underlying session predates it) just render the plain dot.
   const dots = pts.map(p => `<circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="4" fill="#ff8a3d"/>${p.mode === "eval" ? `<text x="${sx(p.x)}" y="${sy(p.y) - 8}" font-size="10" text-anchor="middle">🎓</text>` : ""}`).join("");
+  // Adversarial-review fix: the first version of this labeled the DATA's own min/max
+  // (Math.min/max(...xs,...ys), unpadded) but positioned them at `pad`/`W-pad` — which are the
+  // pixel coordinates for `lo`/`hi` (the PADDED bounds, offset by -6/+6 from the data, or -12/+12
+  // once the "hi-lo<12" widen branch above fires). sx(dataLo) is provably NOT `pad` whenever
+  // lo<dataLo (the normal case), so the printed number silently didn't match what was actually at
+  // that pixel — confirmed live (a 36/42-point chart printed "36mo" at the pixel that scale
+  // maps to 30). Labeling `lo`/`hi` instead is correct by construction (sx(lo)===pad and
+  // sx(hi)===W-pad follow directly from `sx`'s own formula above, not a second independent
+  // computation that could drift out of sync) and needs no edge-case handling for a
+  // degenerate/single-point chart (hi-lo>=12 always, per the widen branch), unlike labeling the
+  // true data extremes would (those can coincide — e.g. one point where theta===age — putting
+  // both labels at the identical pixel with opposing text-anchors).
+  const axisLabels = showAxisLabels ? `
+    <text x="${pad}" y="${H-8}" font-size="9" fill="#bba">${Math.round(lo)}mo</text>
+    <text x="${W-pad}" y="${H-8}" font-size="9" fill="#bba" text-anchor="end">${Math.round(hi)}mo</text>` : "";
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;background:#fffdf8;border-radius:12px;border:1px solid var(--tile-border)">
     <polygon points="${band}" fill="#4ecdc4" opacity=".15"/>
     <line x1="${sx(lo)}" y1="${sy(lo)}" x2="${sx(hi)}" y2="${sy(hi)}" stroke="#bbb" stroke-dasharray="4 3"/>
     <polyline points="${line}" fill="none" stroke="#ff8a3d" stroke-width="2"/>
-    ${dots}
+    ${dots}${axisLabels}
   </svg>`;
 }
 function renderDomainCharts(){
@@ -6501,7 +6570,7 @@ function renderDomainCharts(){
       .map(s => ({ x: s.ageMonths, y: s.domains[dom.key].theta, mode: s.mode }));
     if (!pts.length) continue;
     const card = document.createElement("div");
-    card.innerHTML = `<div style="font-weight:700;font-size:13px;margin-bottom:4px">${dom.emoji} ${dom.label}</div>` + domainChartSVG(pts);
+    card.innerHTML = `<div style="font-weight:700;font-size:13px;margin-bottom:4px">${dom.emoji} ${dom.label}</div>` + domainChartSVG(pts, true);
     wrap.appendChild(card);
   }
   if (!wrap.children.length) wrap.innerHTML = `<p class="subtitle">Play a session to start tracking progress!</p>`;
@@ -6543,10 +6612,15 @@ function renderVocabChart(){
   const sy = y => H - pad - y / maxW * (H - 2*pad);
   const curve = VOCAB_NORMS.map(p => `${sx(p[0])},${sy(p[1])}`).join(" ");
   const dots = sessions.map(s => `<circle cx="${sx(s.ageMonths)}" cy="${sy(s.vocabEstimate)}" r="4" fill="#ff8a3d"/>`).join("");
+  // QA pass 10: this chart had no axis anchoring at all beyond the legend text — added the age
+  // range along the x-axis (the y-axis word counts are already visible per-dot via the item
+  // detail / vocabEstimate big-stat elsewhere on this screen, so only the x-axis needed it here).
   wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;background:#fffdf8;border-radius:12px;border:1px solid var(--tile-border)">
     <polyline points="${curve}" fill="none" stroke="#4ecdc4" stroke-width="2" stroke-dasharray="5 3"/>
     ${dots}
-    <text x="${pad}" y="16" font-size="11" fill="#8a7d66">dashed = CDI median · dots = your estimates</text>
+    <text x="${pad}" y="16" font-size="11" fill="#8a7d66">dashed = typical median · dots = your estimates</text>
+    <text x="${pad}" y="${H-8}" font-size="10" fill="#bba">0mo</text>
+    <text x="${W-pad}" y="${H-8}" font-size="10" fill="#bba" text-anchor="end">${Math.round(maxAge)}mo</text>
   </svg>`;
 }
 function renderSessionList(){
