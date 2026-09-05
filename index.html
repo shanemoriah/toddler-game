@@ -6133,6 +6133,26 @@ function vocabSizeToAge(words){
   const inv = VOCAB_NORMS.map(([m,w]) => [w,m]);
   return Math.round(interp(inv, words));
 }
+// QA pass 8 fix: the parent word-checklist estimate is capped at the CDI production form's own
+// 680-word ceiling (checklistTotal()/saved.length can never push vocabEstimate above 680 — see
+// endGame()'s own `Math.round(saved.length/total*680/10)*10` line), which caps the derived
+// age-equivalent at vocabSizeToAge(680) regardless of how many checklist words are checked —
+// verified live: even a FULLY completed 107-word checklist tops out at ageEq=34 (not 60, not 100).
+// For any child chronologically older than that ceiling, the percentile-band formula
+// (Φ((ageEq-age)/8)) is mathematically correct but semantically meaningless: it reads the
+// checklist's own scale limit as "behind," not as ability — live-verified example: a 60-month-old
+// whose parent checked EVERY single checklist word (107/107, the best possible input) was told
+// "around the 1st percentile band," which is actively misleading, not just imprecise. This module
+// is explicitly scoped to 18-36mo per RESEARCH.md section 8 ("Parent-report vocab module
+// (18–36 mo)") — endGame() had no age gate enforcing that, unlike the structurally identical
+// out-of-model-range situation the v13 Mandarin card already handles correctly (raw count only,
+// no age-equivalent/percentile framing, "English norms don't apply"). CHECKLIST_CEILING_AGE is
+// derived from the real constants (vocabSizeToAge(680)), not hardcoded, so it stays correct if
+// VOCAB_NORMS or the 680-word cap ever change. CHECKLIST_VOCAB_CAP is the same cap endGame()'s
+// own vocabEstimate formula uses (`Math.round(saved.length/total*680/10)*10`) — named here too
+// (2nd adversarial-review cycle nit) so the two never drift independently if the cap is retuned.
+const CHECKLIST_VOCAB_CAP = 680;
+const CHECKLIST_CEILING_AGE = vocabSizeToAge(CHECKLIST_VOCAB_CAP);
 
 /* standard normal CDF (Abramowitz-Stegun erf approximation) — used for
    percentile-band display: normalCdf((thetaHat - chronoAge) / 8) */
@@ -6193,12 +6213,33 @@ function endGame(){
   let vocabEstimate = null;
   if (saved.length){
     const total = checklistTotal();
-    vocabEstimate = Math.round(saved.length / total * 680 / 10) * 10;
+    vocabEstimate = Math.round(saved.length / total * CHECKLIST_VOCAB_CAP / 10) * 10;
     const ageEq = vocabSizeToAge(vocabEstimate);
-    const vocabPct = clampPct(normalCdf((ageEq - age) / 8) * 100);
     $("vocabCard").style.display = "block";
     $("vocabEstimate").textContent = `~${vocabEstimate} words`;
-    $("vocabAgeEq").textContent = `${saved.length}/${total} checklist words → roughly the median for a ${ageEq}-month-old (median at ${age} mo ≈ ${Math.round(interp(VOCAB_NORMS, age))} words) — around the ${vocabPct}${ordinalSuffix(vocabPct)} percentile band for his age. Half of kids are above and half below the median — a wide range is normal.`;
+    // QA pass 8 fix: the checklist's own ceiling (CHECKLIST_CEILING_AGE, see its own comment —
+    // the 680-word CDI cap tops out around 34mo no matter how complete the checklist is) only
+    // makes the percentile-band formula misleading when TWO things are both true: the checklist
+    // is essentially maxed out (so the score can't go any higher — `nearCeiling` below, ~98%+
+    // checked) AND the child is old enough that even that best-possible score reads as "behind"
+    // (age comfortably past CHECKLIST_CEILING_AGE — the +8 buffer mirrors this file's own
+    // sigma=8 "typical band" convention, so a small/plausible gap doesn't trigger this). Gating on
+    // AGE ALONE (an earlier version of this fix did exactly that) was wrong: caught by adversarial
+    // review — a 45mo child with a genuinely low, nowhere-near-maxed 30/107 checklist would have
+    // had a legitimately low, informative percentile (1st) silently replaced with a vague "this
+    // checklist doesn't apply" message, hiding a real signal that has nothing to do with the
+    // ceiling. `nearCeiling` keeps that case on the normal percentile path (own reasoning: a score
+    // that isn't maxed out reflects the checklist's real word count, not its scale limit, whatever
+    // the child's age). Live-verified: 60mo + 107/107 (maxed) → correctly suppressed ("around the
+    // 1st percentile" was actively misleading for a perfect score); 45mo + 30/107 (not maxed) →
+    // correctly KEPT the normal percentile line (a genuinely low count is real information).
+    const nearCeiling = vocabEstimate >= CHECKLIST_VOCAB_CAP - 10; // ~98%+ checked, one rounding bucket below the cap — see comment
+    if (age > CHECKLIST_CEILING_AGE + 8 && nearCeiling){
+      $("vocabAgeEq").textContent = `${saved.length}/${total} checklist words. This checklist is designed for younger vocabularies (up to roughly ${CHECKLIST_CEILING_AGE} months) and tops out well before ${age} months, so a maxed-out checklist can't give a meaningful percentile at this age — the Words game gives an ongoing readout that keeps working as vocabulary grows.`;
+    } else {
+      const vocabPct = clampPct(normalCdf((ageEq - age) / 8) * 100);
+      $("vocabAgeEq").textContent = `${saved.length}/${total} checklist words → roughly the median for a ${ageEq}-month-old (median at ${age} mo ≈ ${Math.round(interp(VOCAB_NORMS, age))} words) — around the ${vocabPct}${ordinalSuffix(vocabPct)} percentile band for his age. Half of kids are above and half below the median — a wide range is normal.`;
+    }
   }
 
   // domain bars
