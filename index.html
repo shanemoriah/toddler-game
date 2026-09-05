@@ -5988,6 +5988,15 @@ function erf(x){
 }
 function normalCdf(z){ return 0.5*(1+erf(z/Math.SQRT2)); }
 function clampPct(p){ return Math.min(99, Math.max(1, Math.round(p))); }
+// QA pass 3 fix: every percentile-band caption hardcoded "th" (clampPct's 1-99 range makes 1st/
+// 2nd/3rd/21st/22nd/23rd/31st/... all genuinely reachable, not just an 11-13 teens edge case) —
+// standard English ordinal rule: 11-13 always "th" (the exception), otherwise last digit
+// 1->st/2->nd/3->rd/else->th.
+function ordinalSuffix(n){
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return "th";
+  switch (n % 10){ case 1: return "st"; case 2: return "nd"; case 3: return "rd"; default: return "th"; }
+}
 
 function endGame(){
   // if the parent hit "Finish" mid-domain, still capture partial progress.
@@ -6032,7 +6041,7 @@ function endGame(){
     const vocabPct = clampPct(normalCdf((ageEq - age) / 8) * 100);
     $("vocabCard").style.display = "block";
     $("vocabEstimate").textContent = `~${vocabEstimate} words`;
-    $("vocabAgeEq").textContent = `${saved.length}/${total} checklist words → roughly the median for a ${ageEq}-month-old (median at ${age} mo ≈ ${Math.round(interp(VOCAB_NORMS, age))} words) — around the ${vocabPct}th percentile band for his age. Half of kids are above and half below the median — a wide range is normal.`;
+    $("vocabAgeEq").textContent = `${saved.length}/${total} checklist words → roughly the median for a ${ageEq}-month-old (median at ${age} mo ≈ ${Math.round(interp(VOCAB_NORMS, age))} words) — around the ${vocabPct}${ordinalSuffix(vocabPct)} percentile band for his age. Half of kids are above and half below the median — a wide range is normal.`;
   }
 
   // domain bars
@@ -6059,7 +6068,7 @@ function endGame(){
     bars.appendChild(row);
     const note = document.createElement("div");
     note.style.cssText = "font-size:11px;color:#a99;margin:-4px 0 8px 118px";
-    note.textContent = `around the ${pctBand}th percentile band for his age (±${fd.sd}mo, ${fd.n} items)`;
+    note.textContent = `around the ${pctBand}${ordinalSuffix(pctBand)} percentile band for his age (±${fd.sd}mo, ${fd.n} items)`;
     bars.appendChild(note);
   }
 
