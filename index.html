@@ -12,7 +12,20 @@
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#fdf6e3">
 <style>
+  /* QA pass 6: color-scheme:light — this app is light-only by design (no dark CSS exists
+     anywhere in this file, confirmed by grep). Every custom element already paints its own
+     explicit background (body/inputs/tiles/cards all set real colors, verified live under a
+     forced prefers-color-scheme:dark emulation: body stayed rgb(253,246,227), inputs stayed
+     white-bg/dark-ink), so nothing is actually UNREADABLE without this. But with no color-scheme
+     declared, a couple of browser-drawn-chrome bits the CSS can't reach — the date input's
+     calendar-picker icon, the number input's spinner arrows, ordinary scrollbars on the
+     overflow-y:auto screens — silently follow the OS/browser's dark preference, which can read as
+     a mismatched dark icon/scrollbar sitting on this always-light page. Declaring `light`
+     explicitly (matching the already-present `<meta name="theme-color" content="#fdf6e3">`)
+     keeps that native chrome light too, for a fully consistent light-only look under a dark-mode
+     OS — a one-line, zero-risk fix since there is no dark palette anywhere to conflict with. */
   :root {
+    color-scheme: light;
     --bg: #fdf6e3; --card: #ffffff; --ink: #3a3226;
     --accent: #ff8a3d; --accent2: #4ecdc4; --good: #6bcb77; --bad: #ff6b6b;
     --tile: #fff8ec; --tile-border: #f0e0c0;
@@ -36,12 +49,53 @@
   #mascot { font-size: 42px; transition: transform .3s; cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
   #mascot.bounce { animation: bounce .6s; }
   @keyframes bounce { 0%,100%{transform:translateY(0)} 40%{transform:translateY(-16px) rotate(-8deg)} 70%{transform:translateY(0)} 85%{transform:translateY(-6px)} }
-  #stars { flex: 1; display: flex; flex-wrap: wrap; gap: 2px; font-size: 20px; min-height: 24px; }
-  #muteBtn { background: none; border: none; font-size: 24px; cursor: pointer; padding: 4px 6px; line-height: 1; }
+  /* QA pass 6: max-height+overflow:hidden — addStar() (see its own definition) appends one
+     unbounded ⭐ span per first-try-correct answer for the WHOLE play session (state.stars only
+     resets in enterPlayForProfile, i.e. once per sitting, not per domain), with no cap anywhere.
+     A real multi-domain session (very reachable: "Play everything!" spans 17 domains x up to 10
+     items) can easily earn 40-100+ stars in one sitting. #stars has no explicit width — at
+     narrow/HUD-crowded layouts (mobile, or once braveChip/arcadeStreak/syncGlyph are also
+     showing) its flex:1 share can be under 60px, so a large star count wraps into a very tall
+     single-ish-column stack. #hud has no explicit height and align-items:center (not stretch),
+     so its OWN height simply grows to match its tallest child — CAUGHT LIVE (CDP) at 72 stars:
+     #stars measured 54.6px wide x 1024px tall, #hud grew to 768.6px tall on a 812px-tall mobile
+     viewport, squeezing #gameScreen (flex:1 for the remaining space) to a measured 0px height —
+     the entire game board (tiles/seek-scene/prompt) invisible and unusable, not just visually
+     cramped. max-height+overflow:hidden bounds #hud's growth to a fixed ~2-row budget regardless
+     of star count — old stars simply scroll out of the (non-scrollable, deliberately not worth
+     the complexity for a decorative reward count) visible area once it fills, which reads as "the
+     counter caps out visually" rather than a broken screen. Session's actual `state.stars` count
+     (and its use everywhere else — priorFor/results/etc., none of which iterate the DOM spans) is
+     completely unaffected; this is a pure rendering cap. */
+  #stars { flex: 1; display: flex; flex-wrap: wrap; gap: 2px; font-size: 20px; min-height: 24px; max-height: 52px; overflow: hidden; }
+  /* QA pass 6: bumped to a real ~44px tap target, same reasoning/pattern as #mapBtn's v9.3 fix
+     just below (was a cramped 36x32px box — under the 44px minimum on every viewport, not just
+     mobile, since this rule has no responsive variant). */
+  #muteBtn { background: none; border: none; font-size: 24px; cursor: pointer; padding: 4px 6px; line-height: 1; min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
   /* v9.3: bumped to a real ~44px tap target (was a cramped 24px-font/4-6px-padding box) —
-     this is the primary "switch games" control for a parent mid-session, per the task. */
-  #mapBtn { background: none; border: none; font-size: 32px; cursor: pointer; padding: 6px; line-height: 1; min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
-  #quitBtn { background: none; border: 2px solid var(--tile-border); border-radius: 12px; padding: 6px 12px; font-size: 14px; color: #999; cursor: pointer; }
+     this is the primary "switch games" control for a parent mid-session, per the task.
+     QA pass 6 (2nd adversarial-review cycle, same finding as #quitBtn's own note above): dropped
+     the `display:inline-flex;align-items:center;justify-content:center` v9.3 shipped alongside
+     the size bump — dead code ever since, since `#mapBtn` is shown/hidden exclusively via JS
+     setting its OWN inline `style.display` ("inline-block"/"none" — see beginDomain()/
+     backToMap()/showPicker()/endGame()), which always wins over this stylesheet rule's `display`
+     value, so the resolved display is never actually `inline-flex`. Confirmed live the single 🗺
+     glyph was ALREADY rendering dead-center regardless (Range-measured text-center within 0px of
+     the box's own center) thanks to the symmetric 6px padding — this removal changes nothing
+     visible, it only deletes CSS that was never actually doing anything. */
+  #mapBtn { background: none; border: none; font-size: 32px; cursor: pointer; padding: 6px; line-height: 1; min-width: 44px; min-height: 44px; }
+  /* QA pass 6: min-height bump, same 44px-tap-target reasoning as #muteBtn just above — width
+     was already comfortably >44px, only the 32px height fell short.
+     Adversarial-review correction: an earlier version of this fix also added
+     `display:inline-flex;align-items:center;justify-content:center` for vertical centering, but
+     `#quitBtn` is shown/hidden exclusively via JS setting its OWN inline `style.display` directly
+     ("block"/"none" — see enterPlayForProfile()/backToMap()), which always wins over a stylesheet
+     `display` value at equal specificity — so the element's resolved display is "block", never
+     "inline-flex", making align-items/justify-content permanently inert dead code. Dropped them:
+     confirmed live (Range.getBoundingClientRect on the text node vs the button's own box) that
+     the plain block box already centers its short single-line text acceptably on its own (measured
+     ~0.25px off box-center) thanks to the symmetric 6px top/bottom padding — no flex needed. */
+  #quitBtn { background: none; border: 2px solid var(--tile-border); border-radius: 12px; padding: 6px 12px; font-size: 14px; color: #999; cursor: pointer; min-height: 44px; }
   /* ---------- v12: SHRUG FLOW button (replaces v9.5's parent-facing Skip/Doesn't-know/answer-
      timer controls in SCORED play — see tapShrug()/armShrugTimer()'s own comment). KID-sized (not
      the old unobtrusive .skip-btn treatment — this one's meant to be noticed and tapped by the
@@ -355,10 +409,28 @@
   /* v14: Feature 2 — Play/Check-in mode segmented toggle (#startScreen, near Family sync).
      Two-option control, same visual family as .word-chip's on/off but laid out as one shared-
      border pill (a real segmented control) so it's read as "pick one of two", not "toggle two
-     independent switches" — deliberately small/unobtrusive per the task. */
+     independent switches" — deliberately small/unobtrusive per the task.
+     QA pass 6: added flex-shrink:0 — #startScreen is a column flex container (`.screen`) whose
+     content (name/birthday/age inputs + both subtitles + the family-sync card) is regularly
+     TALLER than the viewport (measured 1218px content in a 721px-tall #startScreen at 375x812,
+     i.e. every device narrower/shorter than a big tablet) — normally harmless, since `.screen`
+     has `overflow-y:auto` and every OTHER child defaults to CSS's "automatic minimum size"
+     protection (a flex item's floor is its own content size unless overflow is anything but
+     `visible`). `.mode-toggle` was the one child that opts out of that protection BY HAVING
+     `overflow:hidden` (added only to clip the shared-border pill's rounded corners, not for this
+     reason) — with no explicit height and no protection, the flex-shrink algorithm was free to
+     crush it arbitrarily to make the rest fit, and did: CAUGHT LIVE (CDP), a plain fresh page
+     load measured `.mode-toggle` at 351x4px (its buttons, each really 18px tall, rendered as a
+     4px sliver — 78% of each button clipped away, both essentially invisible/untappable) purely
+     because the surrounding form content overflows the screen. `flex-shrink:0` opts back in to
+     the same "never shrink below content size" behavior every sibling already gets implicitly —
+     verified live: restores to its natural 40.5px height, with the excess page content still
+     handled correctly by `.screen`'s existing scroll (nothing else regressed by this — every
+     other child was already unaffected, since none of them combine explicit overflow:hidden with
+     unprotected auto sizing the way this one uniquely did). */
   .mode-toggle {
     display: flex; border: 2px solid var(--tile-border); border-radius: 14px; overflow: hidden;
-    max-width: 480px; width: 100%; margin: 0 auto;
+    max-width: 480px; width: 100%; margin: 0 auto; flex-shrink: 0;
   }
   .mode-chip {
     flex: 1; padding: 9px 10px; font-size: 14px; border: none; background: white; color: var(--ink);
@@ -5002,6 +5074,14 @@ function enterPlayForProfile(p, age, name, silent){
   state.arity = age < 30 ? 2 : (age <= 41 ? 3 : 4); // 2AFC <30mo, 3AFC 30-41, 4AFC 42+
   state.finalDomains = {};
   state.stars = 0; state.domainIdx = -1; state.domain = null; state.sessionMode = null;
+  // QA pass 6 (adversarial-review finding, alongside the #stars max-height fix below): this
+  // resets the COUNT but addStar() only ever appends spans, never clears them, and this function
+  // runs every time a profile (re-)enters the picker (profile switch, replay, silent resume — not
+  // just once per page load) — so without this, stale ⭐ spans from an earlier profile/session
+  // silently pile up in the DOM for as long as the tab stays open, undercutting the star count's
+  // own meaning (visually shows a PAST session's stars as if they were this one's) even though
+  // #stars' own max-height:52px cap (see its CSS rule) already bounds the pure layout blast radius.
+  $("stars").innerHTML = "";
   $("quitBtn").style.display = "block";
   if (silent){ showPicker(); return; }
   // v9: name-free greeting so it's cacheable as one bundled clip regardless
