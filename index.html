@@ -2293,7 +2293,7 @@ const VOCAB_EXPLAIN = {
   "asteroid": "An asteroid is a big rock that floats around in space!",
   "ant": "An ant is tiny but super strong for its size!",
   "snail": "A snail carries its curly shell on its back!",
-  "spider": "A spider spins a sticky web with its eight legs!",
+  "spider": "A spider has eight legs and spins a sticky web to catch bugs!",
   "caterpillar": "A caterpillar munches leaves before turning into a butterfly!",
   "fly": "A fly is a tiny buzzing bug with two wings!",
   "worm": "A worm wiggles through the dirt with no legs at all!",
@@ -4871,7 +4871,12 @@ function tapMascot(){
    SHRUG_NORMALIZER_LINES below.
    Three CONSECUTIVE shrugs end the domain gracefully (celebratory, not a failure state) — see
    recordResult()'s ds.consecShrugs bookkeeping (reset by ANY non-shrug resolution) and
-   tapShrug()'s own check below.
+   tapShrug()'s own check below. v14.3 adds a second, independent mercy exit: FIVE TOTAL shrugs
+   in one domain run (ds.totalShrugs, never reset by a correct answer in between) end the domain
+   the same celebratory way — for a child interleaving occasional lucky corrects with a lot of
+   shrugs, who'd otherwise never hit 3 IN A ROW and would sit through the full item budget mostly
+   via the slower hint->reveal loop (see pass 11 NOTES/QA-LOG). Both rules share the same
+   SHRUG_END_LINES/domainDone() exit path — either can fire, whichever comes first.
    Timer plumbing intentionally mirrors the old parent timer's shape (own timer var, cancel-
    unconditionally-at-top-of-renderItem, cancel-on-every-resolution-path) since that discipline —
    "a timer must never survive into the next item/domain" — is exactly as true here; only the
@@ -4886,9 +4891,10 @@ const SHRUG_NORMALIZER_LINES = [
   "That's a tricky one — good thing we figured it out!",
   "Every question teaches us something new!",
 ];
-// v12: spoken once, on the 3rd CONSECUTIVE shrug, instead of a normalizer line — the domain then
-// ends via the normal domainDone() flow (celebratory interlude, finalizeDomain, rotation-lock
-// bookkeeping), so this is layered on TOP of that, not a replacement for it.
+// v12: spoken once, on the 3rd CONSECUTIVE shrug (v14.3: OR the 5th TOTAL shrug — see tapShrug()'s
+// own `mercyExit` check), instead of a normalizer line — the domain then ends via the normal
+// domainDone() flow (celebratory interlude, finalizeDomain, rotation-lock bookkeeping), so this is
+// layered on TOP of that, not a replacement for it.
 const SHRUG_END_LINES = [
   "We found your super spot! High five!",
   "Look how much you learned today! High five!",
@@ -4980,6 +4986,11 @@ function tapShrug(){
   recordResult(it, false, { dontKnow: true, shrug: true });
   queueComeback(it, it.seekfind ? "seek" : (it.body ? "body" : "tile")); // v12: req 6 — see its own comment
   const consecShrugs = state.domain.consecShrugs || 0;
+  const totalShrugs = state.domain.totalShrugs || 0;
+  // v14.3: mercy exit fires on EITHER the original 3-CONSECUTIVE rule OR 5 TOTAL shrugs in this
+  // domain run (see recordResult()'s ds.totalShrugs comment) — same celebratory SHRUG_END_LINES
+  // path either way, so a child doesn't have to hit both to get the graceful early end.
+  const mercyExit = consecShrugs >= 3 || totalShrugs >= 5;
   ttsCancel(); stopClip(); // sanctioned interrupt path, same as skip/doesn't-know/map-out used to be
   setSubtitle(it.zh ? it.explainSubtitle : null); // v13: swap the prompt subtitle for the reveal's English translation
   setTimeout(() => {
@@ -4988,7 +4999,7 @@ function tapShrug(){
     // task ("shrug mechanics apply unchanged").
     speakExplain(it, () => {
       if (!state.domain) return; // map-out mid-explanation guard
-      if (consecShrugs >= 3){
+      if (mercyExit){
         speak(pick(SHRUG_END_LINES), () => { if (state.domain) domainDone(); });
       } else {
         speak(pick(SHRUG_NORMALIZER_LINES), () => { if (state.domain) renderItem(); });
@@ -6221,6 +6232,15 @@ function recordResult(it, firstTry, extra, cOverride){
   // other resolution (correct tap, or a real second-miss reveal via wrong taps) resets it to 0,
   // per the task ("answers in between reset the count").
   ds.consecShrugs = (extra && extra.shrug) ? (ds.consecShrugs || 0) + 1 : 0;
+  // v14.3: TOTAL shrug counter — a mercy exit alongside the CONSECUTIVE rule above, for a child
+  // who's interleaving occasional guess-rate-luck correct answers with a lot of shrugs (never
+  // reaching 3 IN A ROW, but still spending most of the domain in the slower hint->reveal loop —
+  // see pass 11's live-timed finding, ~9-10s of narration per shrugged item). NEVER reset by a
+  // correct answer, unlike consecShrugs — this counts shrugs across the WHOLE domain run.
+  // Hint-only first taps (tapShrug's ds.mode!=="eval" && !it.hintGiven branch) never call
+  // recordResult at all, so they're excluded automatically, same as they already are from
+  // consecShrugs above.
+  ds.totalShrugs = (extra && extra.shrug) ? (ds.totalShrugs || 0) + 1 : (ds.totalShrugs || 0);
 }
 
 function addStar(){
