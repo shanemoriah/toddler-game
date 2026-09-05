@@ -5286,6 +5286,46 @@ function showWhoScreen(){ renderWhoScreen(); show("whoScreen"); }
 // (renderWhoScreen() above) always has a genuine tap behind it, so it omits `silent` and keeps
 // the greeting.
 function selectProfile(id, opts){
+  // QA pass 11 defensive fix: every REAL call site already only reaches selectProfile() from a
+  // safe state (the chooser-card tap is only visible after an active session has already been
+  // exited; both page-load/sync-pull auto-select paths are gated by stillOnEntryScreen(), see its
+  // own comment) — so this is currently unreachable in the shipped UI. Proven live anyway (direct
+  // call, bypassing every guard): switching the active profile while an arcade/Everything-Mix
+  // session was still running left `state.arcade.active`/`state.everything.active` true with a
+  // stale `.currentItem` from the OLD profile, and once that stale item's autonomous 30s timer (or
+  // a delayed tap) resolved, `finishArcadeQuestion()` read the CURRENT `state.activeProfileId` —
+  // now the NEW profile — via `pk()`, silently crediting `tg_arcade` play/streak stats to a
+  // different child than the one who actually played. Closing this at the source (rather than
+  // trusting every future/present caller to exit first) matches backToMap()'s/
+  // exitArcadeSession()'s own teardown for the identical hazard — including their
+  // ttsCancel()/stopClip() (adversarial-review fix: an in-flight arcade-intro/domain-intro/prompt
+  // clip would otherwise keep playing audibly OVER the new profile's picker screen, the exact
+  // "phantom audio" bug backToMap()'s own QA-pass-4 comment already documents fixing elsewhere).
+  // Deliberately does NOT call finalizeDomain() on a still-open state.domain — a second
+  // adversarial-review finding — enterPlayForProfile() (below, for any profile with a usable age)
+  // unconditionally resets state.finalDomains={} before anything could ever persist it via
+  // saveSession(), so finalizing here would be a dead write; nulling state.domain is sufficient to
+  // stop it from resolving into the wrong profile.
+  // Third adversarial-review finding: null/deactivate every one of these BEFORE calling
+  // ttsCancel()/stopClip() (not after) — same ordering backToMap() and exitArcadeSession() use,
+  // and for the same reason their own comments give: stopClip() can synchronously invoke the
+  // in-flight clip's registered finish callback (e.g. beginDomain()'s `speak(..., renderItem)`, or
+  // an arcade intro's `speak(cfg.introLine, () => { if (sess.active) renderArcadeItem(sess); })`),
+  // and both of those callbacks' own staleness guards only fire once state.domain/sess.active have
+  // ALREADY gone false/null. Cancelling first (the earlier draft of this fix) let a still-truthy
+  // state.domain/sess.active pass those guards and render a brand-new item + start a fresh prompt
+  // clip for the OUTGOING profile mid-switch, with nothing left to stop it afterward.
+  let hadActiveSession = false;
+  if (state.arcade.active){ hadActiveSession = true; state.arcade.active = false; cancelArcadeTimer(state.arcade); state.arcade.currentItem = null; }
+  if (state.everything.active){ hadActiveSession = true; state.everything.active = false; cancelArcadeTimer(state.everything); state.everything.currentItem = null; }
+  if (state.domain) hadActiveSession = true;
+  state.domain = null; state.currentItem = null;
+  cancelShrugTimer(); // same belt-and-braces cleanup backToMap() does — harmless no-op if nothing was armed
+  if (hadActiveSession){
+    const streakEl = $("arcadeStreak");
+    if (streakEl) streakEl.style.display = "none"; // same HUD cleanup exitArcadeSession() does
+    ttsCancel(); stopClip();
+  }
   const d = loadProfiles();
   const p = d.profiles.find(x => x.id === id);
   if (!p) return;
