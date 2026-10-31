@@ -1680,6 +1680,8 @@ const state = {
   name: "", age: 30, arity: 4, domainIdx: -1, domain: null,
   finalDomains: {}, stars: 0, locked: false, checklist: new Set(),
   currentItem: null, firstTry: true, muted: false,
+  stkEv: null, // v15.3: sticker-book session-local event flags {pid, streak10, brave} — see stickerNote()
+  stickerBack: "picker", // v15.3: where the sticker book's Back button returns to
   braveGuesses: 0, // v12: "brave guess" chip counter — session-local only, see braveGuess()'s own comment
   sessionMode: null, // "single" (picker: one domain, return to picker) | "all" (Play everything!)
   // v14 (Feature 2): "play"|"eval" ("Check-in"). `mode` is the LOCKED value for the play session
@@ -5404,6 +5406,7 @@ function maybeScoredMilestone(){
     if (n === 3 || n === 5 || n === 10){
       showMilestone(n);
     }
+    if (n === 10) stickerNote("streak10"); // v15.3: sticker book 🔥 — see stickerDerive()
   } catch(e){}
 }
 
@@ -5756,6 +5759,7 @@ function hintBody(it){
 const BRAVE_GUESS_LINES = ["Brave guess!", "I love that you tried!", "Guessing makes your brain grow!"];
 function braveGuess(){
   state.braveGuesses = (state.braveGuesses || 0) + 1;
+  stickerNote("brave"); // v15.3: sticker book "first brave guess" — session-local flag, see stickerDerive()
   const chip = $("braveChip"), count = $("braveCount");
   if (!chip) return;
   chip.style.display = "inline-flex";
@@ -5876,6 +5880,10 @@ function recordDomainCompletion(domainKey){
   const c = loadCompletions();
   c.total = (c.total || 0) + 1;
   c.lockedUntil = c.lockedUntil || {};
+  // v15.3: per-domain completion count (sticker book gold = 3rd). A profile that predates `counts` but already has a
+  // lockedUntil entry for this domain has completed it at least once, so the new count floors at (that 1) + 1.
+  c.counts = (c.counts && typeof c.counts === "object") ? c.counts : {};
+  c.counts[domainKey] = Math.max(c.counts[domainKey] || 0, c.lockedUntil[domainKey] ? 1 : 0) + 1;
   c.lockedUntil[domainKey] = c.total + 5;
   persistSet(pk("tg_completions"), JSON.stringify(c)); // v9.3-style dual-write, see persistSet(); v11: per-profile
   scheduleSyncPut(); // v11: rotation-lock progress is sync-worthy
@@ -5914,6 +5922,144 @@ function lockedTileTap(tile){
   if (isAnyAudioPlaying()) return;
   speak(LOCKED_DOMAIN_LINE);
 }
+
+/* =====================================================================
+   v15.3: STICKER BOOK — per-profile reward collection.
+   Storage: `tg_stickers:<profileId>` = { stickerId: isoDateEarned } (dual-written via persistSet like
+   every other per-profile key; union-by-key merge keeping the EARLIEST date — see mergeStickers()).
+   Sticker ids: d_<domainKey> (first completion of a domain), g_<domainKey> (gold: 3rd completion —
+   same SLOT as d_<key>, just upgraded), and the STICKER_MILESTONES ids below. 26 domain slots + 9
+   milestone slots = 35 slots.
+   NOTHING is trusted from the stored record alone: stickerDerive() recomputes every sticker that is
+   earned from history (tg_sessions) + tg_completions (incl. its v15.3 `counts`) + tg_arcade, purely
+   and idempotently, and stickerAwardNow() unions that with the stored record. So a wiped tablet that
+   re-syncs its history re-derives the same set. Only two things can't be derived from persisted
+   history and ride on session-local flags (state.stkEv, hooked from braveGuess()/the v15.1 milestone
+   code): a brave guess made in an ARCADE, and a 10-streak in a scored domain that never reached a save.
+   Awarding happens at three "moments" (results, a finished domain's interlude, leaving an arcade) —
+   stickerAwardMoment() — and shows at most STICKER_MAX_CARDS "New sticker!" cards; the rest just land
+   in the book. The book page itself (stickerView) is view-only: it unions stored + derived without
+   writing, so opening it never swallows a pending "New sticker!" card.
+   ===================================================================== */
+const STICKER_EARN_LINE = "You earned a sticker!"; // spoken once per award moment — enumerated in collectAllSayStrings()
+const STICKER_MAX_CARDS = 3, STICKER_CARD_MS = 3000;
+const STICKER_MILESTONES = [
+  { id:"m_first",  emoji:"🌟", label:"First game!" },
+  { id:"m_d5",     emoji:"🎈", label:"5 stickers" },
+  { id:"m_d10",    emoji:"🎉", label:"10 stickers" },
+  { id:"m_en",     emoji:"🏆", label:"All English games" },
+  { id:"m_zh",     emoji:"🐲", label:"All Mandarin games" },
+  { id:"m_arcade", emoji:"🎪", label:"First arcade" },
+  { id:"m_streak", emoji:"🔥", label:"10 in a row" },
+  { id:"m_brave",  emoji:"💪", label:"First brave guess" },
+  { id:"m_days7",  emoji:"📅", label:"7 days of play" },
+];
+const STICKER_RING = { "Words & Sounds":"#ff6b8b", "Numbers & Shapes":"#4ecdc4", "World & Ideas":"#6bcb77", "Feelings & Body":"#c56bff", "中文 Mandarin":"#e63946" };
+// Every slot, in book order: milestones first, then each picker section's domains (DOMAINS[] order within it).
+function stickerSlots(){
+  const slots = STICKER_MILESTONES.map(m => ({ id: m.id, kind: "ms", emoji: m.emoji, label: m.label, ring: "#ffb84d", section: "Special stickers" }));
+  const secs = [];
+  for (const d of DOMAINS){
+    const name = d.section || "More";
+    let s = secs.find(x => x.name === name);
+    if (!s){ s = { name, doms: [] }; secs.push(s); }
+    s.doms.push(d);
+  }
+  for (const s of secs) for (const d of s.doms) slots.push({ id: "d_" + d.key, gid: "g_" + d.key, kind: "dom", emoji: d.emoji, label: d.label, ring: STICKER_RING[d.section] || "#ffb84d", section: s.name });
+  return slots;
+}
+function loadStickers(){
+  try { return mergeStickers(JSON.parse(localStorage.getItem(pk("tg_stickers")) || "{}"), null); } catch(e){ return {}; }
+}
+function saveStickers(rec){ persistSet(pk("tg_stickers"), JSON.stringify(rec)); scheduleSyncPut(); }
+// Session-local event flags (per profile id so a profile switch can never leak one child's flag to another).
+function stickerNote(kind){
+  try {
+    const pid = state.activeProfileId;
+    if (!pid) return;
+    if (!state.stkEv || state.stkEv.pid !== pid) state.stkEv = { pid, streak10: false, brave: false };
+    state.stkEv[kind] = true;
+  } catch(e){}
+}
+function stickerEv(){ const e = state.stkEv; return (e && e.pid === state.activeProfileId) ? e : {}; }
+// PURE. Returns { stickerId: isoDate|null } for every sticker earned given the inputs (null = no date
+// recoverable from history — the awarder stamps "now"). Idempotent: same inputs -> same ids.
+function stickerDerive(sessions, completions, arcade, ev){
+  const out = {};
+  completions = completions || {}; ev = ev || {};
+  const counts = completions.counts || {}, lu = completions.lockedUntil || {};
+  const numOf = (v) => (typeof v === "number" && isFinite(v) && v > 0) ? v : 0;
+  let nDom = 0, nEn = 0, nEnAll = 0, nZh = 0, nZhAll = 0;
+  for (const d of DOMAINS){
+    // `lockedUntil[key]` exists once a domain has been completed at all (pre-v15.3 profiles have no `counts`), so it floors the count at 1.
+    const c = Math.max(numOf(counts[d.key]), lu[d.key] ? 1 : 0);
+    const zh = d.lang === "zh";
+    if (zh) nZhAll++; else nEnAll++;
+    if (c >= 1){ out["d_" + d.key] = null; nDom++; if (zh) nZh++; else nEn++; }
+    if (c >= 3) out["g_" + d.key] = null;
+  }
+  if (nDom >= 5) out.m_d5 = null;
+  if (nDom >= 10) out.m_d10 = null;
+  if (nEnAll && nEn === nEnAll) out.m_en = null;
+  if (nZhAll && nZh === nZhAll) out.m_zh = null;
+  const ss = (Array.isArray(sessions) ? sessions : []).filter(s => s && typeof s === "object" && s.date && isFinite(Date.parse(s.date)))
+    .sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+  if (ss.length) out.m_first = ss[0].date;
+  else if (numOf(completions.total) || nDom) out.m_first = null;
+  // 7 different (local) calendar days with a saved session; dated at the session that reached the 7th.
+  const days = new Set();
+  for (const s of ss){
+    const d = new Date(s.date);
+    days.add(d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate());
+    if (days.size >= 7){ out.m_days7 = s.date; break; }
+  }
+  // brave guess: any genuine wrong attempt (not a shrug / skip / bonus comeback card) in a saved session; 10-streak: ten first-try-correct in a row within a domain.
+  let braveDate = null, streakDate = null;
+  for (const s of ss){
+    for (const dk of Object.keys(s.domains || {})){
+      const items = s.domains[dk] && Array.isArray(s.domains[dk].items) ? s.domains[dk].items : [];
+      let run = 0;
+      for (const r of items){
+        if (!r || r.comeback) continue;
+        if (!r.correct && !r.dontKnow && !r.shrug && !r.skipped && braveDate === null) braveDate = s.date;
+        run = r.correct ? run + 1 : 0;
+        if (run >= 10 && streakDate === null) streakDate = s.date;
+      }
+    }
+  }
+  if (braveDate) out.m_brave = braveDate;
+  if (streakDate) out.m_streak = streakDate;
+  const ar = normalizeArcadeStats(arcade);
+  if ((ar.mixitup.totalPlays || 0) + (ar.everything.totalPlays || 0) > 0) out.m_arcade = null;
+  if (Math.max(ar.mixitup.bestStreak || 0, ar.everything.bestStreak || 0) >= 10 && !("m_streak" in out)) out.m_streak = null;
+  if (ev.brave && !("m_brave" in out)) out.m_brave = null;
+  if (ev.streak10 && !("m_streak" in out)) out.m_streak = null;
+  return out;
+}
+function stickerDeriveForActive(){ return stickerDerive(loadSessions(), loadCompletions(), loadArcadeStats(), stickerEv()); }
+// Derive + union with the stored record, persist if anything changed, return the NEWLY earned ids in
+// display order (domain stickers, then golds, then milestones). Idempotent: a second call returns [].
+function stickerAwardNow(){
+  if (!state.activeProfileId) return [];
+  const stored = loadStickers();
+  const derived = stickerDeriveForActive();
+  const nowIso = new Date().toISOString();
+  const cand = {};
+  for (const id of Object.keys(derived)) cand[id] = derived[id] || nowIso;
+  const merged = mergeStickers(stored, cand);
+  const fresh = Object.keys(merged).filter(id => !(id in stored));
+  if (fresh.length || JSON.stringify(merged) !== JSON.stringify(stored)) saveStickers(merged);
+  const slotIdx = new Map(stickerSlots().map((s, i) => [s.id, i]));
+  const ord = (id) => { const base = id.startsWith("g_") ? "d_" + id.slice(2) : id; return (id.startsWith("d_") ? 0 : id.startsWith("g_") ? 1 : 2) * 1000 + (slotIdx.get(base) || 0); };
+  return fresh.sort((a, b) => ord(a) - ord(b));
+}
+// View-only: every slot with earned/gold flags (stored ∪ derived), no writes.
+function stickerView(){
+  const stored = loadStickers(), derived = stickerDeriveForActive();
+  const has = (id) => (id in stored) || (id in derived);
+  return stickerSlots().map(s => Object.assign({}, s, { earned: has(s.id), gold: !!(s.gid && has(s.gid)) }));
+}
+function stickerCount(){ return stickerView().filter(s => s.earned).length; }
 
 /* ---------- v11: "Who's playing?" child-profile chooser ----------
    Bug fix (2026-08-19): tapping an existing child's card used to prefill #startScreen's
@@ -7800,7 +7946,7 @@ function base64ToBlob(b64, type){
   return new Blob([arr], { type: type || "audio/webm" });
 }
 async function exportData(){
-  const payload = { exportedAt: new Date().toISOString(), tg_sessions: loadSessions(), tg_checklist: JSON.parse(localStorage.getItem(pk("tg_checklist")) || "[]") }; // v11: active profile's data
+  const payload = { exportedAt: new Date().toISOString(), tg_sessions: loadSessions(), tg_checklist: JSON.parse(localStorage.getItem(pk("tg_checklist")) || "[]"), tg_stickers: loadStickers() }; // v11: active profile's data; v15.3: + sticker book
   // v8: voice recordings are OPT-IN (checkbox on the Progress screen) — plain
   // sessions-only export stays the default, unaffected by this addition.
   const includeAudio = $("exportIncludeAudio") && $("exportIncludeAudio").checked;
@@ -7868,6 +8014,9 @@ function importData(evt){
       data.tg_checklist.forEach(w => cur.add(w));
       persistSet(pk("tg_checklist"), JSON.stringify([...cur])); // v9.3: dual-write; v11: active profile
     }
+    if (data.tg_stickers && typeof data.tg_stickers === "object" && !Array.isArray(data.tg_stickers)){
+      persistSet(pk("tg_stickers"), JSON.stringify(mergeStickers(loadStickers(), data.tg_stickers))); // v15.3: union, earliest date wins; junk entries dropped by mergeStickers
+    }
     scheduleSyncPut();
     if (audioCount){
       let imported = 0, failed = 0;
@@ -7927,7 +8076,40 @@ function mergeCompletions(a, b){
   const au = a.lockedUntil || {}, bu = b.lockedUntil || {};
   const lockedUntil = {};
   for (const k of new Set([...Object.keys(au), ...Object.keys(bu)])) lockedUntil[k] = Math.max(au[k] || 0, bu[k] || 0);
-  return { total, lockedUntil };
+  // v15.3: `counts` = how many times each domain has been COMPLETED (drives the sticker book's
+  // gold variant; see index.html recordDomainCompletion). Same monotonic max-per-key rule, with a
+  // numeric guard so a malformed/foreign value can never poison the max. An OLD client's blob has
+  // no `counts` at all -> treated as {} here, so the other side's counts always survive.
+  const num = (v) => (typeof v === "number" && isFinite(v) && v > 0) ? v : 0;
+  const ac = (a.counts && typeof a.counts === "object") ? a.counts : {}, bc = (b.counts && typeof b.counts === "object") ? b.counts : {};
+  const counts = {};
+  for (const k of new Set([...Object.keys(ac), ...Object.keys(bc)])) counts[k] = Math.max(num(ac[k]), num(bc[k]));
+  return { total, lockedUntil, counts };
+}
+// v15.3: sticker book record { stickerId: isoDateEarned }. Union by key; a key on both sides keeps
+// the EARLIEST date (a sticker is earned once — the first time wins). Fully commutative +
+// idempotent: ties and unparseable dates fall back to the lexicographically smaller string.
+// Entries that aren't a [a-z0-9_]{1,40} key -> string value are dropped (never throws on junk), and
+// a missing/non-object side (OLD client, brand-new code) just contributes nothing.
+function mergeStickers(a, b){
+  const out = {};
+  const better = (x, y) => { // is date string x strictly earlier than y?
+    const tx = Date.parse(x), ty = Date.parse(y), fx = isFinite(tx), fy = isFinite(ty);
+    if (fx && fy) return tx < ty || (tx === ty && x < y);
+    if (fx !== fy) return fx;
+    return x < y;
+  };
+  for (const src of [a, b]){
+    if (!src || typeof src !== "object" || Array.isArray(src)) continue;
+    for (const k of Object.keys(src)){
+      const v = src[k];
+      if (!/^[a-z0-9_]{1,40}$/.test(k) || typeof v !== "string") continue;
+      if (!(k in out) || better(v, out[k])) out[k] = v;
+    }
+  }
+  const sorted = {};
+  for (const k of Object.keys(out).sort()) sorted[k] = out[k];
+  return sorted;
 }
 // v10.1: normalizes tg_arcade to the per-mode nested shape { mixitup:{...}, everything:{...} },
 // migrating the v10 flat shape (a single undifferentiated {totalPlays,bestStreak,introShown} —
@@ -7985,6 +8167,7 @@ function mergeProfileBundle(a, b){
     checklist: mergeChecklistArr(a.checklist, b.checklist),
     completions: mergeCompletions(a.completions, b.completions),
     arcade: mergeArcade(a.arcade, b.arcade),
+    stickers: mergeStickers(a.stickers, b.stickers), // v15.3
   };
 }
 function mergeProfiles(a, b){
@@ -8476,6 +8659,12 @@ async function reconcileProfileKeys(id, idbOk){
   let idbArcade = null; if (idbArcadeRaw){ try { idbArcade = JSON.parse(idbArcadeRaw); } catch(e){} }
   let lsArcade = null; try { const r = localStorage.getItem(`tg_arcade:${id}`); lsArcade = r ? JSON.parse(r) : null; } catch(e){}
   persistSet(`tg_arcade:${id}`, JSON.stringify(mergeArcade(lsArcade, idbArcade)));
+
+  // v15.3: sticker book — union by key (earliest date wins) across the two tiers; only written when a tier actually has any (no key minted for profiles that never earned one).
+  const idbStickersRaw = idbOk ? await kvGet(`tg_stickers:${id}`) : null;
+  let idbStickers = null; if (idbStickersRaw){ try { idbStickers = JSON.parse(idbStickersRaw); } catch(e){} }
+  let lsStickers = null; try { const r = localStorage.getItem(`tg_stickers:${id}`); lsStickers = r ? JSON.parse(r) : null; } catch(e){}
+  if (lsStickers || idbStickers) persistSet(`tg_stickers:${id}`, JSON.stringify(mergeStickers(lsStickers, idbStickers)));
 
   return { sessionsChanged, checklistChanged };
 }
@@ -9007,6 +9196,7 @@ function arcadeCelebrationLevelFor(streak){
 // would otherwise let a celebration line start speaking on the picker screen.
 function celebrateArcadeStreak(sess, level, cb){
   if (!sess.active){ return; }
+  if (level === 10) stickerNote("streak10"); // v15.3: sticker book 🔥 (arcade bestStreak also derives it from history)
   showMilestone(level); // v15.1: visual-only overlay alongside the existing confetti/fanfare/spoken line
   if (level === 3){ confetti(6); speak(pick(ARCADE_STREAK_LINES_3), cb); }
   else if (level === 5){ confetti(24); fanfare(); speak(pick(ARCADE_STREAK_LINES_5), cb); }
