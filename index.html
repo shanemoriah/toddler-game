@@ -5910,7 +5910,7 @@ function enterPlayForProfile(p, age, name, silent){
   $("quitBtn").style.display = "block";
   // v15.3: sticker book baseline — only for a profile with NO stored stickers yet (pre-v15.3 profile / wiped tablet re-derived from synced history).
   // A same-profile re-entry or a profile that already has its record must never absorb stickers earned (but not yet celebrated) in a previous visit.
-  if (!(_stkBase.pid === p.id && _stkBase.ids) && Object.keys(loadStickers()).length === 0) stickerRebase();
+  if (!(_stkBase.pid === p.id && _stkBase.full) && Object.keys(loadStickers()).length === 0) stickerRebase();
   if (silent){ showPicker(); return; }
   // v9: name-free greeting so it's cacheable as one bundled clip regardless
   // of which child is playing — see collectAllSayStrings()'s doc comment.
@@ -6098,7 +6098,7 @@ function stickerDeriveForActive(){ return stickerDerive(loadSessions(), loadComp
 // family pull) was earned in the PAST — a wiped tablet (Fire kids browser) or a pre-v15.3 profile re-derives it all, and it
 // must land in the book silently rather than re-celebrate on every launch. Deliberately NOT refreshed after later syncs: a
 // PUT response applied 2s after a save would otherwise absorb a sticker earned moments ago, before its card.
-let _stkBase = { pid: null, ids: null };
+let _stkBase = { pid: null, ids: null, full: false }; // full = a whole-history baseline was taken (a delta-only base from a pull must not count as one)
 // `only` (optional Set of ids): add just those (used by the post-pull delta). Session-local event flags are deliberately NOT
 // part of the baseline derive — a brave guess / streak flagged this session is a reward owed, not history.
 function stickerDeriveHistory(){ return stickerDerive(loadSessions(), loadCompletions(), loadArcadeStats(), {}); }
@@ -6107,7 +6107,7 @@ function stickerRebase(only){
     const pid = state.activeProfileId; if (!pid) return;
     const cur = (_stkBase.pid === pid && _stkBase.ids) ? _stkBase.ids : new Set();
     for (const k of Object.keys(stickerDeriveHistory())) if (!only || only.has(k)) cur.add(k);
-    _stkBase = { pid, ids: cur };
+    _stkBase = { pid, ids: cur, full: !!(!only || (_stkBase.pid === pid && _stkBase.full)) }; // QA16: a post-pull delta (only) made before the child taps the profile card must not suppress the full baseline in enterPlayForProfile()
   } catch(e){}
 }
 function stickerAwardNow(){
