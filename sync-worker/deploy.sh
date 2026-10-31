@@ -35,7 +35,12 @@ URL=$(echo "$OUT" | grep -Eo 'https://[a-z0-9.-]+\.workers\.dev' | head -1)
 sed -i '' -E "s|const SYNC_URL = \"[^\"]*\"|const SYNC_URL = \"$URL\"|" ../index.html
 echo
 echo "✓ Deployed: $URL"
-echo "✓ index.html SYNC_URL set. Committing + pushing…"
-cd .. && git add index.html sync-worker/wrangler.toml && git commit -q -m "v11: wire deployed sync worker URL
+cd ..
+if git diff --quiet -- index.html sync-worker/wrangler.toml; then
+  echo "✓ SYNC_URL unchanged; nothing to commit."
+else
+  echo "✓ index.html SYNC_URL changed. Committing + pushing…"
+  git add index.html sync-worker/wrangler.toml && git commit -q -m "sync: wire deployed worker URL
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>" && git push -q && echo "✓ Pushed. GitHub Pages will pick it up in ~1 min."
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" && git push -q && echo "✓ Pushed. GitHub Pages will pick it up in ~1 min."
+fi
