@@ -6101,7 +6101,13 @@ function stickerDeriveForActive(){ return stickerDerive(loadSessions(), loadComp
 let _stkBase = { pid: null, ids: null, full: false }; // full = a whole-history baseline was taken (a delta-only base from a pull must not count as one)
 // `only` (optional Set of ids): add just those (used by the post-pull delta). Session-local event flags are deliberately NOT
 // part of the baseline derive — a brave guess / streak flagged this session is a reward owed, not history.
-function stickerDeriveHistory(){ return stickerDerive(loadSessions(), loadCompletions(), loadArcadeStats(), {}); }
+// v15.4: arcade stats this launch (recordArcadePlay / a new bestStreak) are an OWED reward, not history: m_arcade / arcade-derived m_streak have no
+// award moment before the arcade exit, so a baseline computed after arcade play but before that card (A->B->A re-entry with an empty record, an import)
+// would absorb them silently. For a profile that played arcade this launch the baseline therefore derives WITHOUT arcade stats.
+// (Arcade history from before this launch is already covered: the first-entry full baseline ran before any arcade play, with the flag unset.)
+const _stkArcadeLaunch = new Set();
+function stickerNoteArcadeLaunch(){ try { if (state.activeProfileId) _stkArcadeLaunch.add(state.activeProfileId); } catch(e){} }
+function stickerDeriveHistory(){ return stickerDerive(loadSessions(), loadCompletions(), _stkArcadeLaunch.has(state.activeProfileId) ? null : loadArcadeStats(), {}); }
 function stickerRebase(only){
   try {
     const pid = state.activeProfileId; if (!pid) return;
@@ -9113,10 +9119,11 @@ function recordArcadePlay(mode){
   const s = loadArcadeStats();
   s[mode].totalPlays = (s[mode].totalPlays || 0) + 1;
   saveArcadeStats(s);
+  stickerNoteArcadeLaunch(); // v15.4: see stickerDeriveHistory()
 }
 function persistArcadeBestStreakIfHigher(sess){
   const s = loadArcadeStats();
-  if (sess.streak > (s[sess.mode].bestStreak || 0)){ s[sess.mode].bestStreak = sess.streak; saveArcadeStats(s); }
+  if (sess.streak > (s[sess.mode].bestStreak || 0)){ s[sess.mode].bestStreak = sess.streak; saveArcadeStats(s); stickerNoteArcadeLaunch(); }
 }
 function arcadeIntroShown(mode){ return !!loadArcadeStats()[mode].introShown; }
 function markArcadeIntroShown(mode){
