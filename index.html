@@ -2776,7 +2776,8 @@ function makeDragSoundItem(d, pool, arity){
 const DRAG_LETTER_PIC_MAX_AGE = 56;
 const DRAG_LETTER_PIC_EXCLUDE = new Set(["old key","planet","globe","wind","rain","comet","asteroid","sunrise","galaxy",
   "tornado","hurricane","star","hat","pan","ball","lamp","mittens","boots","flower","snow","seashell","swim goggles",
-  "cup","gem","genie","saturn","long drum","museum","compass"]);
+  "cup","gem","genie","saturn","long drum","museum","compass",
+  "telephone","pasta","magnifying glass","dinosaur","tennis"]); // kids call these "phone"/"spaghetti"/"glass"/"T-rex"/"ball" — a correct-by-sound drop must never grade wrong
 const DRAG_LETTER_PICS = VOCAB_WORDS
   .filter(([w, , age]) => age <= DRAG_LETTER_PIC_MAX_AGE && !DRAG_LETTER_PIC_EXCLUDE.has(w) && !/^(ch|sh|wr|kn|ph|sc)/i.test(w))
   .map(([word, emoji, age]) => ({ word, emoji, age, letter: word[0].toUpperCase() }));
@@ -6497,7 +6498,7 @@ function recordResult(it, firstTry, extra, cOverride){
      ctx.locked()   -> true once that item is resolved / the session is gone
      ctx.onDrop(i)  -> a drop landed on DOM target index i (already hit-tested + staleness-checked
                        here too — the handler's own forItem guard is the second line of defence)
-     ctx.onTapChip(it)? -> chip tapped without dragging (replays its short sound/letter/number)
+     (a tap on the chip without dragging replays its short sound/letter/number — dragChipReplay)
    Targets are ordinary `.tile`s in #board (so .correct/.reveal/.dim/.hint-elim styling and every
    tile-grid consumer keep working); the draggable chip lives in #dragZone below the board.
    Why Pointer Events + rect hit-testing (not HTML5 drag/drop): the Fire tablet's kids browser has
@@ -6574,6 +6575,7 @@ function dragNudge(it){
   const chip = dragChipFor(it);
   if (!chip || chip.classList.contains("placed")) return;
   chip.classList.remove("nudge"); void chip.offsetWidth; chip.classList.add("nudge");
+  setTimeout(() => chip.classList.remove("nudge"), 700); // let the idle bob resume
 }
 // Chip tapped without dragging: replay its short sound/letter/number (sanctioned interrupt, then a
 // beat — same shape as repeatPrompt()). `holderItem` is re-read after the beat, never trusted stale.
@@ -6590,12 +6592,24 @@ function attachDrag(chip, it, ctx){
   const drag = chip._drag = {
     live(){ return ctx.current() === it && !ctx.locked(); },
     down(ev){
-      if (active) return; // a pointer is already tracked — a second finger/long-press echo is ignored
+      // review fix: a stale `active` (both pointerup and lostpointercapture dropped by an OS interrupt)
+      // must not lock the chip — only trust it while its pointer still holds capture. (Synthetic
+      // events carry no real capture, so a second synthetic pointer id takes over — real touches are
+      // captured on pointerdown, so a genuine second finger is still ignored.)
+      if (active){
+        let held = true;
+        try { held = chip.hasPointerCapture(active.id); } catch(e){}
+        if (held || ev.pointerId === active.id) return; // a pointer is already tracked — a second finger/long-press echo is ignored
+        active = null; chip.classList.remove("dragging");
+      }
       if (ev.pointerType === "mouse" && ev.button) return; // primary button only
       if (!drag.live()) return;
+      // review fix: snap home (no transition) BEFORE measuring, so a re-grab mid-return-animation
+      // doesn't leave the chip jumping away from the finger with a stale rest rect.
+      chip.classList.remove("placed"); chip.classList.add("dragging");
+      chip.style.transform = ""; chip._pos = { dx: 0, dy: 0 };
       active = { id: ev.pointerId, x0: ev.clientX, y0: ev.clientY, nat: chip.getBoundingClientRect(), snap: ctx.current(), maxMove: 0 };
       try { chip.setPointerCapture(ev.pointerId); } catch(e){}
-      chip.classList.remove("placed"); chip.classList.add("dragging");
     },
     move(ev){
       if (!active || ev.pointerId !== active.id) return;
@@ -6672,7 +6686,6 @@ function renderDragBoard(it, order, ctx){
   chip.className = "drag-chip";
   chip.innerHTML = `<span class="dc-in">${it.drag.html}</span>`;
   chip._forItem = it; chip._pos = { dx: 0, dy: 0 };
-  ctx.onTapChip = ctx.onTapChip || (() => {});
   attachDrag(chip, it, ctx);
   zone.appendChild(chip);
 }
