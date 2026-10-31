@@ -8542,25 +8542,36 @@ function buildLocalSyncBlob(){
 }
 // Applies a (merged) sync blob back onto local storage — every key it touches goes through
 // persistSet(), so this also keeps the IndexedDB mirror in sync exactly like every other write
-// in this file. Recomputes tg_profiles too (profiles array from the blob), preserving whichever
+// in this file. Recomputes tg_profiles too (v15.4: UNION of the blob's profiles and the local list, not an overwrite), preserving whichever
 // activeProfileId this DEVICE already had (a device's choice of "who's playing right now" is
 // local UI state, not something the family blob should override — see the blob's own shape,
 // which deliberately has no activeProfileId field).
 function applySyncBlobLocally(blob){
   if (!blob || !Array.isArray(blob.profiles)) return;
   const d = loadProfiles();
-  const stillActive = blob.profiles.some(p => p.id === d.activeProfileId);
-  saveProfiles({ profiles: blob.profiles, activeProfileId: stillActive ? d.activeProfileId : (blob.profiles[0] ? blob.profiles[0].id : null) });
+  // v15.4: EVERY list below is applied as a UNION with whatever is local NOW, never a plain overwrite. A PUT is in flight ~300ms+
+  // (seconds on a weak tablet connection); anything saved locally in that window (a finished session, a checklist finish, an
+  // arcade play, a new profile) is not in the response, so overwriting dropped it locally and the NEXT PUT then had no copy to send
+  // — real child data lost (session race pre-existing since v11). Each merge below is the SAME monotone union the server and
+  // syncPullAndMerge already use (sessions by `date`, checklist set-union, arcade/completions max, profiles by id/updatedAt), so
+  // for a server blob that already contains local this is a no-op. Side effect (intended): after a 413 prune, old local-only
+  // sessions that never fit the 1MB cap now STAY on this device instead of being deleted by the response overwrite.
+  // Last-writer-wins keys (tg_profile settings, tg_family, tg_muted, tg_visits, active profile) are deliberately not touched here.
+  const stillActive = blob.profiles.some(p => p.id === d.activeProfileId) || d.profiles.some(p => p.id === d.activeProfileId);
+  const mergedProfiles = mergeProfiles(d.profiles, blob.profiles);
+  saveProfiles({ profiles: mergedProfiles, activeProfileId: stillActive ? d.activeProfileId : (mergedProfiles[0] ? mergedProfiles[0].id : null) });
+  const lsJSON = (k) => { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : null; } catch(e){ return null; } };
   for (const [id, bundle] of Object.entries(blob.perProfile || {})){
-    persistSet(`tg_sessions:${id}`, JSON.stringify(bundle.sessions || []));
-    persistSet(`tg_checklist:${id}`, JSON.stringify(bundle.checklist || []));
+    const lsSess = lsJSON(`tg_sessions:${id}`), lsChk = lsJSON(`tg_checklist:${id}`);
+    persistSet(`tg_sessions:${id}`, JSON.stringify(mergeSessionsArr(Array.isArray(lsSess) ? lsSess : [], Array.isArray(bundle.sessions) ? bundle.sessions : [])));
+    persistSet(`tg_checklist:${id}`, JSON.stringify(mergeChecklistArr(Array.isArray(lsChk) ? lsChk : [], Array.isArray(bundle.checklist) ? bundle.checklist : [])));
     // v15.3: completions + stickers are applied as a UNION with whatever is already local rather than a plain overwrite.
     // Both merges are monotone (max / earliest-key-union), so for a v15.3 Worker this equals the server's result; for a
     // not-yet-redeployed (pre-v15.3) Worker — whose bundle merge whitelists the 4 old keys and so DROPS `completions.counts`
     // and `stickers` from every response — it keeps this device's own counts/stickers instead of wiping them.
     let lsComp = null; try { const r = localStorage.getItem(`tg_completions:${id}`); lsComp = r ? JSON.parse(r) : null; } catch(e){}
     persistSet(`tg_completions:${id}`, JSON.stringify(mergeCompletions(lsComp, bundle.completions)));
-    persistSet(`tg_arcade:${id}`, JSON.stringify(normalizeArcadeStats(bundle.arcade)));
+    persistSet(`tg_arcade:${id}`, JSON.stringify(mergeArcade(lsJSON(`tg_arcade:${id}`), bundle.arcade))); // v15.4: max-union (was overwrite)
     let lsStk = null; try { const r = localStorage.getItem(`tg_stickers:${id}`); lsStk = r ? JSON.parse(r) : null; } catch(e){}
     const mergedStk = mergeStickers(lsStk, bundle.stickers);
     if (Object.keys(mergedStk).length) persistSet(`tg_stickers:${id}`, JSON.stringify(mergedStk));
@@ -8584,7 +8595,7 @@ function applySyncBlobLocally(blob){
 // `date` with the INCOMING side winning ties. PUTting a stripped copy of an ALREADY-SYNCED session
 // (same date, now with `items` emptied) would overwrite the server's full-fidelity copy with the
 // stripped one — and the PUT response then gets applied locally via applySyncBlobLocally(),
-// overwriting this device's own full copy too. Net effect: the first time a family's history
+// overwriting this device's own full copy too (v15.4: applySyncBlobLocally now UNIONS instead of overwriting, so that exact path is also closed by construction). Net effect: the first time a family's history
 // crossed 1MB, every old session's item-level detail would have been PERMANENTLY destroyed
 // everywhere. Fixed direction: NEVER mutate a session's own content — see below.
 //
