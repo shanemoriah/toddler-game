@@ -427,6 +427,24 @@
   .confetti { position: fixed; top: -20px; font-size: 22px; pointer-events: none; z-index: 50; animation: fall linear forwards; }
   @keyframes fall { to { transform: translateY(105vh) rotate(720deg); opacity: .6; } }
 
+  /* ---------- v15.1: correct-answer celebration (burst + fox hop) ----------
+     Fire-and-forget overlay: a tiny fixed, pointer-events:none container is dropped at the tapped
+     element's center, holds ~12 particles that each animate ONLY transform+opacity (Fire-tablet
+     GPU budget), and is removed from the DOM ~0.9s later. Never touches game timers/state. */
+  .fx-burst { position: fixed; width: 0; height: 0; pointer-events: none; z-index: 55; }
+  .fx-p { position: absolute; left: -5px; top: -5px; width: 10px; height: 10px; border-radius: 50%; opacity: 0; animation: fxBurst .7s cubic-bezier(.15,.7,.3,1) forwards; }
+  .fx-p.star { background: none !important; width: auto; height: auto; font-size: 17px; line-height: 1; left: -9px; top: -9px; }
+  @keyframes fxBurst { 0% { transform: translate(0,0) scale(.3); opacity: 1; } 65% { opacity: 1; } 100% { transform: translate(var(--dx), var(--dy)) scale(1); opacity: 0; } }
+  .tile.correct { animation: popBig .55s ease-out; }
+  @keyframes popBig { 0%{transform:scale(1)} 35%{transform:scale(1.18)} 62%{transform:scale(.97)} 100%{transform:scale(1)} }
+  /* happy fox hop (squash-and-stretch) — replaces the plain `bounce` class on correct answers */
+  #mascot.hop { animation: foxHop .7s ease-out; }
+  @keyframes foxHop { 0%{transform:translateY(0) scale(1.08,.9)} 25%{transform:translateY(-22px) scale(.94,1.1) rotate(-8deg)} 55%{transform:translateY(0) scale(1.08,.9) rotate(4deg)} 75%{transform:translateY(-7px) scale(1)} 100%{transform:translateY(0) scale(1)} }
+  @media (prefers-reduced-motion: reduce) {
+    .tile.correct { animation: none; }
+    #mascot.hop { animation: none; }
+  }
+
   /* ---------- interlude ---------- */
   #interlude .bigEmoji { font-size: 110px; animation: bounce 1s infinite; }
 
@@ -2025,6 +2043,7 @@ function tapBodyPart(part, el, forItem){
     if (state.firstTry){ addStar(); confetti(8); }
     scoreAnswer(it, state.firstTry);
     $("mascot").classList.remove("bounce"); void $("mascot").offsetWidth; $("mascot").classList.add("bounce");
+    celebrateCorrect(el, state.domain.key); // v15.1
     speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]));
     setTimeout(() => { renderItem(); }, 1300);
   } else {
@@ -4975,6 +4994,68 @@ function confetti(n=18){
   }
 }
 
+/* ---------- v15.1: correct-answer celebration (burst from the tapped element + fox hop) ----------
+   Pure presentation, fire-and-forget: never reads/writes game state, never schedules or delays an
+   advance — every call site is wrapped so a throw here can never break answer handling. Particle
+   colors follow the domain's picker section (arcades = rainbow). */
+const FX_RAINBOW = ["#ff6b6b","#ffb84d","#ffe45e","#6bcb77","#4ecdc4","#6b8fff","#c56bff"];
+const SECTION_FX = {
+  "Words & Sounds":   { pal: ["#ff6b8b","#ff9aa8","#ffd166","#ffffff","#ff8a3d"], tint: "rgba(255,107,139,.16)" },
+  "Numbers & Shapes": { pal: ["#4ecdc4","#6b8fff","#a0e7e5","#ffd166","#ffffff"], tint: "rgba(78,205,196,.18)" },
+  "World & Ideas":    { pal: ["#6bcb77","#b5e48c","#ffe45e","#ff9f43","#ffffff"], tint: "rgba(107,203,119,.18)" },
+  "Feelings & Body":  { pal: ["#c56bff","#ff8fd0","#ffd1f0","#ffb84d","#ffffff"], tint: "rgba(197,107,255,.15)" },
+  "中文 Mandarin":     { pal: ["#e63946","#ffb703","#ff6b6b","#ffe45e","#ffffff"], tint: "rgba(230,57,70,.12)" },
+};
+function fxReduced(){
+  try { return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); } catch(e){ return false; }
+}
+function fxForDomainKey(key){
+  const d = key ? DOMAINS.find(x => x.key === key) : null;
+  return (d && SECTION_FX[d.section]) || { pal: FX_RAINBOW, tint: "rgba(255,184,77,.14)" };
+}
+function burstFrom(el, pal){
+  if (fxReduced()) return;
+  if (document.querySelectorAll(".fx-burst").length >= 3) return; // bound live nodes under rapid taps
+  let x = (window.innerWidth || 800) / 2, y = (window.innerHeight || 600) / 2;
+  if (el && el.getBoundingClientRect){
+    const r = el.getBoundingClientRect();
+    if (r.width || r.height){ x = r.left + r.width / 2; y = r.top + r.height / 2; }
+  }
+  const box = document.createElement("div");
+  box.className = "fx-burst";
+  box.style.left = x + "px"; box.style.top = y + "px";
+  const N = 12;
+  for (let i = 0; i < N; i++){
+    const p = document.createElement("div");
+    const ang = (i / N) * Math.PI * 2 + Math.random() * 0.45;
+    const dist = 62 + Math.random() * 54;
+    p.className = "fx-p" + (i % 6 === 0 ? " star" : "");
+    if (i % 6 === 0) p.textContent = "⭐";
+    else {
+      const sz = 7 + Math.floor(Math.random() * 5);
+      p.style.width = p.style.height = sz + "px";
+      p.style.background = pal[i % pal.length];
+    }
+    p.style.setProperty("--dx", Math.round(Math.cos(ang) * dist) + "px");
+    p.style.setProperty("--dy", Math.round(Math.sin(ang) * dist) + "px");
+    box.appendChild(p);
+  }
+  document.body.appendChild(box);
+  setTimeout(() => { if (box.parentNode) box.parentNode.removeChild(box); }, 900);
+}
+function foxHop(){
+  if (fxReduced()) return;
+  const m = $("mascot");
+  if (!m) return;
+  m.classList.remove("bounce", "hop"); void m.offsetWidth; m.classList.add("hop");
+  setTimeout(() => m.classList.remove("hop"), 800);
+}
+// `el` = the tapped tile/object (burst origin; null = screen center), `domKey` = scored domain key
+// (null for arcades -> rainbow).
+function celebrateCorrect(el, domKey){
+  try { burstFrom(el, fxForDomainKey(domKey).pal); foxHop(); } catch(e){}
+}
+
 /* ---------- mute ---------- */
 function updateMuteBtn(){
   const btn = $("muteBtn");
@@ -5944,6 +6025,7 @@ function resolveComeback(it, correct, revealFn){
   if (correct){
     chimeGood(); addStar(); confetti(8);
     $("mascot").classList.remove("bounce"); void $("mascot").offsetWidth; $("mascot").classList.add("bounce");
+    celebrateCorrect(null, ds.key); // v15.1: comeback round — burst from screen center
     speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]), () => {
       setTimeout(() => { if (state.domain === ds) renderComebackItem(); }, 300);
     });
@@ -6309,6 +6391,7 @@ function tapSeekObj(word, el, forItem){
     if (state.firstTry){ addStar(); confetti(8); }
     scoreAnswer(it, state.firstTry);
     $("mascot").classList.remove("bounce"); void $("mascot").offsetWidth; $("mascot").classList.add("bounce");
+    celebrateCorrect(el, state.domain.key); // v15.1
     speak(pick(["Yes!","Great job!","You got it!","Wow!","Awesome!"]));
     setTimeout(()=>{ renderItem(); }, 1300);
   } else {
@@ -6387,6 +6470,7 @@ function tapTile(i, tileEl, forItem){
     if (state.firstTry){ addStar(); confetti(8); }
     scoreAnswer(it, state.firstTry);
     $("mascot").classList.remove("bounce"); void $("mascot").offsetWidth; $("mascot").classList.add("bounce");
+    celebrateCorrect(tileEl, state.domain.key); // v15.1: burst + fox hop (fire-and-forget; see its comment)
     // v13: within a Mandarin domain, ~half the time speak a Mandarin praise line (bundled clip
     // only, via speakZh) instead of the usual English one — every other domain is byte-identical
     // to before (this branch is never entered when !it.zh).
@@ -8537,6 +8621,7 @@ function tapArcadeTile(sess, i, tileEl, forItem){
     chimeGood();
     const firstTry = sess.firstTry;
     if (firstTry) confetti(8);
+    celebrateCorrect(tileEl, null); // v15.1
     finishArcadeQuestion(sess, firstTry);
   } else {
     chimeTry();
@@ -8567,6 +8652,7 @@ function tapArcadeSeekObj(sess, word, el, forItem){
     chimeGood();
     const firstTry = sess.firstTry;
     if (firstTry) confetti(8);
+    celebrateCorrect(el, null); // v15.1
     finishArcadeQuestion(sess, firstTry);
   } else {
     chimeTry();
@@ -8602,6 +8688,7 @@ function tapArcadeBodyPart(sess, part, el, forItem){
     chimeGood();
     const firstTry = sess.firstTry;
     if (firstTry) confetti(8);
+    celebrateCorrect(el, null); // v15.1
     finishArcadeQuestion(sess, firstTry);
   } else {
     chimeTry();
