@@ -356,6 +356,9 @@
     touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
   }
   .tile:active { transform: scale(.95); }
+  /* v15.1: pointer-driven press feedback (see attachTap) — scale-down + a slight shadow lift. Only the
+     transform animates (80ms); the shadow swaps instantly (paint-only, kept off the animation path). */
+  .tile.pressed, .picker-tile.pressed { transform: scale(.96); box-shadow: 0 7px 14px rgba(120,90,40,.2); transition-duration: .08s; }
   /* ---------- v5 (mod 4): 5-6 tile "Tricky Pictures" items get a 3-column grid + a
      shorter min-height so a 2-row layout still fits without scrolling on iPad portrait
      (and mobile — see NOTES.md v5 testing) instead of the standard 120px tiles. ---------- */
@@ -421,6 +424,7 @@
   .drag-chip.placed { box-shadow: 0 2px 0 #d96f26; }
   .drag-chip .dc-in { display: inline-flex; align-items: center; gap: 10px; animation: dragBob 1.6s ease-in-out infinite; }
   .drag-chip.dragging .dc-in, .drag-chip.placed .dc-in { animation: none; }
+  .drag-chip.dragging .dc-in { transform: scale(.96); transition: transform .08s; } /* v15.1: press feedback on the chip's inner span (outer transform is JS-driven) */
   .drag-chip.nudge:not(.dragging):not(.placed) .dc-in { animation: dragNudge .6s ease-in-out 1; }
   .drag-chip .dc-icon { font-size: .62em; }
   .drag-chip .dc-text { font-size: .52em; }
@@ -1548,11 +1552,13 @@ function attachTap(el, handler, snapshotFn){
   el.addEventListener("pointerdown", (ev) => {
     if (active) return; // a pointer is already down — ignore every additional simultaneous one
     active = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, type: ev.pointerType, snap: snapshotFn ? snapshotFn() : undefined };
+    el.classList.add("pressed"); // v15.1: press feedback (:active is unreliable on Android/Silk) — cleared on up/cancel/lostcapture
     try { el.setPointerCapture(ev.pointerId); } catch(e){} // best-effort — see comment above
   });
   el.addEventListener("pointerup", (ev) => {
     if (!active || ev.pointerId !== active.id) return; // not the tracked pointer: never fires, never clears
     const a = active; active = null;
+    el.classList.remove("pressed"); // v15.1: BEFORE the handler, so a handler-added .correct/.dim animation never fights it
     try { el.releasePointerCapture(ev.pointerId); } catch(e){}
     const moved = Math.hypot(ev.clientX - a.x, ev.clientY - a.y);
     if (moved < 12) handler(a.x, a.y, a.type, ev, a.snap);
@@ -1561,6 +1567,7 @@ function attachTap(el, handler, snapshotFn){
     if (!active || ev.pointerId !== active.id) return;
     try { el.releasePointerCapture(ev.pointerId); } catch(e){}
     active = null; // no fire — native gesture took over, or the browser cancelled the sequence
+    el.classList.remove("pressed"); // v15.1
   });
   // v9.4 adversarial-review fix: for elements created fresh every render (tiles/seek-objs/
   // picker-tiles/the body figure — all rebuilt via innerHTML="" each round), a stuck `active`
@@ -1576,6 +1583,7 @@ function attachTap(el, handler, snapshotFn){
   el.addEventListener("lostpointercapture", (ev) => {
     if (!active || ev.pointerId !== active.id) return;
     active = null;
+    el.classList.remove("pressed"); // v15.1
   });
   el.addEventListener("contextmenu", (ev) => ev.preventDefault());
 }
