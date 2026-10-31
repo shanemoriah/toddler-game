@@ -498,6 +498,32 @@
     .fx-milestone .ms-row span { animation: none; }
   }
 
+  /* ---------- v15.1: ambient scene motion ----------
+     Seek & Find boards get 3-5 tiny, faint, pointer-events:none decorations (swaying grass/seaweed,
+     a drifting leaf or steam wisp, rising bubbles, twinkling sparkles), each on a slow infinite
+     transform/opacity loop. They are inserted BEFORE the .seek-obj nodes (so objects always paint
+     above them) and own no tap behavior — object geometry/overlap margins are untouched. The
+     "Where is it?" tiles get the same idea inside their SVGs (.pos-amb: a faint drifting cloud + a
+     twinkling sparkle in the top strip, identical on every tile of an item so it is never a tell). */
+  .amb { position: absolute; pointer-events: none; opacity: .6; line-height: 0; }
+  .amb svg { display: block; }
+  .amb-sway { transform-origin: 50% 100%; animation: ambSway 3.4s ease-in-out infinite alternate; }
+  .amb-leaf { left: -40px; top: 6%; opacity: .5; animation: ambLeaf 26s linear infinite; }
+  .amb-steam { opacity: .5; animation: ambRise 6.5s ease-out infinite; }
+  .amb-bubble { opacity: .55; animation: ambRise 8s linear infinite; }
+  .amb-spark { opacity: .8; animation: ambTwinkle 2.6s ease-in-out infinite; }
+  @keyframes ambSway { from { transform: rotate(-5deg); } to { transform: rotate(5deg); } }
+  @keyframes ambLeaf { 0% { transform: translate(0,0) rotate(0deg); } 50% { transform: translate(45vw,40px) rotate(180deg); } 100% { transform: translate(100vw,0) rotate(360deg); } }
+  @keyframes ambRise { 0% { transform: translateY(0); opacity: 0; } 15% { opacity: .55; } 100% { transform: translateY(-300px); opacity: 0; } }
+  @keyframes ambTwinkle { 0%,100% { opacity: .15; transform: scale(.7); } 50% { opacity: .95; transform: scale(1.1); } }
+  .pos-amb-cloud { animation: posDrift 9s ease-in-out infinite alternate; }
+  .pos-amb-spark { animation: posTwinkle 2.4s ease-in-out infinite; }
+  @keyframes posDrift { from { transform: translateX(0); } to { transform: translateX(7px); } }
+  @keyframes posTwinkle { 0%,100% { opacity: .2; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .amb, .pos-amb-cloud, .pos-amb-spark { animation: none; }
+  }
+
   /* ---------- interlude ---------- */
   #interlude .bigEmoji { font-size: 110px; animation: bounce 1s infinite; }
 
@@ -4198,6 +4224,10 @@ function crateSVG(fx, fy, fw, fh){
 function ball(x,y,r=9,op=1){
   return `<circle cx="${x}" cy="${y}" r="${r}" fill="#e63946" opacity="${op}"/><circle cx="${x-r*0.33}" cy="${y-r*0.33}" r="${r*0.28}" fill="#ff9aa2" opacity="${op}"/>`;
 }
+// v15.1: faint ambient strip (top 0-15) shared by every position-scene SVG: a pale drifting cloud and a
+// twinkling sparkle. Same markup on every tile of an item, so it can never hint at the answer; kept
+// above y=16 where no scene element lives (highest ball top edge is y=20).
+const POS_AMB = `<g class="pos-amb-cloud"><ellipse cx="14" cy="9" rx="8" ry="3.4" fill="#dff1fb"/><ellipse cx="20" cy="7" rx="6" ry="3.6" fill="#dff1fb"/></g><path class="pos-amb-spark" d="M88 3 L89.6 7.4 L94 9 L89.6 10.6 L88 15 L86.4 10.6 L82 9 L86.4 7.4 Z" fill="#ffd84d"/>`;
 function positionScene(rel){
   const c = crateSVG(28, 56, 44, 28); // front face 28..72 x 56..84; top face back edge at y=46, spans x 28..92... see crateSVG
   let inner;
@@ -4223,7 +4253,7 @@ function positionScene(rel){
     // down/forward than the crate's own footprint — the mirror-image occlusion cue of "behind".
     case "in front of": inner = c.front + c.top + groundShadow(50,97,9,3,0.2) + ball(50,89,10); break;
   }
-  return `<svg viewBox="0 0 100 100">${inner}</svg>`;
+  return `<svg viewBox="0 0 100 100">${POS_AMB}${inner}</svg>`;
 }
 // table world: the "under" item's only real def, so its distractors are other
 // ball placements within this SAME table scene (on top, beside, behind a leg)
@@ -4251,7 +4281,7 @@ function tableScene(kind){
     // beside it, not beneath it.
     case "rightside": inner = table + groundShadow(88,80,7,2.4,0.18) + ball(88,72,9); break;
   }
-  return `<svg viewBox="0 0 100 100">${inner}</svg>`;
+  return `<svg viewBox="0 0 100 100">${POS_AMB}${inner}</svg>`;
 }
 // two-crate world: same idea for "between" — distractors are other ball
 // placements around the SAME two crates (on one crate, off to the side, tucked behind) rather
@@ -4283,7 +4313,7 @@ function twoboxScene(kind){
     // shadow (not in the near foreground).
     case "behind": inner = ball(50,52,30,0.7) + crates; break;
   }
-  return `<svg viewBox="0 0 100 100">${inner}</svg>`;
+  return `<svg viewBox="0 0 100 100">${POS_AMB}${inner}</svg>`;
 }
 function makePositionItem(d, pool, arity){
   if (d.family === "table"){
@@ -6416,6 +6446,37 @@ function seekfindSlots(n){
     };
   });
 }
+// v15.1: ambient decorations for a Seek & Find board (see the .amb CSS comment). Pure DOM adds —
+// pointer-events:none, no listeners, inserted before the objects. `kind` = scene key.
+function addSceneAmbience(wrap, kind){
+  try {
+    if (fxReduced()) return;
+    const mk = (cls, left, top, bottom, svg, extra) => {
+      const d = document.createElement("div");
+      d.className = "amb " + cls; d.setAttribute("aria-hidden", "true");
+      if (left != null) d.style.left = left; if (top != null) d.style.top = top; if (bottom != null) d.style.bottom = bottom;
+      if (extra) d.style.cssText += extra;
+      d.innerHTML = svg; wrap.appendChild(d);
+    };
+    const blades = (c) => `<svg viewBox="0 0 40 34" width="40" height="34"><path d="M4 34 L9 6 L13 34 Z M15 34 L21 0 L26 34 Z M28 34 L34 10 L38 34 Z" fill="${c}"/></svg>`;
+    const spark = `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 0 L14.4 9.6 L24 12 L14.4 14.4 L12 24 L9.6 14.4 L0 12 L9.6 9.6 Z" fill="#ffd84d"/></svg>`;
+    const rnd = (a, b) => (a + Math.random() * (b - a)).toFixed(2);
+    if (kind === "ocean"){
+      mk("amb-sway", "3%", null, "1%", blades("#2fa58f"), `animation-delay:-${rnd(0,3)}s`);
+      mk("amb-sway", null, null, "1%", blades("#3bb89f"), `right:4%;animation-delay:-${rnd(0,3)}s`);
+      for (let i = 0; i < 3; i++)
+        mk("amb-bubble", (14 + i * 30 + Math.random() * 10) + "%", null, "4%", `<svg viewBox="0 0 14 14" width="${10 + i * 3}" height="${10 + i * 3}"><circle cx="7" cy="7" r="5.5" fill="none" stroke="#fff" stroke-width="1.6"/></svg>`, `animation-delay:-${rnd(0,8)}s`);
+    } else if (kind === "kitchen"){
+      mk("amb-steam", "46%", null, "10%", `<svg viewBox="0 0 20 40" width="18" height="36"><path d="M10 38 C2 30 18 24 10 16 C4 10 14 6 10 0" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>`, `animation-delay:-${rnd(0,6)}s`);
+    } else { // park (and any future scene): grass blades + one drifting leaf
+      mk("amb-sway", "2%", null, "1%", blades("#6bcb77"), `animation-delay:-${rnd(0,3)}s`);
+      mk("amb-sway", null, null, "1%", blades("#58b866"), `right:3%;animation-delay:-${rnd(0,3)}s`);
+      mk("amb-leaf", null, null, null, `<svg viewBox="0 0 20 20" width="18" height="18"><path d="M2 18 C2 6 10 2 18 2 C18 12 12 18 2 18 Z" fill="#8fd694"/></svg>`, `animation-delay:-${rnd(0,26)}s`);
+    }
+    mk("amb-spark", "88%", "5%", null, spark, `animation-delay:-${rnd(0,2.6)}s`);
+    mk("amb-spark", "7%", "11%", null, spark, `animation-delay:-${rnd(0,2.6)}s;transform:scale(.8)`);
+  } catch(e){}
+}
 function renderSeekfindScene(scene, tapHandler){
   // v10: optional 3rd param — defaults to the scored-mode tapSeekObj, but arcade passes
   // tapArcadeSeekObj so the SAME pure scene-builder can be reused for arcade seek&find
@@ -6425,6 +6486,7 @@ function renderSeekfindScene(scene, tapHandler){
   tapHandler = tapHandler || tapSeekObj;
   const wrap = $("seekBoard");
   wrap.innerHTML = "";
+  addSceneAmbience(wrap, scene.def.key); // v15.1: faint ambient loops, inserted first so objects paint above
   scene.def.words.forEach((w, i) => {
     const info = VOCAB_BY_WORD[w];
     const slot = scene.slots[i];
