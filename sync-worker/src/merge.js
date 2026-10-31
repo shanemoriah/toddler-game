@@ -13,7 +13,8 @@
 //
 // Design: a family sync blob is
 //   { v:1, updatedAt: <ISO>, profiles: [ {id,name,bday,ageMonths,createdAt,updatedAt,emoji} ],
-//     perProfile: { [profileId]: { sessions:[], checklist:[], completions:{}, arcade:{} } } }
+//     perProfile: { [profileId]: { sessions:[], checklist:[], completions:{}, arcade:{}, stickers:{} } } }
+// (v15.3 adds `stickers:{id:isoDate}` per profile and `completions.counts` — see mergeStickers/mergeCompletions.)
 // `sessions` entries are the existing per-session objects (each carries its own `date` ISO
 // string, already globally unique-enough per profile — see mergeSessionsArr). `completions` is
 // { total, lockedUntil:{domainKey:n} } (rotation lock). `arcade` is the per-mode nested shape
@@ -50,7 +51,40 @@ export function mergeCompletions(a, b){
   const au = a.lockedUntil || {}, bu = b.lockedUntil || {};
   const lockedUntil = {};
   for (const k of new Set([...Object.keys(au), ...Object.keys(bu)])) lockedUntil[k] = Math.max(au[k] || 0, bu[k] || 0);
-  return { total, lockedUntil };
+  // v15.3: `counts` = how many times each domain has been COMPLETED (drives the sticker book's
+  // gold variant; see index.html recordDomainCompletion). Same monotonic max-per-key rule, with a
+  // numeric guard so a malformed/foreign value can never poison the max. An OLD client's blob has
+  // no `counts` at all -> treated as {} here, so the other side's counts always survive.
+  const num = (v) => (typeof v === "number" && isFinite(v) && v > 0) ? v : 0;
+  const ac = (a.counts && typeof a.counts === "object") ? a.counts : {}, bc = (b.counts && typeof b.counts === "object") ? b.counts : {};
+  const counts = {};
+  for (const k of new Set([...Object.keys(ac), ...Object.keys(bc)])) counts[k] = Math.max(num(ac[k]), num(bc[k]));
+  return { total, lockedUntil, counts };
+}
+// v15.3: sticker book record { stickerId: isoDateEarned }. Union by key; a key on both sides keeps
+// the EARLIEST date (a sticker is earned once — the first time wins). Fully commutative +
+// idempotent: ties and unparseable dates fall back to the lexicographically smaller string.
+// Entries that aren't a [a-z0-9_]{1,40} key -> string value are dropped (never throws on junk), and
+// a missing/non-object side (OLD client, brand-new code) just contributes nothing.
+export function mergeStickers(a, b){
+  const out = {};
+  const better = (x, y) => { // is date string x strictly earlier than y?
+    const tx = Date.parse(x), ty = Date.parse(y), fx = isFinite(tx), fy = isFinite(ty);
+    if (fx && fy) return tx < ty || (tx === ty && x < y);
+    if (fx !== fy) return fx;
+    return x < y;
+  };
+  for (const src of [a, b]){
+    if (!src || typeof src !== "object" || Array.isArray(src)) continue;
+    for (const k of Object.keys(src)){
+      const v = src[k];
+      if (!/^[a-z0-9_]{1,40}$/.test(k) || typeof v !== "string") continue;
+      if (!(k in out) || better(v, out[k])) out[k] = v;
+    }
+  }
+  const sorted = {};
+  for (const k of Object.keys(out).sort()) sorted[k] = out[k];
+  return sorted;
 }
 // Normalizes tg_arcade-shaped data to the per-mode nested shape { mixitup:{...}, everything:{...} },
 // migrating the old v10 flat shape (a single undifferentiated {totalPlays,bestStreak,introShown})
@@ -88,6 +122,7 @@ export function mergeProfileBundle(a, b){
     checklist: mergeChecklistArr(a.checklist, b.checklist),
     completions: mergeCompletions(a.completions, b.completions),
     arcade: mergeArcade(a.arcade, b.arcade),
+    stickers: mergeStickers(a.stickers, b.stickers), // v15.3
   };
 }
 // v11: profiles union by id. An id present on both sides keeps whichever copy has the GREATER

@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  mergeSessionsArr, mergeChecklistArr, mergeCompletions, mergeArcade,
+  mergeSessionsArr, mergeChecklistArr, mergeCompletions, mergeArcade, mergeStickers,
   mergeProfiles, mergePerProfile, mergeState,
 } from "../src/merge.js";
+import worker from "../src/index.js";
 
 // ---------- fixtures ----------
 const session = (date, theta = 40) => ({
@@ -229,4 +230,94 @@ test("repeated identical PUTs (a PUT storm from a debounce race) converge and ne
   }
   assert.equal(server.perProfile.p1.sessions.length, 1);
   assert.deepEqual(server.perProfile.p1.checklist, ["dog"]);
+});
+
+// ---------- v15.3: sticker book (tg_stickers) + tg_completions.counts ----------
+test("mergeStickers unions by key and keeps the EARLIEST date", () => {
+  const a = { d_colors: "2026-10-02T10:00:00.000Z", m_first: "2026-10-01T09:00:00.000Z" };
+  const b = { d_colors: "2026-10-01T08:00:00.000Z", d_shapes: "2026-10-03T00:00:00.000Z" };
+  assert.deepEqual(mergeStickers(a, b), {
+    d_colors: "2026-10-01T08:00:00.000Z", d_shapes: "2026-10-03T00:00:00.000Z", m_first: "2026-10-01T09:00:00.000Z",
+  });
+});
+test("mergeStickers is commutative, idempotent and tolerant of junk / missing sides", () => {
+  const a = { d_a: "2026-10-02T00:00:00.000Z", g_a: "2026-10-05T00:00:00.000Z" };
+  const b = { d_a: "2026-10-02T00:00:00+00:00", d_b: "not-a-date", "bad key!": "2026-10-01T00:00:00.000Z", d_c: 12, d_d: null };
+  const ab = mergeStickers(a, b), ba = mergeStickers(b, a);
+  assert.deepEqual(ab, ba);
+  assert.deepEqual(mergeStickers(ab, ab), ab);
+  assert.deepEqual(Object.keys(ab), ["d_a", "d_b", "g_a"]); // junk keys/values dropped, sorted
+  assert.deepEqual(mergeStickers(undefined, undefined), {});
+  assert.deepEqual(mergeStickers(null, a), a);
+  assert.deepEqual(mergeStickers([1, 2], a), a);
+  assert.deepEqual(mergeStickers("x", "y"), {});
+});
+test("mergeCompletions max-merges per-domain counts and survives an old-client side with no counts", () => {
+  const withCounts = { total: 4, lockedUntil: { colors: 9 }, counts: { colors: 3, shapes: 1 } };
+  const oldClient = { total: 2, lockedUntil: { colors: 7 } }; // pre-v15.3: no `counts`
+  const m1 = mergeCompletions(withCounts, oldClient), m2 = mergeCompletions(oldClient, withCounts);
+  assert.deepEqual(m1, m2);
+  assert.deepEqual(m1.counts, { colors: 3, shapes: 1 });
+  assert.equal(m1.total, 4);
+  assert.deepEqual(mergeCompletions({ counts: { a: 2 } }, { counts: { a: 5, b: "9", c: -1, d: NaN } }).counts, { a: 5, b: 0, c: 0, d: 0 });
+  assert.deepEqual(mergeCompletions(null, null), { total: 0, lockedUntil: {}, counts: {} });
+});
+test("two devices' stickers union through mergeState; OLD-client blob (no stickers/counts) never drops them", () => {
+  const P = profile("p1", "Milo", "2026-10-01T00:00:00.000Z");
+  const deviceA = { profiles: [P], perProfile: { p1: { ...bundle([session("2026-10-01T00:00:00.000Z")]), completions: { total: 1, lockedUntil: { colors: 6 }, counts: { colors: 1 } }, stickers: { d_colors: "2026-10-01T00:00:00.000Z", m_first: "2026-10-01T00:00:00.000Z" } } } };
+  const deviceB = { profiles: [P], perProfile: { p1: { ...bundle([session("2026-10-02T00:00:00.000Z")]), stickers: { d_shapes: "2026-10-02T00:00:00.000Z", d_colors: "2026-10-02T00:00:00.000Z" } } } };
+  const server1 = mergeState(null, deviceA);
+  const server2 = mergeState(server1, deviceB);
+  assert.deepEqual(server2.perProfile.p1.stickers, { d_colors: "2026-10-01T00:00:00.000Z", d_shapes: "2026-10-02T00:00:00.000Z", m_first: "2026-10-01T00:00:00.000Z" });
+  assert.deepEqual(mergeState(deviceB, server1).perProfile.p1.stickers, server2.perProfile.p1.stickers); // order-independent
+  // an OLD client (bundle has exactly the 4 pre-v15.3 keys) PUTs: stickers + counts on the server survive
+  const oldClient = { profiles: [P], perProfile: { p1: { sessions: [session("2026-10-03T00:00:00.000Z")], checklist: [], completions: { total: 1, lockedUntil: {} }, arcade: {} } } };
+  const afterOld = mergeState(server2, oldClient);
+  assert.deepEqual(afterOld.perProfile.p1.stickers, server2.perProfile.p1.stickers);
+  assert.deepEqual(afterOld.perProfile.p1.completions.counts, { colors: 1 });
+  assert.equal(afterOld.perProfile.p1.sessions.length, 3);
+  // ...and the 1MB-cap GET+merge retry path (client simulates mergeState(serverBlob, localBlob)): same result either order
+  assert.deepEqual(mergeState(oldClient, server2).perProfile.p1.stickers, server2.perProfile.p1.stickers);
+  // a stickers-less state through a fresh (new-client) merge gets an empty record, not undefined
+  assert.deepEqual(mergeState(oldClient, null).perProfile.p1.stickers, {});
+});
+
+// ---------- v15.3: the real Worker handler end to end (in-memory KV) ----------
+function fakeEnv(){
+  const m = new Map();
+  return { SYNC: { get: async (k) => (m.has(k) ? m.get(k) : null), put: async (k, v) => { m.set(k, v); } }, _m: m };
+}
+async function call(env, method, path, body){
+  const res = await worker.fetch(new Request("https://x.test" + path, { method, body: body === undefined ? undefined : JSON.stringify(body), headers: { "Content-Type": "application/json" } }), env);
+  return { status: res.status, body: await res.json() };
+}
+test("worker handler: new-client PUT stores stickers; old-client PUT does not erase them; GET returns them; junk entries are dropped", async () => {
+  const env = fakeEnv();
+  const P = profile("p1", "Milo", "2026-10-01T00:00:00.000Z");
+  const code = "abcd-1234";
+  const newBlob = { v: 1, profiles: [P], perProfile: { p1: { sessions: [], checklist: [], completions: { total: 1, lockedUntil: { colors: 6 }, counts: { colors: 1 } }, arcade: {}, stickers: { d_colors: "2026-10-01T00:00:00.000Z", "evil key": "x", d_x: 5 } } } };
+  let r = await call(env, "PUT", `/v1/state/${code}`, newBlob);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.perProfile.p1.stickers, { d_colors: "2026-10-01T00:00:00.000Z" });
+  const oldBlob = { v: 1, profiles: [P], perProfile: { p1: { sessions: [session("2026-10-04T00:00:00.000Z")], checklist: [], completions: { total: 1, lockedUntil: { colors: 6 } }, arcade: {} } } };
+  r = await call(env, "PUT", `/v1/state/${code}`, oldBlob);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.perProfile.p1.stickers, { d_colors: "2026-10-01T00:00:00.000Z" });
+  assert.deepEqual(r.body.perProfile.p1.completions.counts, { colors: 1 });
+  r = await call(env, "GET", `/v1/state/${code}`);
+  assert.deepEqual(r.body.perProfile.p1.stickers, { d_colors: "2026-10-01T00:00:00.000Z" });
+  assert.equal(r.body.perProfile.p1.sessions.length, 1);
+});
+test("worker handler: 413 on a merged-over-cap PUT leaves stored stickers intact (retry path never loses them)", async () => {
+  const env = fakeEnv();
+  const P = profile("p1", "Milo", "2026-10-01T00:00:00.000Z");
+  const code = "wxyz-9876";
+  const base = { v: 1, profiles: [P], perProfile: { p1: { sessions: [], checklist: [], completions: {}, arcade: {}, stickers: { m_first: "2026-10-01T00:00:00.000Z" } } } };
+  assert.equal((await call(env, "PUT", `/v1/state/${code}`, base)).status, 200);
+  const fat = (n) => Array.from({ length: n }, (_, i) => ({ ...session(new Date(Date.UTC(2026, 9, 1, 0, 0, i)).toISOString()), pad: "x".repeat(1500) }));
+  const big = { v: 1, profiles: [P], perProfile: { p1: { sessions: fat(800), checklist: [], completions: {}, arcade: {} } } };
+  const r = await call(env, "PUT", `/v1/state/${code}`, big);
+  assert.equal(r.status, 413);
+  const g = await call(env, "GET", `/v1/state/${code}`);
+  assert.deepEqual(g.body.perProfile.p1.stickers, { m_first: "2026-10-01T00:00:00.000Z" });
 });
