@@ -3101,7 +3101,7 @@ const DRAG_COLOR_AGE = Object.fromEntries(COLOR_DEFS.map(([n,,a]) => [n, a]));
 const DRAG_COLOR_DEFS = DRAG_COLOR_OBJECTS.map(([emoji, noun, verb, color]) =>
   ({ label:noun, emoji, noun, verb, color, hex:DRAG_COLOR_HEX[color], age:DRAG_COLOR_AGE[color] + 3 }));
 const DRAG_COLOR_CONFUSABLE_GROUPS = [["red","orange","pink"],["blue","purple"],["black","brown"]];
-const DRAG_COLOR_CONFUSABLE_B = 48;
+const DRAG_COLOR_CONFUSABLE_B = 50; // above every def's b (max 49): black/brown (and red/orange/pink, blue/purple) never share an item — review LOW: dark chocolate vs a black basket
 function dragColorsConfuse(a, b){
   return a !== b && DRAG_COLOR_CONFUSABLE_GROUPS.some(g => g.includes(a) && g.includes(b));
 }
@@ -7249,7 +7249,7 @@ function renderDragBoard(it, order, ctx){
   order.forEach((ti) => {
     const tile = document.createElement("div");
     tile.className = "tile drop-target";
-    tile.dataset.ti = ti; // index into it.targets (comeback cards display a shuffled order)
+    tile.dataset.ti = ti; // index into it.targets (comeback cards display a shuffled order); read by tests/debugging, not by game code
     tile.innerHTML = it.targets[ti].html;
     attachTap(tile, () => dragNudge(it)); // tapping a target (instead of dragging) just hops the chip to say "drag me!"
     board.appendChild(tile);
