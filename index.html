@@ -456,6 +456,17 @@
     #board.drag-board.drag4 { grid-template-columns: repeat(4, 1fr) !important; max-height: max(112px, calc(100vh - 372px)); }
   }
   .tile.drop-hover { border-color: var(--accent); background: #fff6ea; transform: scale(1.05); }
+  /* v15.2 Shape Sorter: the hole fills with the shape's color (carried on the SVG as --sc) when its tile
+     resolves — pure CSS, no nodes added. The chip is a bare shape (no pill) that, on snap, glides to the
+     hole, scales to its size and fades (class .filled, see dragSnap()). */
+  .tile .hole { transition: fill .3s ease .15s; }
+  .tile.correct .hole, .tile.reveal .hole { fill: var(--sc, #4ecdc4); stroke: rgba(0,0,0,.3); }
+  .drag-chip.shape { min-width: 104px; min-height: 104px; padding: 4px; background: transparent; border: 0; box-shadow: none; border-radius: 24px; }
+  .drag-chip.shape svg { width: clamp(64px, min(17vw, 11vh), 100px); height: clamp(64px, min(17vw, 11vh), 100px); display: block; filter: drop-shadow(0 5px 0 rgba(0,0,0,.18)); }
+  .drag-chip.shape.dragging { box-shadow: none; }
+  .drag-chip.shape.dragging svg { filter: drop-shadow(0 12px 10px rgba(0,0,0,.28)); }
+  .drag-chip.shape.placed { box-shadow: none; }
+  .drag-chip.filled { opacity: 0; pointer-events: none; transition: transform .28s cubic-bezier(.34,1.3,.5,1), opacity .14s linear .24s; }
 
   /* ---------- v8: voice recording booth ---------- */
   #boothScreen { justify-content: flex-start; padding-top: 10px; }
@@ -2988,6 +2999,63 @@ function makeDragNumberItem(d, pool, arity){
     targets, tiles: targets.map(t => t.html), correct: counts.indexOf(d.n) };
 }
 
+/* =====================================================================
+   v15.2: SHAPE SORTER (dragShapes) — drag a colored shape into the matching dark "hole" on a
+   sorter-box tile. Targets are ordinary .tile drop targets (one hole each); the chip is a bare
+   colored shape (drag.cls "shape"). Snap = the chip glides to the hole's centre, scales to the
+   hole's size and fades (drag.fill, see dragSnap()) while CSS fills the hole with the shape's color
+   (.tile.correct/.reveal .hole, color carried on the SVG as --sc) — no DOM nodes are added.
+   Shapes come from SHAPE_DEFS' ages plus pentagon/hexagon (sorter-only). b = age + 4 (fitting a
+   shape into its silhouette is a step beyond naming it).
+   Distractor holes are never confusable with the target (nor with each other) below
+   DRAG_SHAPE_CONFUSABLE_B: circle/oval, square/rectangle/diamond and pentagon/hexagon only
+   share an item once the item's own b clears that line.
+   ===================================================================== */
+const DRAG_SHAPE_DEFS = [...SHAPE_DEFS, ["pentagon",60], ["hexagon",64]]
+  .map(([name, age]) => ({ label:name, name, age:age + 4 }));
+const DRAG_SHAPE_CONFUSABLE = { circle:["oval"], oval:["circle"], square:["rectangle","diamond"],
+  rectangle:["square"], diamond:["square"], pentagon:["hexagon"], hexagon:["pentagon"] };
+const DRAG_SHAPE_CONFUSABLE_B = 54;
+function dragShapesConfuse(a, b){
+  return (DRAG_SHAPE_CONFUSABLE[a] || []).includes(b) || (DRAG_SHAPE_CONFUSABLE[b] || []).includes(a);
+}
+const DRAG_SHAPE_COLORS = ["#e63946","#1d6fd6","#f4c614","#3fa34d","#f77f1e","#8e5bd1","#f26bb5","#4ecdc4"];
+function shapeHoleSVG(name, color){
+  const g = (a) => `<g transform="translate(50 50) scale(.86) translate(-50 -50)">${shapeEl(name, a)}</g>`;
+  return `<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" style="--sc:${color}">`
+    + `<rect x="4" y="4" width="92" height="92" rx="16" fill="#e8c88f" stroke="#b98a4b" stroke-width="3"/>`
+    + `<g transform="translate(0 2.5)">${g('fill="#1b1e23"')}</g>`
+    + g('class="hole" fill="#59606b" stroke="#2a2e35" stroke-width="2.5" stroke-linejoin="round"')
+    + `</svg>`;
+}
+function dragShapeChipSVG(name, color){
+  return `<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">${shapeEl(name, `fill="${color}" stroke="rgba(0,0,0,.25)" stroke-width="2.5" stroke-linejoin="round"`)}</svg>`;
+}
+function dragShapeDistractors(d, pool, k){
+  const gated = d.age < DRAG_SHAPE_CONFUSABLE_B; // item b below the line: no confusable pair anywhere in the item
+  const others = pool.filter(x => x.name !== d.name && !(gated && dragShapesConfuse(x.name, d.name)));
+  const near = others.filter(x => Math.abs(x.age - d.age) <= 20);
+  const picks = [];
+  for (const x of [...shuffle(near), ...shuffle(others)]){
+    if (picks.length >= k) break;
+    if (picks.includes(x)) continue;
+    if (gated && picks.some(p => dragShapesConfuse(p.name, x.name))) continue;
+    picks.push(x);
+  }
+  return picks;
+}
+function makeDragShapeItem(d, pool, arity){
+  const n = dragArity(arity);
+  const color = pick(DRAG_SHAPE_COLORS);
+  const choices = shuffle([d, ...dragShapeDistractors(d, pool, n - 1)]);
+  const targets = choices.map(c => ({ html: shapeHoleSVG(c.name, color), label: c.name, isTarget: c === d }));
+  return { kind:"drag", label:d.label, b:d.age, c:1/choices.length, s:4,
+    prompt:`Drag the ${d.name} into its hole!`, say:`Where does the ${d.name} go? Drag it in!`,
+    explain:`The ${d.name} fits in the ${d.name} hole!`,
+    drag:{ html: dragShapeChipSVG(d.name, color), say:`The ${d.name}!`, cls:"shape", fill:true },
+    targets, tiles: targets.map(t => t.html), correct: choices.indexOf(d) };
+}
+
 const DOMAINS = [
   { key:"vocabulary", label:"Words", emoji:"🐶", section:"Words & Sounds",
     defs: VOCAB_WORDS.map(([w,e,a,th]) => ({ label:w, word:w, emoji:e, age:a, theme:th })),
@@ -3077,6 +3145,9 @@ const DOMAINS = [
     defs: DRAG_LETTER_DEFS, make: makeDragLetterItem },
   { key:"dragNumbers", label:"Count Match", emoji:"🔢", section:"Numbers & Shapes",
     defs: DRAG_NUM_DEFS, make: makeDragNumberItem },
+  // ---- v15.2: more drag domains, appended after v15's three (same never-reorder rule) ----
+  { key:"dragShapes", label:"Shape Sorter", emoji:"🧩", section:"Numbers & Shapes",
+    defs: DRAG_SHAPE_DEFS, make: makeDragShapeItem },
 ];
 
 // QA pass 15: "Play everything!" PLAY order, deliberately separate from DOMAINS[]'s array order (which
@@ -4128,19 +4199,28 @@ function makeColorItem(d, pool, arity){
     tiles: choices.map(c => colorSwatch(c.hex)), correct: choices.indexOf(d) };
 }
 
+// v15.2: the element markup alone (so Shape Sorter can draw the SAME shapes as silhouette holes
+// and as the draggable colored chip); `a` = the attribute string (fill/stroke/class) put on the element.
+// pentagon/hexagon exist ONLY for Shape Sorter (DRAG_SHAPE_DEFS) — the tap-the-shape domain never asks for them.
+function shapeEl(name, a){
+  switch(name){
+    case "circle": return `<circle cx="50" cy="50" r="36" ${a}/>`;
+    case "square": return `<rect x="18" y="18" width="64" height="64" rx="6" ${a}/>`;
+    case "rectangle": return `<rect x="10" y="28" width="80" height="44" rx="5" ${a}/>`;
+    case "triangle": return `<polygon points="50,14 88,82 12,82" ${a}/>`;
+    case "star": return `<polygon points="50,10 61,38 91,38 67,57 76,86 50,68 24,86 33,57 9,38 39,38" ${a}/>`;
+    case "heart": return `<path d="M50 85 C 20 62, 8 40, 22 26 C 34 15, 48 22, 50 32 C 52 22, 66 15, 78 26 C 92 40, 80 62, 50 85 Z" ${a}/>`;
+    case "diamond": return `<polygon points="50,8 86,50 50,92 14,50" ${a}/>`;
+    case "oval": return `<ellipse cx="50" cy="50" rx="40" ry="26" ${a}/>`;
+    case "pentagon": return `<polygon points="50,12 88,40 73,85 27,85 12,40" ${a}/>`;
+    case "hexagon": return `<polygon points="30,15 70,15 90,50 70,85 30,85 10,50" ${a}/>`;
+  }
+}
 function shapeSVG(name){
   const f = "#4ecdc4", s = `fill="${f}"`;
   const p = 'preserveAspectRatio="xMidYMid meet"'; // see colorSwatch()'s comment re: "req 3" overflow fix
-  switch(name){
-    case "circle": return `<svg viewBox="0 0 100 100" ${p}><circle cx="50" cy="50" r="36" ${s}/></svg>`;
-    case "square": return `<svg viewBox="0 0 100 100" ${p}><rect x="18" y="18" width="64" height="64" rx="6" ${s}/></svg>`;
-    case "rectangle": return `<svg viewBox="0 0 100 100" ${p}><rect x="10" y="28" width="80" height="44" rx="5" ${s}/></svg>`;
-    case "triangle": return `<svg viewBox="0 0 100 100" ${p}><polygon points="50,14 88,82 12,82" ${s}/></svg>`;
-    case "star": return `<svg viewBox="0 0 100 100" ${p}><polygon points="50,10 61,38 91,38 67,57 76,86 50,68 24,86 33,57 9,38 39,38" ${s}/></svg>`;
-    case "heart": return `<svg viewBox="0 0 100 100" ${p}><path d="M50 85 C 20 62, 8 40, 22 26 C 34 15, 48 22, 50 32 C 52 22, 66 15, 78 26 C 92 40, 80 62, 50 85 Z" ${s}/></svg>`;
-    case "diamond": return `<svg viewBox="0 0 100 100" ${p}><polygon points="50,8 86,50 50,92 14,50" ${s}/></svg>`;
-    case "oval": return `<svg viewBox="0 0 100 100" ${p}><ellipse cx="50" cy="50" rx="40" ry="26" ${s}/></svg>`;
-  }
+  const el = shapeEl(name, s);
+  return el === undefined ? undefined : `<svg viewBox="0 0 100 100" ${p}>${el}</svg>`;
 }
 function makeShapeItem(d, pool, arity){
   const distractors = simpleDistractors(pool, d, arity - 1);
@@ -6901,7 +6981,7 @@ function dragReturn(it){
   const chip = dragChipFor(it);
   if (!chip) return;
   chip._pos = { dx: 0, dy: 0 };
-  chip.classList.remove("dragging", "placed");
+  chip.classList.remove("dragging", "placed", "filled");
   chip.style.transform = "";
 }
 // Chip animates onto DOM target `domIdx` and sits small near the bottom of it.
@@ -6912,6 +6992,21 @@ function dragSnap(it, domIdx){
   const cr = chip.getBoundingClientRect(), tr = tile.getBoundingClientRect();
   const pos = chip._pos || { dx: 0, dy: 0 };
   const natX = cr.left + cr.width / 2 - pos.dx, natY = cr.top + cr.height / 2 - pos.dy; // center at rest (scale is about the center, so it doesn't move it)
+  if (it.drag && it.drag.fill){
+    // v15.2 (Shape Sorter): the chip IS the shape — glide to the hole's centre, scale to the hole's
+    // size and fade out; the tile's own CSS fills the hole with the same color (.hole in the CSS).
+    const svg = chip.querySelector("svg");
+    let base = svg ? parseFloat(getComputedStyle(svg).width) : 0;
+    if (!(base > 0)) base = 80;
+    const hole = Math.min(tr.width, tr.height) * 0.82 * 0.86; // tile svg box (82%) x the hole group's .86 scale
+    const sc = Math.max(0.3, Math.min(1.3, hole / base));
+    const dx = tr.left + tr.width / 2 - natX, dy = tr.top + tr.height / 2 - natY;
+    chip._pos = { dx, dy };
+    chip.classList.remove("dragging");
+    chip.classList.add("placed", "filled");
+    chip.style.transform = `translate(${dx}px,${dy}px) scale(${sc})`;
+    return;
+  }
   const dx = tr.left + tr.width / 2 - natX, dy = tr.top + tr.height * 0.74 - natY;
   chip._pos = { dx, dy };
   chip.classList.remove("dragging");
@@ -6961,7 +7056,7 @@ function attachDrag(chip, it, ctx){
       if (!drag.live()) return;
       // review fix: snap home (no transition) BEFORE measuring, so a re-grab mid-return-animation
       // doesn't leave the chip jumping away from the finger with a stale rest rect.
-      chip.classList.remove("placed"); chip.classList.add("dragging");
+      chip.classList.remove("placed", "filled"); chip.classList.add("dragging");
       chip.style.transform = ""; chip._pos = { dx: 0, dy: 0 };
       active = { id: ev.pointerId, x0: ev.clientX, y0: ev.clientY, nat: chip.getBoundingClientRect(), snap: ctx.current(), maxMove: 0 };
       try { chip.setPointerCapture(ev.pointerId); } catch(e){}
@@ -7032,6 +7127,7 @@ function renderDragBoard(it, order, ctx){
   order.forEach((ti) => {
     const tile = document.createElement("div");
     tile.className = "tile drop-target";
+    tile.dataset.ti = ti; // index into it.targets (comeback cards display a shuffled order)
     tile.innerHTML = it.targets[ti].html;
     attachTap(tile, () => dragNudge(it)); // tapping a target (instead of dragging) just hops the chip to say "drag me!"
     board.appendChild(tile);
@@ -7039,7 +7135,7 @@ function renderDragBoard(it, order, ctx){
   zone.innerHTML = "";
   zone.style.display = "flex";
   const chip = document.createElement("div");
-  chip.className = "drag-chip";
+  chip.className = "drag-chip" + (it.drag.cls ? " " + it.drag.cls : "");
   chip.innerHTML = `<span class="dc-in">${it.drag.html}</span>`;
   chip._forItem = it; chip._pos = { dx: 0, dy: 0 };
   attachDrag(chip, it, ctx);
