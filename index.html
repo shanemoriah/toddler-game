@@ -210,6 +210,30 @@
   #domainTransition .dt-fox { font-size: 64px; line-height: 1; animation: bounce 1.1s ease-in-out infinite; }
   #domainTransition .dt-emoji { font-size: 44px; line-height: 1; }
   #domainTransition .dt-text { font-size: 20px; font-weight: 700; color: #8a7d66; }
+  /* v15.1: domain intro card — section-tinted card, emoji scales in, label under it. Rides the
+     EXISTING narration window ("Now let's play with X!" -> renderItem), so it adds no delay and the
+     first item's audio/shrug timing is untouched. transform+opacity animations only. */
+  #domainTransition.dt-card { border-radius: 28px; margin: 4px 8px; animation: dtCardIn .35s ease-out both; }
+  #domainTransition.dt-card .dt-emoji { font-size: 92px; animation: dtEmojiIn .55s cubic-bezier(.3,1.5,.5,1) .12s both; }
+  #domainTransition.dt-card .dt-label { font-size: clamp(22px, 5vw, 34px); font-weight: 800; color: var(--ink); animation: dtCardIn .4s ease-out .3s both; }
+  #domainTransition.dt-card .dt-fox { font-size: 54px; }
+  @keyframes dtCardIn { from { opacity: 0; transform: translateX(36px); } to { opacity: 1; transform: translateX(0); } }
+  @keyframes dtEmojiIn { 0%{transform:scale(.2) rotate(-25deg);opacity:0} 100%{transform:scale(1) rotate(0);opacity:1} }
+  /* slide-away ghost of the card (cloned + fixed at the card's rect by dismissDomainCard) */
+  .dt-ghost { position: fixed; z-index: 40; pointer-events: none; animation: dtOut .28s ease-in forwards; }
+  @keyframes dtOut { to { opacity: 0; transform: translateX(-70px) scale(.94); } }
+  /* arcade start: top banner + tint wash (fire-and-forget overlay; the first item renders at once underneath) */
+  .fx-wash { position: fixed; inset: 0; z-index: 44; pointer-events: none; animation: fxWash 1s ease-out forwards; }
+  @keyframes fxWash { 0%{opacity:0} 20%{opacity:1} 100%{opacity:0} }
+  .fx-banner { position: fixed; left: 50%; top: 16vh; z-index: 45; pointer-events: none; display: flex; align-items: center; gap: 12px; padding: 8px 22px; border-radius: 40px; background: rgba(255,255,255,.92); border: 3px solid var(--tile-border); box-shadow: 0 6px 14px rgba(0,0,0,.12); font-weight: 800; font-size: clamp(20px, 5vw, 30px); white-space: nowrap; animation: fxBanner 1s ease-out forwards; }
+  .fx-banner .fb-e { font-size: 1.7em; line-height: 1; }
+  @keyframes fxBanner { 0%{transform:translate(-50%,-30px) scale(.7);opacity:0} 20%{transform:translate(-50%,0) scale(1.05);opacity:1} 30%{transform:translate(-50%,0) scale(1)} 75%{transform:translate(-50%,0) scale(1);opacity:1} 100%{transform:translate(110%,0) scale(1);opacity:0} }
+  @media (prefers-reduced-motion: reduce) {
+    #domainTransition.dt-card, #domainTransition.dt-card .dt-emoji, #domainTransition.dt-card .dt-label { animation: none; }
+    .dt-ghost { display: none; }
+    .fx-wash { animation: none; opacity: .6; }
+    .fx-banner { animation: none; transform: translateX(-50%); }
+  }
   /* ---------- seek & find scene board ---------- */
   #seekBoard {
     display: none; position: relative; flex: 1; width: 100%; min-height: 320px;
@@ -5827,8 +5851,43 @@ function clearBoardUI(){
 // the first item's tiles — see the comment there for why that call site is load-bearing.
 function showDomainTransition(dom){
   const el = $("domainTransition");
-  el.innerHTML = `<div class="dt-fox">🦊</div><div class="dt-emoji">${dom.emoji}</div><div class="dt-text">Get ready!</div>`;
+  // v15.1: section-tinted intro card (emoji scales in, label under it) — same node/footprint/
+  // lifetime as before, so no timing change. The label is display-only (never spoken: see
+  // spokenLabel for the audio line).
+  const fx = fxForDomainKey(dom.key);
+  el.className = "dt-card";
+  el.style.background = fx.tint;
+  el.innerHTML = `<div class="dt-fox">🦊</div><div class="dt-emoji">${dom.emoji}</div><div class="dt-label">${dom.label}</div><div class="dt-text">Get ready!</div>`;
   el.style.display = "flex";
+}
+// v15.1: called by renderItem() right before it hides the intro card — leaves a fixed, inert clone
+// that slides off-screen (280ms) while the first item renders underneath. Fire-and-forget.
+function dismissDomainCard(){
+  const el = $("domainTransition");
+  if (!el || el.style.display !== "flex" || !el.firstChild) return;
+  try {
+    if (fxReduced()) return;
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return;
+    const g = el.cloneNode(true);
+    g.removeAttribute("id");
+    g.className = "dt-ghost";
+    g.style.cssText = `left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;border-radius:28px;background:${el.style.background}`;
+    g.querySelectorAll("*").forEach(n => { n.style.animation = "none"; });
+    document.body.appendChild(g);
+    setTimeout(() => { if (g.parentNode) g.parentNode.removeChild(g); }, 400);
+  } catch(e){}
+}
+// v15.1: arcade start banner (Mix-It-Up / Everything Mix) — overlay only, never delays the first item.
+function showIntroBanner(emoji, label, tint){
+  try {
+    if (fxReduced()) return;
+    const w = document.createElement("div"); w.className = "fx-wash"; w.style.background = tint;
+    const b = document.createElement("div"); b.className = "fx-banner";
+    b.innerHTML = `<span class="fb-e">${emoji}</span><span>${label}</span>`;
+    document.body.appendChild(w); document.body.appendChild(b);
+    setTimeout(() => { [w, b].forEach(n => { if (n.parentNode) n.parentNode.removeChild(n); }); }, 1100);
+  } catch(e){}
 }
 
 function beginDomain(idx){
@@ -6180,6 +6239,7 @@ function renderItem(){
   // else — this is the ONE call site every board type (tile-grid AND seekfind, via the branch
   // below) funnels through on its way to showing an item, so it's the only place that can
   // guarantee the loader never leaks into the first item's render.
+  dismissDomainCard(); // v15.1: slide-away ghost of the intro card (no-op when the card isn't up)
   $("domainTransition").style.display = "none";
   $("categoryAnchors").style.display = "none"; // reset — re-shown below only for category items
   resetDragUI(); // v15: a previous drag item's chip/board class must never leak into any other board type
@@ -8873,6 +8933,7 @@ function startArcadeSession(sess){
   $("arcadeStreakCount").textContent = "0";
   show("gameScreen");
   const cfg = ARCADE_MODES[sess.mode];
+  showIntroBanner(sess.mode === "everything" ? "🎡" : "🎪", sess.mode === "everything" ? "Everything Mix!" : "Mix-It-Up!", "rgba(255,184,77,.22)"); // v15.1
   if (!arcadeIntroShown(sess.mode)){
     markArcadeIntroShown(sess.mode);
     speak(cfg.introLine, () => { if (sess.active) renderArcadeItem(sess); });
