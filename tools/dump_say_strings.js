@@ -57,6 +57,7 @@ const sandbox = {
   // for the one process.stdout.write call at the bottom.
   console: { log: (...a) => console.error(...a), warn: (...a) => console.error(...a), error: (...a) => console.error(...a), info: (...a) => console.error(...a), assert: (...a) => console.error(...a), debug: (...a) => console.error(...a) },
   document: {
+    addEventListener() {}, removeEventListener() {}, // QA15: v15.1's idle-attract adds top-level document listeners
     getElementById: () => stubEl(),
     querySelectorAll: () => [],
     createElement: () => stubEl(),
