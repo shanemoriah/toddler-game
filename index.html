@@ -8200,6 +8200,10 @@ function importData(evt){
     if (data.tg_stickers && typeof data.tg_stickers === "object" && !Array.isArray(data.tg_stickers)){
       persistSet(pk("tg_stickers"), JSON.stringify(mergeStickers(loadStickers(), data.tg_stickers))); // v15.3: union, earliest date wins; junk entries dropped by mergeStickers
     }
+    // QA pass 16: history that ARRIVES via an import (e.g. a pre-v15.3 backup with no tg_stickers) is "past", not a fresh
+    // reward — baseline it silently, exactly like the on-load pull does (see stickerRebase()), so the next award moment
+    // doesn't fire a "New sticker!" storm for games played long ago. Stickers owed from this session are already stored, so unaffected.
+    try { stickerRebase(); } catch(e){}
     scheduleSyncPut();
     if (audioCount){
       let imported = 0, failed = 0;
