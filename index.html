@@ -3069,6 +3069,16 @@ const DOMAINS = [
     defs: DRAG_NUM_DEFS, make: makeDragNumberItem },
 ];
 
+// QA pass 15: "Play everything!" PLAY order, deliberately separate from DOMAINS[]'s array order (which
+// session history indexes by and must never change). v15's three English drag domains were appended
+// AFTER the Mandarin trio, so array order would have played them after the 中文 block; play order keeps
+// every English domain (array order) ahead of every Mandarin one. Values are DOMAINS[] indexes.
+const PLAY_ORDER = (() => {
+  const ix = DOMAINS.map((_, i) => i);
+  return [...ix.filter(i => DOMAINS[i].lang !== "zh"), ...ix.filter(i => DOMAINS[i].lang === "zh")];
+})();
+function playPosOf(domIdx){ return PLAY_ORDER.indexOf(domIdx); } // -1 (no domain yet) -> next pos 0
+
 /* =====================================================================
    v8: VOICE RECORDING BOOTH — lets a parent record prompts in their own
    voice (motivated by TTS mangling phonetic prompts like "mmm"/"buh"),
@@ -5678,10 +5688,11 @@ function isDomainLocked(domainKey){
 // First DOMAINS[] index at or after `fromIdx` that isn't locked (or -1 if none remain) — used
 // by playEverything()/nextDomain()/domainDone() so "Play everything!" skips locked domains at
 // their turn instead of stopping to ask a parent to unlock anything.
-function firstPlayableIndex(fromIdx){
+function firstPlayableIndex(fromPos){ // fromPos = a position in PLAY_ORDER; returns a DOMAINS[] index (or -1)
   const locked = new Set(lockedDomainKeys(loadCompletions()));
   const allLocked = locked.size >= DOMAINS.length;
-  for (let i = fromIdx; i < DOMAINS.length; i++){
+  for (let p = fromPos; p < PLAY_ORDER.length; p++){
+    const i = PLAY_ORDER[p];
     if (allLocked || !locked.has(DOMAINS[i].key)) return i;
   }
   return -1;
@@ -6036,7 +6047,7 @@ function nextDomain(){
   // v9.5: firstPlayableIndex() skips any locked domains at their turn (rotation lock) instead
   // of a flat +1; also naturally returns -1 (-> endGame()) once nothing DOMAINS.length-and-later
   // remains, same end condition the old `idx >= DOMAINS.length` check covered.
-  const idx = firstPlayableIndex(state.domainIdx + 1);
+  const idx = firstPlayableIndex(playPosOf(state.domainIdx) + 1);
   if (idx < 0) return endGame();
   beginDomain(idx);
 }
@@ -6285,7 +6296,7 @@ function finishDomainCelebration(){
   // (rotation lock) instead of a flat DOMAINS[state.domainIdx+1]/"last index" check; nextIdx<0
   // covers both "nothing locked, but we were on the last domain" and "everything after this is
   // locked" the same way the old length check covered just the former.
-  const nextIdx = firstPlayableIndex(state.domainIdx + 1);
+  const nextIdx = firstPlayableIndex(playPosOf(state.domainIdx) + 1);
   if (nextIdx < 0) return endGame();
   const next = DOMAINS[nextIdx];
   $("interludeEmoji").textContent = next.emoji;
@@ -6303,7 +6314,7 @@ function progressPct(ds){
   // depending on which domain got picked, which is confusing outside the
   // sequential "Play everything!" flow).
   if (state.sessionMode === "single") return Math.min(1, ds.n / 6) * 100;
-  return ((state.domainIdx + Math.min(1, ds.n / 6)) / DOMAINS.length) * 100;
+  return ((Math.max(0, playPosOf(state.domainIdx)) + Math.min(1, ds.n / 6)) / DOMAINS.length) * 100;
 }
 
 /* v9.3: shrink an element's (or a set of sibling elements') own font-size until its content
