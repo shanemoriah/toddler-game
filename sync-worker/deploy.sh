@@ -32,11 +32,13 @@ URL=$(echo "$OUT" | grep -Eo 'https://[a-z0-9.-]+\.workers\.dev' | head -1)
 [ -n "$URL" ] || { echo "!! deploy finished but no workers.dev URL found in output above"; exit 1; }
 
 # 4) wire the URL into the game
+BEFORE=$(grep -m1 'const SYNC_URL = ' ../index.html)
 sed -i '' -E "s|const SYNC_URL = \"[^\"]*\"|const SYNC_URL = \"$URL\"|" ../index.html
+AFTER=$(grep -m1 'const SYNC_URL = ' ../index.html)
 echo
 echo "✓ Deployed: $URL"
 cd ..
-if git diff --quiet -- index.html sync-worker/wrangler.toml; then
+if [ "$BEFORE" = "$AFTER" ] && git diff --quiet -- sync-worker/wrangler.toml; then
   echo "✓ SYNC_URL unchanged; nothing to commit."
 else
   echo "✓ index.html SYNC_URL changed. Committing + pushing…"
