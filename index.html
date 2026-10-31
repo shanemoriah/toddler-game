@@ -151,6 +151,14 @@
      centering-and-clipping — zero effect on the common case where content already fits. */
   .screen { flex: 1; display: none; flex-direction: column; align-items: center; justify-content: safe center; text-align: center; gap: 18px; overflow-y: auto; }
   .screen.active { display: flex; }
+  /* v15.1: screen transition — 250ms fade + 14px slide-up whenever show() activates a screen.
+     transform+opacity only, and NO fill-mode (so no lingering transform is left on the screen after
+     it ends — that would make it a containing block for fixed descendants). Re-activating the
+     already-active screen within one frame (show() removes+re-adds the class synchronously) does
+     not restart it. */
+  .screen.active { animation: screenIn .25s ease-out; }
+  @keyframes screenIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+  @media (prefers-reduced-motion: reduce) { .screen.active { animation: none; } }
   h1 { font-size: clamp(26px, 5vw, 40px); margin: 0; }
   h2 { font-size: clamp(20px, 4vw, 30px); margin: 0; }
   .subtitle { color: #8a7d66; font-size: 16px; max-width: 520px; }
