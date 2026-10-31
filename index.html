@@ -378,6 +378,34 @@
      question, which this (and the `#board` width fix just above) fixes. */
   .tile svg { position: absolute; top: 9%; left: 9%; width: 82%; height: 82%; }
   .tile .txt { font-weight: 800; }
+  /* ---------- v15: drag-and-drop items (kind:"drag") ----------
+     Targets are ordinary .tile elements in #board (so .correct/.reveal/.dim/.hint-elim all apply);
+     the draggable chip lives in #dragZone below the board. touch-action:none on the chip is
+     load-bearing — without it the browser claims the touch for scrolling and fires pointercancel
+     mid-drag. The chip's inline transform (translate+scale) is driven by JS; the bob/nudge
+     animations run on the INNER .dc-in span so they never fight that inline transform. Sized well
+     past the 44px floor (96px min-height) for a 3.5-year-old's finger. */
+  #dragZone { display: none; width: 100%; justify-content: center; align-items: center; min-height: 116px; padding: 4px 0 8px; position: relative; z-index: 30; }
+  .drag-chip {
+    display: inline-flex; align-items: center; justify-content: center; min-width: 132px; min-height: 96px;
+    padding: 8px 26px; border-radius: 30px; background: #fff3d6; border: 4px solid var(--accent);
+    box-shadow: 0 7px 0 #d96f26; color: var(--ink); font-size: clamp(44px, 11vw, 76px); font-weight: 800; line-height: 1;
+    cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    transition: transform .28s cubic-bezier(.34,1.3,.5,1), box-shadow .2s; will-change: transform; position: relative;
+  }
+  .drag-chip.dragging { transition: none; cursor: grabbing; box-shadow: 0 16px 20px rgba(0,0,0,.25); z-index: 60; }
+  .drag-chip.placed { box-shadow: 0 2px 0 #d96f26; }
+  .drag-chip .dc-in { display: inline-flex; align-items: center; gap: 10px; animation: dragBob 1.6s ease-in-out infinite; }
+  .drag-chip.dragging .dc-in, .drag-chip.placed .dc-in { animation: none; }
+  .drag-chip.nudge:not(.dragging):not(.placed) .dc-in { animation: dragNudge .6s ease-in-out 1; }
+  .drag-chip .dc-icon { font-size: .62em; }
+  .drag-chip .dc-text { font-size: .52em; }
+  .drag-chip .dc-letter { color: #8e5bd1; font-size: 1.05em; }
+  @keyframes dragBob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
+  @keyframes dragNudge { 0%,100%{transform:translateY(0) scale(1)} 30%{transform:translateY(-16px) scale(1.12)} 60%{transform:translateY(0) scale(.96)} }
+  #board.drag-board { max-height: 56vh; }
+  #board.drag-board .tile { min-height: 96px; cursor: default; }
+  .tile.drop-hover { border-color: var(--accent); background: #fff6ea; transform: scale(1.05); }
 
   /* ---------- v8: voice recording booth ---------- */
   #boothScreen { justify-content: flex-start; padding-top: 10px; }
@@ -566,6 +594,8 @@
     <div id="categoryAnchors"></div>
     <div id="domainTransition"></div>
     <div id="board"></div>
+    <!-- v15: draggable chip for kind:"drag" items (hidden otherwise) — see renderDragBoard() -->
+    <div id="dragZone"></div>
     <div id="seekBoard"></div>
   </div>
 
@@ -1531,7 +1561,7 @@ const state = {
     active: false, locked: false, firstTry: true,
     streak: 0, answeredSinceInterlude: 0,
     currentItem: null, timer: null,
-    bags: { vocab: [], functions: [], seekfind: [] }, // shuffle bags — in-memory only, reset on (re)entry
+    bags: { vocab: [], functions: [], seekfind: [], dragsounds: [] }, // shuffle bags — in-memory only, reset on (re)entry
   },
   // v10.1: "Everything Mix!" — a second, structurally IDENTICAL free-play session slot (own
   // active/locked/streak/timer/bags), never state.domain/state.finalDomains/state.arcade. Draws
@@ -2693,6 +2723,138 @@ function makeZhWordItem(d, pool, arity){
     tiles: choices.map(c => emojiTile(c.emoji)), correct: choices.indexOf(d) };
 }
 
+/* =====================================================================
+   v15: DRAG-AND-DROP item kind (`kind:"drag"`) — three scored domains appended at the END of
+   DOMAINS[] (Sound Match / Letter Match / Count Match). A drag item is a normal tile-grid item
+   (`tiles` = the drop targets' HTML, `correct` = the target's index — so every generic consumer
+   of tiles/correct keeps working: hint/reveal/comeback/arcade-timeout reveal) PLUS:
+     drag:    { html, say }  — the draggable chip's markup and its short spoken label (tap the chip)
+     targets: [{ html, label, isTarget }] — same order as `tiles`
+     explainOptions? — every explain string this def could ever produce (for audio coverage,
+                       when make() picks among several at random — see makeDragLetterItem)
+   Rendering/pointer handling lives in renderDragBoard()/attachDrag() further down; scoring
+   routes through the SAME tapTile()/tapArcadeTile() a tile tap uses (see dropScored()/
+   dropArcade()) — there is deliberately no second scoring path. See NOTES.md v15.
+   ===================================================================== */
+const DRAG_COUNT_MIN_ARITY = 2, DRAG_COUNT_MAX_ARITY = 4;
+function dragArity(arity){ return Math.max(DRAG_COUNT_MIN_ARITY, Math.min(DRAG_COUNT_MAX_ARITY, arity || 3)); }
+
+// ---- Sound Match: drag the sound chip onto the animal that makes it ----
+// [animal, emoji, sound word (spoken + shown on the chip), plural for the explanation, b (months)]
+// b ladder per the task: cow/dog/cat/duck/bird ~24-30, pig/sheep/horse/mouse ~30-36, lion/owl/
+// frog/bee/snake ~36-48.
+let DRAG_SOUND_DEFS = [
+  ["cow","🐮","Moo","Cows",24],["dog","🐶","Woof","Dogs",24],["bird","🐦","Tweet","Birds",26],
+  ["cat","🐱","Meow","Cats",26],["duck","🦆","Quack","Ducks",28],["pig","🐷","Oink","Pigs",30],
+  ["sheep","🐑","Baa","Sheep",32],["horse","🐴","Neigh","Horses",34],["mouse","🐭","Squeak","Mice",36],
+  ["lion","🦁","Roar","Lions",38],["owl","🦉","Hoot","Owls",40],["frog","🐸","Ribbit","Frogs",40],
+  ["bee","🐝","Buzz","Bees",44],["snake","🐍","Hiss","Snakes",48],
+];
+DRAG_SOUND_DEFS = filterEmojiSupported(DRAG_SOUND_DEFS, d => d[1], 8)
+  .map(([label, emoji, sound, plural, age]) => ({ label, emoji, sound, plural, age }));
+function makeDragSoundItem(d, pool, arity){
+  const n = dragArity(arity);
+  const others = pool.filter(x => x.label !== d.label);
+  let near = others.filter(x => Math.abs(x.age - d.age) <= 14);
+  if (near.length < n - 1) near = others;
+  const choices = shuffle([d, ...shuffle(near).slice(0, n - 1)]);
+  const S = d.sound, s = S.toLowerCase();
+  const targets = choices.map(c => ({ html: emojiTile(c.emoji), label: c.label, isTarget: c === d }));
+  return { kind:"drag", label:d.label, b:d.age, c:1/choices.length, s:4,
+    prompt:`Who says ${S}?`, say:`${S}! Which animal says ${s}? Drag the sound to it!`,
+    explain:`${S}! That's the ${d.label}. ${d.plural} say ${s}.`,
+    drag:{ html:`<span class="dc-icon">🔊</span><span class="dc-text">${S}</span>`, say:`${S}!` },
+    targets, tiles: targets.map(t => t.html), correct: choices.indexOf(d) };
+}
+
+// ---- Letter Match: drag a big letter onto the picture whose word STARTS with it ----
+// Pictures come from VOCAB_WORDS (already tofu-filtered at load). A picture qualifies only if the
+// first LETTER is also the first SOUND a toddler would hear and the emoji has one obvious name:
+// no digraph/soft starts (ch/sh/wr/kn/ph/sc, soft g), nothing hard (age cap), and a short list of
+// emoji a child would plausibly call by a DIFFERENT word (🌎 "earth", 🧢 "cap", 🍳 "egg", 🧤
+// "gloves", 💡 "light bulb", ...) so a "wrong" drop is never actually right.
+const DRAG_LETTER_PIC_MAX_AGE = 56;
+const DRAG_LETTER_PIC_EXCLUDE = new Set(["old key","planet","globe","wind","rain","comet","asteroid","sunrise","galaxy",
+  "tornado","hurricane","star","hat","pan","ball","lamp","mittens","boots","flower","snow","seashell","swim goggles",
+  "cup","gem","genie","saturn","long drum","museum","compass"]);
+const DRAG_LETTER_PICS = VOCAB_WORDS
+  .filter(([w, , age]) => age <= DRAG_LETTER_PIC_MAX_AGE && !DRAG_LETTER_PIC_EXCLUDE.has(w) && !/^(ch|sh|wr|kn|ph|sc)/i.test(w))
+  .map(([word, emoji, age]) => ({ word, emoji, age, letter: word[0].toUpperCase() }));
+// Letters that sound alike at the START of a word — never offered together as target/distractor
+// (the task's C/K and G/J, plus Q/K/C, I/Y and S/Z for the same reason).
+const DRAG_LETTER_CONFUSABLE = { C:"KQ", K:"CQ", Q:"CK", G:"J", J:"G", I:"Y", Y:"I", S:"Z", Z:"S" };
+// uppercase rung b = the Letters domain's recognition rung + ~4mo (matching a letter to an initial
+// sound is a step beyond recognizing it); lowercase variants +10mo like LETTER_DEFS.
+const DRAG_LETTER_BASE = [["O",44],["A",46],["B",48],["C",50],["S",50],["E",50],["D",52],["M",52],["T",52],
+  ["F",54],["H",54],["R",56],["K",56],["L",56],["P",56],["G",58],["W",60],["U",60],["V",62]];
+const DRAG_LETTER_DEFS = (() => {
+  const have = new Set(DRAG_LETTER_PICS.map(p => p.letter));
+  const up = DRAG_LETTER_BASE.filter(([L]) => have.has(L));
+  return [
+    ...up.map(([L, b]) => ({ label:L, name:L, letter:L, age:b })),
+    ...up.map(([L, b]) => ({ label:L.toLowerCase(), name:L.toLowerCase(), letter:L, age:b + 10 })),
+  ];
+})();
+function capFirst(w){ return w.charAt(0).toUpperCase() + w.slice(1); }
+function dragLetterExplain(L, word){ return `${capFirst(word)} starts with the letter ${L}!`; }
+function makeDragLetterItem(d, pool, arity){
+  const n = dragArity(arity);
+  const L = d.letter;
+  const targetPics = DRAG_LETTER_PICS.filter(p => p.letter === L);
+  const tp = pick(targetPics);
+  const banned = DRAG_LETTER_CONFUSABLE[L] || "";
+  const cands = DRAG_LETTER_PICS.filter(p => p.letter !== L && !banned.includes(p.letter));
+  let near = cands.filter(p => Math.abs(p.age - tp.age) <= 16);
+  if (near.length < (n - 1) * 3) near = cands;
+  const picks = [], used = new Set();
+  for (const p of [...shuffle(near), ...shuffle(cands)]){
+    if (picks.length >= n - 1) break;
+    if (used.has(p.letter) || picks.includes(p)) continue; // one picture per distinct starting letter
+    used.add(p.letter); picks.push(p);
+  }
+  const choices = shuffle([tp, ...picks]);
+  const targets = choices.map(c => ({ html: emojiTile(c.emoji), label: c.word, isTarget: c === tp }));
+  return { kind:"drag", label:d.label, b:d.age, c:1/choices.length, s:4,
+    prompt:`Which picture starts with ${d.name}?`,
+    say:`Which picture starts with the letter ${d.name}? Drag the letter to it!`,
+    explain: dragLetterExplain(L, tp.word),
+    explainOptions: targetPics.map(p => dragLetterExplain(L, p.word)), // every possible pick — audio coverage, see collectAllSayStrings()
+    drag:{ html:`<span class="dc-letter">${d.name}</span>`, say:`The letter ${d.name}!` },
+    targets, tiles: targets.map(t => t.html), correct: choices.indexOf(tp) };
+}
+
+// ---- Count Match: drag a numeral onto the group with that many things ----
+// b: the Counting domain's give-N rungs for 1-6 (matching a numeral to a quantity is cardinality
+// first), the Numbers domain's rungs for 7-10.
+let DRAG_COUNT_EMOJI = ["🍎","🍌","🍪","⭐","🐟","🎈","🐥","🌼"];
+DRAG_COUNT_EMOJI = filterEmojiSupported(DRAG_COUNT_EMOJI, e => e, 3);
+const DRAG_NUM_DEFS = [[1,33],[2,37],[3,40],[4,44],[5,47],[6,50],[7,52],[8,54],[9,56],[10,58]]
+  .map(([n, age]) => ({ label:String(n), n, age }));
+// Distractor counts: ±1/±2 of the target, except small targets (1-3) get clearly-different
+// counts (gap >= 2) so "1 vs 2" is never the whole question for the youngest players.
+function dragCountDistractors(n, k){
+  const ok = x => x >= 1 && x <= 12 && x !== n;
+  let primary;
+  if (n <= 2) primary = [n + 2, n + 3, n + 4];
+  else if (n === 3) primary = [1, 5, 6];
+  else primary = shuffle([n - 2, n - 1, n + 1, n + 2]);
+  const out = primary.filter(ok).slice(0, k);
+  for (const x of [n + 3, n - 3, n + 4, n - 4, n + 5]){ if (out.length >= k) break; if (ok(x) && !out.includes(x)) out.push(x); }
+  return out;
+}
+function makeDragNumberItem(d, pool, arity){
+  const n = dragArity(arity);
+  const emoji = pick(DRAG_COUNT_EMOJI);
+  const counts = shuffle([d.n, ...dragCountDistractors(d.n, n - 1)]);
+  const targets = counts.map(c => ({ html: countTile(c, emoji), label: String(c), isTarget: c === d.n }));
+  return { kind:"drag", label:d.label, b:d.age, c:1/counts.length, s:4,
+    prompt:`Drag ${d.n} to the group with ${d.n}!`,
+    say:`Which picture has ${d.n}? Drag the number ${d.n} to it!`,
+    explain: countExplain(d),
+    drag:{ html:`<span class="dc-letter" style="color:#1d6fd6">${d.n}</span>`, say:`The number ${d.n}!` },
+    targets, tiles: targets.map(t => t.html), correct: counts.indexOf(d.n) };
+}
+
 const DOMAINS = [
   { key:"vocabulary", label:"Words", emoji:"🐶", section:"Words & Sounds",
     defs: VOCAB_WORDS.map(([w,e,a,th]) => ({ label:w, word:w, emoji:e, age:a, theme:th })),
@@ -2772,6 +2934,16 @@ const DOMAINS = [
     section:"中文 Mandarin", lang:"zh",
     defs: ZH_WORD_DEFS.map(([hanzi,english,emoji,b,theme]) => ({ label:hanzi, word:hanzi, english, emoji, age:b, theme })),
     make: makeZhWordItem },
+  // ---- v15: DRAG-AND-DROP — three scored domains (kind:"drag" items, see the v15 block above and
+  // renderDragBoard()), appended at the very END (after the Mandarin trio) per the same "never
+  // disturb existing DOMAINS[] positions" rule — session history indexes by position. `section`
+  // slots them into the existing picker groups.
+  { key:"dragSounds", label:"Sound Match", emoji:"🔊", section:"Words & Sounds",
+    defs: DRAG_SOUND_DEFS, make: makeDragSoundItem },
+  { key:"dragLetters", label:"Letter Match", emoji:"🔤", section:"Words & Sounds",
+    defs: DRAG_LETTER_DEFS, make: makeDragLetterItem },
+  { key:"dragNumbers", label:"Count Match", emoji:"🔢", section:"Numbers & Shapes",
+    defs: DRAG_NUM_DEFS, make: makeDragNumberItem },
 ];
 
 /* =====================================================================
@@ -2937,6 +3109,8 @@ function collectAllSayStrings(){
       add(it.say);
       add(`This one is the ${it.label}!`);
       add(it.explain); // v12: shrug/second-miss/arcade-timeout explanation line — see the v12 EXPLAIN tables above
+      if (it.drag) add(it.drag.say); // v15: the drag chip's own short spoken label (tap the chip)
+      if (it.explainOptions) it.explainOptions.forEach(add); // v15: make() picks among several explain strings at random (Letter Match) — every one must be bundled
     }
   }
 
@@ -4982,12 +5156,13 @@ function tapShrug(){
     const tiles = [...$("board").children];
     tiles[it.correct].classList.add("reveal");
     tiles.forEach((t,j) => { if (j !== it.correct) t.classList.add("dim"); });
+    if (it.kind === "drag") dragRevealChip(it, it.correct); // v15: end any in-flight drag, glide the chip onto the answer
   }
   // scores via the SAME path dontKnowItem used (ᴰᴷ marker, streak reset, floor bookkeeping) —
   // recordResult()'s own ds.consecShrugs bookkeeping (see its v12 comment) is what tapShrug reads
   // right after this call to decide between a normalizer line and the 3-in-a-row graceful end.
   recordResult(it, false, { dontKnow: true, shrug: true });
-  queueComeback(it, it.seekfind ? "seek" : (it.body ? "body" : "tile")); // v12: req 6 — see its own comment
+  queueComeback(it, it.seekfind ? "seek" : (it.body ? "body" : (it.kind === "drag" ? "drag" : "tile"))); // v12: req 6 — see its own comment; v15: drag kind
   const consecShrugs = state.domain.consecShrugs || 0;
   const totalShrugs = state.domain.totalShrugs || 0;
   // v14.3: mercy exit fires on EITHER the original 3-CONSECUTIVE rule OR 5 TOTAL shrugs in this
@@ -5024,6 +5199,8 @@ function applyHint(it){
     hintSeekfind(it);
   } else if (it.body){
     hintBody(it);
+  } else if (it.kind === "drag"){
+    hintDrag(it); // v15: remove ONE wrong target (2-target items: re-speak the prompt)
   } else if (it.tiles && it.tiles.length > 2){
     hintTiles(it);
   } else {
@@ -5507,6 +5684,7 @@ function setSubtitle(text){
 }
 function clearBoardUI(){
   $("board").innerHTML = ""; $("board").style.display = "none"; $("board").classList.remove("compact");
+  resetDragUI(); // v15
   $("seekBoard").innerHTML = ""; $("seekBoard").style.display = "none";
   $("promptText").textContent = "";
   setSubtitle(null); // v13
@@ -5708,6 +5886,27 @@ function renderComebackItem(){
         $("seekBoard").querySelectorAll(`.body-hit[data-part="${it.label}"]`).forEach(e => e.classList.add(correct ? "correct" : "reveal"));
       });
     });
+  } else if (entry.kind === "drag"){
+    // v15: drag item replayed as an UNSCORED drag round — same chip/targets primitives as scored
+    // play (renderDragBoard), targets re-shuffled, single attempt, resolved through resolveComeback
+    // exactly like the tile branch below (never tapTile/recordResult/state.locked).
+    const order = shuffle(it.targets.map((_, i) => i));
+    const newCorrect = order.indexOf(it.correct);
+    const finish = (dropIdx) => {
+      if (ds.comebackLocked || state.currentItem !== it) return; ds.comebackLocked = true; // same staleness guard as the tile branch below
+      const correct = dropIdx === newCorrect;
+      const tiles = [...$("board").children];
+      resolveComeback(it, correct, () => {
+        tiles[newCorrect].classList.add(correct ? "correct" : "reveal");
+        tiles.forEach((t,j) => { if (j !== newCorrect) t.classList.add("dim"); });
+        dragSnap(it, correct ? dropIdx : newCorrect); // wrong single attempt: chip glides onto the revealed answer
+      });
+    };
+    renderDragBoard(it, order, {
+      current: () => state.currentItem,
+      locked: () => !state.domain || ds.comebackLocked === true,
+      onDrop: finish,
+    });
   } else {
     $("seekBoard").style.display = "none"; $("board").style.display = "grid";
     const order = shuffle(it.tiles.map((_, i) => i)); // "same tiles re-shuffled" — fresh permutation, same picture set
@@ -5857,6 +6056,7 @@ function renderItem(){
   // guarantee the loader never leaks into the first item's render.
   $("domainTransition").style.display = "none";
   $("categoryAnchors").style.display = "none"; // reset — re-shown below only for category items
+  resetDragUI(); // v15: a previous drag item's chip/board class must never leak into any other board type
   if (domainShouldStop(ds)){ domainDone(); return; }
   if (dom.key === "seekfind"){
     $("board").style.display = "none";
@@ -5900,6 +6100,14 @@ function renderItem(){
     // categories' `it.anchors` branch above (always exactly 3 icons, needs to stay big) is
     // completely untouched.
     shrinkToFit([$("categoryAnchors").querySelector(".anchor-row")], 58, 26);
+  }
+  if (it.kind === "drag"){
+    // v15: drag-and-drop item — own board (targets + chip), same tail as the tile path below
+    renderDragItem(it);
+    $("progressBar").style.width = progressPct(ds) + "%";
+    sayItem(it);
+    armShrugTimer();
+    return;
   }
   const board = $("board");
   const nTiles = it.tiles.length;
@@ -6206,7 +6414,7 @@ function tapTile(i, tileEl, forItem){
       state.locked = true;
       cancelShrugTimer(); // v12: item resolved (second-miss reveal) — stop any running shrug timer
       recordResult(it, false);
-      queueComeback(it, "tile"); // v12: req 6 — see its own comment
+      queueComeback(it, it.kind === "drag" ? "drag" : "tile"); // v12: req 6 — see its own comment; v15: drag items replay as a drag round
       tiles[it.correct].classList.add("reveal");
       tiles.forEach((t,j)=>{ if(j!==it.correct) t.classList.add("dim"); });
       setSubtitle(it.zh ? it.explainSubtitle : null); // v13: swap the prompt subtitle for the reveal's English translation
@@ -6278,6 +6486,242 @@ function recordResult(it, firstTry, extra, cOverride){
   // recordResult at all, so they're excluded automatically, same as they already are from
   // consecShrugs above.
   ds.totalShrugs = (extra && extra.shrug) ? (ds.totalShrugs || 0) + 1 : (ds.totalShrugs || 0);
+}
+
+/* =====================================================================
+   v15: DRAG-AND-DROP engine — rendering + pointer handling for `kind:"drag"` items. Shared by
+   scored play (renderDragItem), comeback cards (renderComebackItem's "drag" branch) and both
+   arcades (renderArcadeItem) via renderDragBoard(it, order, ctx), where `ctx` supplies the three
+   things that differ per session type:
+     ctx.current()  -> the item currently live for that session (state.currentItem / sess.currentItem)
+     ctx.locked()   -> true once that item is resolved / the session is gone
+     ctx.onDrop(i)  -> a drop landed on DOM target index i (already hit-tested + staleness-checked
+                       here too — the handler's own forItem guard is the second line of defence)
+     ctx.onTapChip(it)? -> chip tapped without dragging (replays its short sound/letter/number)
+   Targets are ordinary `.tile`s in #board (so .correct/.reveal/.dim/.hint-elim styling and every
+   tile-grid consumer keep working); the draggable chip lives in #dragZone below the board.
+   Why Pointer Events + rect hit-testing (not HTML5 drag/drop): the Fire tablet's kids browser has
+   no reliable HTML5 DnD for touch; setPointerCapture pins every event of the gesture to the chip
+   (same reasoning as attachTap) and a pure geometry test is deterministic and unit-testable.
+   Staleness (QA passes 2/9's bug class): a drag gesture snapshots the item at POINTERDOWN and
+   the drop is ignored unless the item is STILL that item and still unresolved at pointerup.
+   ===================================================================== */
+function resetDragUI(){
+  const z = $("dragZone");
+  if (z){ z.innerHTML = ""; z.style.display = "none"; }
+  const b = $("board");
+  if (b) b.classList.remove("drag-board");
+}
+// The chip for `it` (null if the zone now holds a different item's chip, or none).
+function dragChipFor(it){
+  const z = $("dragZone");
+  const c = z && z.querySelector(".drag-chip");
+  return (c && c._forItem === it) ? c : null;
+}
+// Which target (DOM index in #board) does a drop at client point (x,y), with the chip's own
+// rect `cr`, mean? 1) the live target whose rect contains the pointer; 2) else the live target
+// the chip overlaps the most, if that overlap covers >=40% of the chip; 3) else -1 ("nowhere" —
+// no penalty). Hint-eliminated targets are never valid (they're pointer-events:none for taps too).
+function dragHitIndex(x, y, cr){
+  const tiles = [...$("board").children];
+  for (let i = 0; i < tiles.length; i++){
+    if (tiles[i].classList.contains("hint-elim")) continue;
+    const r = tiles[i].getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return i;
+  }
+  const chipArea = Math.max(1, cr.width * cr.height);
+  let best = -1, bestFrac = 0.4;
+  for (let i = 0; i < tiles.length; i++){
+    if (tiles[i].classList.contains("hint-elim")) continue;
+    const r = tiles[i].getBoundingClientRect();
+    const w = Math.min(cr.right, r.right) - Math.max(cr.left, r.left);
+    const h = Math.min(cr.bottom, r.bottom) - Math.max(cr.top, r.top);
+    if (w > 0 && h > 0 && (w * h) / chipArea >= bestFrac){ bestFrac = (w * h) / chipArea; best = i; }
+  }
+  return best;
+}
+// Chip animates (CSS transition) back to its resting place. No shake, ever.
+function dragReturn(it){
+  const chip = dragChipFor(it);
+  if (!chip) return;
+  chip._pos = { dx: 0, dy: 0 };
+  chip.classList.remove("dragging", "placed");
+  chip.style.transform = "";
+}
+// Chip animates onto DOM target `domIdx` and sits small near the bottom of it.
+function dragSnap(it, domIdx){
+  const chip = dragChipFor(it);
+  const tile = $("board").children[domIdx];
+  if (!chip || !tile) return;
+  const cr = chip.getBoundingClientRect(), tr = tile.getBoundingClientRect();
+  const pos = chip._pos || { dx: 0, dy: 0 };
+  const natX = cr.left + cr.width / 2 - pos.dx, natY = cr.top + cr.height / 2 - pos.dy; // center at rest (scale is about the center, so it doesn't move it)
+  const dx = tr.left + tr.width / 2 - natX, dy = tr.top + tr.height * 0.74 - natY;
+  chip._pos = { dx, dy };
+  chip.classList.remove("dragging");
+  chip.classList.add("placed");
+  chip.style.transform = `translate(${dx}px,${dy}px) scale(.55)`;
+}
+// Resolution by something OTHER than the child's own drop (shrug reveal, arcade timeout): end any
+// in-flight drag gesture first (so a late pointerup can never score), then glide onto the answer.
+function dragRevealChip(it, domIdx){
+  const chip = dragChipFor(it);
+  if (!chip) return;
+  if (chip._drag) chip._drag.abort();
+  dragSnap(it, domIdx);
+}
+function dragNudge(it){
+  const chip = dragChipFor(it);
+  if (!chip || chip.classList.contains("placed")) return;
+  chip.classList.remove("nudge"); void chip.offsetWidth; chip.classList.add("nudge");
+}
+// Chip tapped without dragging: replay its short sound/letter/number (sanctioned interrupt, then a
+// beat — same shape as repeatPrompt()). `holderItem` is re-read after the beat, never trusted stale.
+function dragChipReplay(it, ctx){
+  if (!it.drag || !it.drag.say) return;
+  ttsCancel(); stopClip();
+  setTimeout(() => { if (ctx.current() === it && !ctx.locked()) speak(it.drag.say); }, 150);
+}
+function attachDrag(chip, it, ctx){
+  let active = null; // { id, x0, y0, nat, snap, maxMove } of the ONE pointer being tracked, or null
+  const tilesNow = () => [...$("board").children];
+  const setHover = (idx) => tilesNow().forEach((t, j) => t.classList.toggle("drop-hover", j === idx));
+  const endPointer = (id) => { try { chip.releasePointerCapture(id); } catch(e){} };
+  const drag = chip._drag = {
+    live(){ return ctx.current() === it && !ctx.locked(); },
+    down(ev){
+      if (active) return; // a pointer is already tracked — a second finger/long-press echo is ignored
+      if (ev.pointerType === "mouse" && ev.button) return; // primary button only
+      if (!drag.live()) return;
+      active = { id: ev.pointerId, x0: ev.clientX, y0: ev.clientY, nat: chip.getBoundingClientRect(), snap: ctx.current(), maxMove: 0 };
+      try { chip.setPointerCapture(ev.pointerId); } catch(e){}
+      chip.classList.remove("placed"); chip.classList.add("dragging");
+    },
+    move(ev){
+      if (!active || ev.pointerId !== active.id) return;
+      let dx = ev.clientX - active.x0, dy = ev.clientY - active.y0;
+      active.maxMove = Math.max(active.maxMove, Math.hypot(dx, dy));
+      // keep the whole chip on screen (the .screen scroller would otherwise grow scrollbars)
+      const n = active.nat, W = window.innerWidth || 0, H = window.innerHeight || 0;
+      if (W > 0) dx = Math.max(-n.left, Math.min(W - n.right, dx));
+      if (H > 0) dy = Math.max(-n.top, Math.min(H - n.bottom, dy));
+      chip._pos = { dx, dy };
+      chip.style.transform = `translate(${dx}px,${dy}px) scale(1.12)`;
+      setHover(dragHitIndex(ev.clientX, ev.clientY, chip.getBoundingClientRect()));
+    },
+    up(ev){
+      if (!active || ev.pointerId !== active.id) return; // not the tracked pointer: never drops, never clears
+      const a = active; active = null;
+      endPointer(ev.pointerId);
+      setHover(-1);
+      chip.classList.remove("dragging");
+      // stale/resolved item: the gesture began on a different item, or the item changed/resolved
+      // since — drop is a no-op, chip just goes home (a removed chip is harmless to touch).
+      if (ctx.current() !== it || a.snap !== it || ctx.locked()){ chip._pos = { dx: 0, dy: 0 }; chip.style.transform = ""; return; }
+      if (a.maxMove < 12){ // a tap (or long-press) on the chip itself: not a drop
+        chip._pos = { dx: 0, dy: 0 }; chip.style.transform = "";
+        dragChipReplay(it, ctx);
+        return;
+      }
+      const idx = dragHitIndex(ev.clientX, ev.clientY, chip.getBoundingClientRect());
+      if (idx < 0){ dragReturn(it); return; } // dropped nowhere: back home, no penalty
+      ctx.onDrop(idx);
+    },
+    cancel(ev){ // OS/browser took the gesture (palm rejection, notification shade, ...): chip goes home, nothing is scored
+      if (!active || ev.pointerId !== active.id) return;
+      active = null; endPointer(ev.pointerId); setHover(-1);
+      dragReturn(it);
+    },
+    abort(){ // programmatic end (item resolved by a shrug reveal / arcade timeout mid-drag): no drop, no return animation here
+      if (!active) return;
+      const id = active.id; active = null; endPointer(id); setHover(-1);
+      chip.classList.remove("dragging");
+    },
+  };
+  chip.addEventListener("pointerdown", drag.down);
+  chip.addEventListener("pointermove", drag.move);
+  chip.addEventListener("pointerup", drag.up);
+  chip.addEventListener("pointercancel", drag.cancel);
+  // spec: lostpointercapture fires whenever capture ends for ANY reason (incl. the chip being
+  // removed mid-drag) — if the normal terminal events didn't already clear `active`, treat it as
+  // a cancel (never a drop: there's no trustworthy up-coordinate here).
+  chip.addEventListener("lostpointercapture", (ev) => { if (active && ev.pointerId === active.id) drag.cancel(ev); });
+  chip.addEventListener("contextmenu", (ev) => ev.preventDefault());
+}
+// Builds the target tiles in #board + the chip in #dragZone. `order` permutes it.targets for
+// display (comeback cards re-shuffle; scored/arcade pass null = identity).
+function renderDragBoard(it, order, ctx){
+  order = order || it.targets.map((_, i) => i);
+  const board = $("board"), zone = $("dragZone");
+  $("seekBoard").style.display = "none";
+  board.style.display = "grid";
+  board.style.gridTemplateColumns = order.length === 3 ? "1fr 1fr 1fr" : "1fr 1fr";
+  board.classList.remove("compact");
+  board.classList.add("drag-board");
+  board.innerHTML = "";
+  order.forEach((ti) => {
+    const tile = document.createElement("div");
+    tile.className = "tile drop-target";
+    tile.innerHTML = it.targets[ti].html;
+    attachTap(tile, () => dragNudge(it)); // tapping a target (instead of dragging) just hops the chip to say "drag me!"
+    board.appendChild(tile);
+  });
+  zone.innerHTML = "";
+  zone.style.display = "flex";
+  const chip = document.createElement("div");
+  chip.className = "drag-chip";
+  chip.innerHTML = `<span class="dc-in">${it.drag.html}</span>`;
+  chip._forItem = it; chip._pos = { dx: 0, dy: 0 };
+  ctx.onTapChip = ctx.onTapChip || (() => {});
+  attachDrag(chip, it, ctx);
+  zone.appendChild(chip);
+}
+// ---- scored play ----
+function renderDragItem(it){
+  renderDragBoard(it, null, {
+    current: () => state.currentItem,
+    locked: () => state.locked || !state.domain,
+    onDrop: (i) => dropScored(i, it),
+  });
+}
+// A drop on target i, scored play. Routes through tapTile() — the SAME path a tile tap takes
+// (first-attempt-counts, brave-guess chip, second-miss reveal+explanation, hint-adjusted c',
+// comeback queue, celebration + auto-advance) — then only adds the chip's own animation: onto the
+// target when correct; onto the revealed answer after a second miss; otherwise back home (a first
+// wrong drop is a brave guess, never a shake).
+function dropScored(i, it){
+  if (state.locked || !state.currentItem || !state.domain || state.currentItem !== it) return;
+  const tile = $("board").children[i];
+  if (!tile){ dragReturn(it); return; }
+  const correct = i === it.correct;
+  tapTile(i, tile, it);
+  if (correct) dragSnap(it, i);
+  else if (state.locked) dragSnap(it, it.correct); // second miss -> revealed
+  else dragReturn(it);
+}
+// ---- arcade (Mix-It-Up / Everything Mix) ---- same idea, via tapArcadeTile(); `sess` is
+// state.arcade or state.everything.
+function dropArcade(sess, i, it){
+  if (!sess.active || sess.locked || !sess.currentItem || sess.currentItem !== it) return;
+  const tile = $("board").children[i];
+  if (!tile){ dragReturn(it); return; }
+  const correct = i === it.correct;
+  tapArcadeTile(sess, i, tile, it);
+  if (correct) dragSnap(it, i);
+  else if (sess.locked) dragSnap(it, it.correct);
+  else dragReturn(it);
+}
+// ---- hint nudge for drag items (dispatched from applyHint): remove ONE wrong target. With only 2
+// targets there's nothing to remove — re-speak the prompt instead (same rule as 2-tile items).
+function hintDrag(it){
+  const tiles = [...$("board").children];
+  const wrongIdx = tiles.map((_, i) => i).filter(i => i !== it.correct && !tiles[i].classList.contains("hint-elim"));
+  if (tiles.length < 3 || !wrongIdx.length){
+    setTimeout(() => { if (state.currentItem === it && !state.locked) sayItem(it); }, 250);
+    return;
+  }
+  tiles[pick(wrongIdx)].classList.add("hint-elim");
+  it.hintRemaining = tiles.filter(t => !t.classList.contains("hint-elim")).length;
 }
 
 function addStar(){
@@ -7726,6 +8170,8 @@ function refillArcadeBag(sess, source){
     pool = arcadeWindowFilter(ARCADE_VOCAB_DEFS, d => d.age, arcadeThetaCenter("vocabulary"));
   } else if (source === "functions"){
     pool = arcadeWindowFilter(ARCADE_FUNCTIONS_DEFS, d => d.age, arcadeThetaCenter("functions"));
+  } else if (source === "dragsounds"){
+    pool = arcadeWindowFilter(DRAG_SOUND_DEFS, d => d.age, arcadeThetaCenter("dragSounds")); // v15: Sound Match in Mix-It-Up — animal words fit its vocab/functions/seekfind theme
   } else { // seekfind — target pool is every (scene, word) pair across all 3 scenes
     const center = arcadeThetaCenter("vocabulary"); // seekfind targets ARE vocab words; no separate seekfind theta exists
     const pairs = [];
@@ -7741,10 +8187,13 @@ function drawFromArcadeBag(sess, source){
 // 40% vocab / 30% functions / 30% seekfind, per the task — approximate by design (a weighted
 // random pick per question, not a fixed round-robin sequence). Mix-It-Up only.
 function pickArcadeSource(){
+  // v15: 30/25/25/20 vocab/functions/seekfind/dragsounds (was 40/30/30) — one drag-and-drop animal-
+  // sound question in ~5 gives Mix-It-Up some hands-on variety without changing its theme.
   const r = Math.random();
-  if (r < 0.40) return "vocab";
-  if (r < 0.70) return "functions";
-  return "seekfind";
+  if (r < 0.30) return "vocab";
+  if (r < 0.55) return "functions";
+  if (r < 0.80) return "seekfind";
+  return "dragsounds";
 }
 function buildMixItUpItem(sess){
   const source = pickArcadeSource();
@@ -7758,6 +8207,12 @@ function buildMixItUpItem(sess){
     const d = drawFromArcadeBag(sess, "functions");
     const it = makeFunctionItem(d, ARCADE_FUNCTIONS_DEFS, 4);
     it.arcadeSource = "functions"; it.kind = "tile";
+    return it;
+  }
+  if (source === "dragsounds"){
+    const d = drawFromArcadeBag(sess, "dragsounds");
+    const it = makeDragSoundItem(d, DRAG_SOUND_DEFS, 4); // sets kind:"drag" itself
+    it.arcadeSource = "dragsounds";
     return it;
   }
   const pair = drawFromArcadeBag(sess, "seekfind");
@@ -7858,7 +8313,7 @@ function buildEverythingItem(sess){
   const d = drawFromEverythingBag(sess, domainKey);
   const arity = (domainKey === "opposites" || domainKey === "time") ? 2 : 4;
   const it = dom.make(d, dom.defs, arity);
-  it.arcadeSource = domainKey; it.kind = "tile";
+  it.arcadeSource = domainKey; if (!it.kind) it.kind = "tile"; // v15: make() may already have set kind:"drag" — never clobber it
   return it;
 }
 
@@ -8015,6 +8470,7 @@ function arcadeTimeout(sess){
     const tiles = [...board.children];
     tiles[it.correct].classList.add("reveal");
     tiles.forEach((t,j) => { if (j !== it.correct) t.classList.add("dim"); });
+    if (it.kind === "drag") dragRevealChip(it, it.correct); // v15: end any in-flight drag (a late pointerup can't score — sess.locked + abort), glide the chip onto the answer
   }
   // Bug fix (2026-08-23): same fire-and-forget/fixed-timeout race as tapTile's second-miss
   // branch (see its own comment for the full root cause) — was `speak(explain); finishArcade
@@ -8167,6 +8623,7 @@ function renderArcadeSeekfindBoard(sess, it){
 function renderArcadeItem(sess){
   if (!sess.active) return; // stale callback after exitArcade()/exitEverything()/endGame() — see their own comments
   sess.firstTry = true; sess.locked = false;
+  resetDragUI(); // v15: a previous drag item's chip/board class must never leak into another board type
   $("categoryAnchors").style.display = "none"; // reset every render — re-shown below only for anchors/patternStrip items (Everything Mix only; Mix-It-Up's vocab/functions/seekfind items never set these)
   const it = ARCADE_MODES[sess.mode].buildItem(sess);
   sess.currentItem = it;
@@ -8194,6 +8651,15 @@ function renderArcadeItem(sess){
     $("board").style.display = "none";
     $("seekBoard").style.display = "block";
     renderBodyFigure((part, el) => tapArcadeBodyPart(sess, part, el, it)); // v14.1: `it` threaded through for the stale-pointer-capture staleness check, see tapArcadeBodyPart's own comment
+  } else if (it.kind === "drag"){
+    // v15: drag-and-drop — chip + targets via renderDragBoard; drops route through tapArcadeTile
+    // (dropArcade), so the 30s timer cancel / brave-guess / finishArcadeQuestion semantics are the
+    // tile ones exactly. Late pointerups after an advance/timeout are ignored by the item guards.
+    renderDragBoard(it, null, {
+      current: () => sess.currentItem,
+      locked: () => sess.locked || !sess.active,
+      onDrop: (i) => dropArcade(sess, i, it),
+    });
   } else {
     $("seekBoard").style.display = "none";
     $("board").style.display = "grid";
@@ -8279,7 +8745,7 @@ function exitArcadeSession(sess){
   showPicker();
 }
 function startArcade(){ // Mix-It-Up — picker tile onclick target, name unchanged from v10
-  state.arcade.bags = { vocab: [], functions: [], seekfind: [] }; // fresh bags every entry, per the task
+  state.arcade.bags = { vocab: [], functions: [], seekfind: [], dragsounds: [] }; // fresh bags every entry, per the task
   startArcadeSession(state.arcade);
 }
 function exitArcade(){ exitArcadeSession(state.arcade); } // name unchanged from v10 — backToMap()/endGame() call this directly
