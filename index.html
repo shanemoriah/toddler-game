@@ -456,6 +456,20 @@
     #board.drag-board.drag4 { grid-template-columns: repeat(4, 1fr) !important; max-height: max(112px, calc(100vh - 372px)); }
   }
   .tile.drop-hover { border-color: var(--accent); background: #fff6ea; transform: scale(1.05); }
+  /* v15.2: Mandarin drag items show an English subtitle line (~28px with margins) and the hanzi prompt bar is ~8px
+     taller, so the board cap leaves ~28px more chrome — and 4 targets go in ONE row on landscape screens up to 640px
+     tall (at 1024x600 two 96px rows hit the 224px floor and pushed the chip ~17px below the fold). */
+  #board.drag-board.drag-sub { max-height: max(224px, min(56vh, calc(100vh - 400px))); }
+  @media (max-height: 640px) and (min-aspect-ratio: 3/2) {
+    #board.drag-board.drag-sub { max-height: max(112px, calc(100vh - 400px)); }
+    #board.drag-board.drag4.drag-sub { grid-template-columns: repeat(4, 1fr) !important; }
+  }
+  /* very short landscape (Silk ~853x480): trim the prompt bar + chip-zone padding so the chip stays on screen with the subtitle line */
+  @media (max-height: 560px) and (min-aspect-ratio: 3/2) {
+    #gameScreen.drag-sub-on #promptBar { min-height: 44px; padding: 0 8px; }
+    #gameScreen.drag-sub-on #promptSubtitle { margin: -2px auto 2px; }
+    #gameScreen.drag-sub-on #dragZone { min-height: 100px; padding: 0 0 2px; }
+  }
   /* v15.2 Shape Sorter: the hole fills with the shape's color (carried on the SVG as --sc) when its tile
      resolves — pure CSS, no nodes added. The chip is a bare shape (no pill) that, on snap, glides to the
      hole, scales to its size and fades (class .filled, see dragSnap()). */
@@ -3124,6 +3138,33 @@ function makeDragColorItem(d, pool, arity){
     targets, tiles: targets.map(t => t.html), correct: colors.indexOf(d.color) };
 }
 
+/* =====================================================================
+   v15.2: MANDARIN COUNT MATCH (zhDragNumbers, lang:"zh") — drag a big hanzi numeral 一…十 onto the
+   group with that many things. Same drag engine and Count Match target rendering (countTile /
+   dragCountDistractors) as the English dragNumbers; everything SPOKEN goes through the Mandarin path
+   only (item.zh -> speakZh / bundled Yunxia clips, silent when a clip is missing — see speakZh()),
+   with the English subtitle shown under the hanzi prompt like every other Mandarin item. Difficulty
+   is exposure-relative like zhNumbers (key prefix "zh" -> the fixed beginner prior, never age).
+   For two the *quantity* is said 两个 (what a teacher actually says); the chip and the "drag ..."
+   reference stay the numeral 二.
+   ===================================================================== */
+const ZH_NUM_EN = ["one","two","three","four","five","six","seven","eight","nine","ten"];
+const ZH_DRAG_NUM_DEFS = ZH_NUM_HANZI.map((hanzi, i) => ({ label:`拖${hanzi}`, n:i + 1, hanzi, age: Math.round(22 + i * 3.2) })); // between zhNumbers' quantity rungs (15-46) and its hanzi-recognition rungs (30-60)
+function makeZhDragNumberItem(d, pool, arity){
+  const n = dragArity(arity);
+  const emoji = pick(DRAG_COUNT_EMOJI);
+  const counts = shuffle([d.n, ...dragCountDistractors(d.n, n - 1)]);
+  const q = d.n === 2 ? "两" : d.hanzi; // quantity word (两个), see the header comment
+  const targets = counts.map(c => ({ html: countTile(c, emoji), label: String(c), isTarget: c === d.n }));
+  const say = `哪个有${q}个？把${d.hanzi}拖过去！`;
+  return { kind:"drag", zh:true, label:d.label, b:d.age, c:1/counts.length, s:4,
+    prompt:say, say,
+    subtitle:`Drag ${d.hanzi} to ${ZH_NUM_EN[d.n - 1]} thing${d.n === 1 ? "" : "s"}!`,
+    explain:`这是${d.hanzi}！这里有${q}个！`, explainSubtitle:`This is ${d.hanzi} — there are ${d.n}!`,
+    drag:{ html:`<span class="dc-letter" style="color:#1d6fd6">${d.hanzi}</span>`, say:`${d.hanzi}！` },
+    targets, tiles: targets.map(t => t.html), correct: counts.indexOf(d.n) };
+}
+
 const DOMAINS = [
   { key:"vocabulary", label:"Words", emoji:"🐶", section:"Words & Sounds",
     defs: VOCAB_WORDS.map(([w,e,a,th]) => ({ label:w, word:w, emoji:e, age:a, theme:th })),
@@ -3218,6 +3259,12 @@ const DOMAINS = [
     defs: DRAG_SHAPE_DEFS, make: makeDragShapeItem },
   { key:"dragColors", label:"Color Sort", emoji:"🎨", section:"Numbers & Shapes",
     defs: DRAG_COLOR_DEFS, make: makeDragColorItem },
+  // lang:"zh" is the one flag that fans out to every Mandarin exclusion site (arcades, English median,
+  // Results/Progress "level" framing, collectMandarinSayStrings); the key prefix "zh" gives the
+  // exposure-relative prior (priorFor). PLAY_ORDER keeps it with the other Mandarin domains.
+  { key:"zhDragNumbers", label:"数一数 Count Match", spokenLabel:"Chinese Count Match", emoji:"🐲",
+    section:"中文 Mandarin", lang:"zh",
+    defs: ZH_DRAG_NUM_DEFS, make: makeZhDragNumberItem },
 ];
 
 // QA pass 15: "Play everything!" PLAY order, deliberately separate from DOMAINS[]'s array order (which
@@ -3432,6 +3479,7 @@ function collectMandarinSayStrings(){
       try { it = dom.make(d, dom.defs, ARITY); } catch(e){ continue; } // defensive only — every real def succeeds
       add(it.say);
       add(it.explain);
+      if (it.drag) add(it.drag.say); // v15.2: the drag chip's own short spoken label (tap the chip) — Mandarin Count Match
     }
   }
   return [...set].sort();
@@ -7016,7 +7064,8 @@ function resetDragUI(){
   const z = $("dragZone");
   if (z){ z.innerHTML = ""; z.style.display = "none"; }
   const b = $("board");
-  if (b) b.classList.remove("drag-board", "drag4");
+  if (b) b.classList.remove("drag-board", "drag4", "drag-sub");
+  const g = $("gameScreen"); if (g) g.classList.remove("drag-sub-on");
 }
 // The chip for `it` (null if the zone now holds a different item's chip, or none).
 function dragChipFor(it){
@@ -7102,7 +7151,8 @@ function dragNudge(it){
 function dragChipReplay(it, ctx){
   if (!it.drag || !it.drag.say) return;
   ttsCancel(); stopClip();
-  setTimeout(() => { if (ctx.current() === it && !ctx.locked()) speak(it.drag.say); }, 150);
+  // v15.2: a Mandarin chip ("三！") must go through speakZh (bundled clip only) — never the English TTS voice
+  setTimeout(() => { if (ctx.current() === it && !ctx.locked()) (it.zh ? speakZh : speak)(it.drag.say); }, 150);
 }
 function attachDrag(chip, it, ctx){
   let active = null; // { id, x0, y0, nat, snap, maxMove } of the ONE pointer being tracked, or null
@@ -7193,6 +7243,8 @@ function renderDragBoard(it, order, ctx){
   board.classList.remove("compact");
   board.classList.add("drag-board");
   board.classList.toggle("drag4", order.length === 4); // see the short-landscape rule in the .drag-board CSS
+  board.classList.toggle("drag-sub", !!it.subtitle); // v15.2: Mandarin items carry an English subtitle line — the board cap leaves room for it
+  $("gameScreen").classList.toggle("drag-sub-on", !!it.subtitle); // (and the very-short-landscape rule below trims the prompt bar/chip zone)
   board.innerHTML = "";
   order.forEach((ti) => {
     const tile = document.createElement("div");
