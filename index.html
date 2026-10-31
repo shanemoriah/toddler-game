@@ -229,9 +229,13 @@
   @keyframes dtEmojiIn { 0%{transform:scale(.2) rotate(-25deg);opacity:0} 100%{transform:scale(1) rotate(0);opacity:1} }
   /* slide-away ghost of the card (cloned + fixed at the card's rect by dismissDomainCard) */
   .dt-ghost { position: fixed; z-index: 40; pointer-events: none; animation: dtOut .28s ease-in forwards; }
+  .dt-ghost .dt-fox { font-size: 54px; line-height: 1; }
+  .dt-ghost .dt-emoji { font-size: 92px; line-height: 1; }
+  .dt-ghost .dt-label { font-size: clamp(22px, 5vw, 34px); font-weight: 800; color: var(--ink); }
+  .dt-ghost .dt-text { font-size: 20px; font-weight: 700; color: #8a7d66; }
   @keyframes dtOut { to { opacity: 0; transform: translateX(-70px) scale(.94); } }
   /* arcade start: top banner + tint wash (fire-and-forget overlay; the first item renders at once underneath) */
-  .fx-wash { position: fixed; inset: 0; z-index: 44; pointer-events: none; animation: fxWash 1s ease-out forwards; }
+  .fx-wash { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 44; pointer-events: none; animation: fxWash 1s ease-out forwards; }
   @keyframes fxWash { 0%{opacity:0} 20%{opacity:1} 100%{opacity:0} }
   .fx-banner { position: fixed; left: 50%; top: 16vh; z-index: 45; pointer-events: none; display: flex; align-items: center; gap: 12px; padding: 8px 22px; border-radius: 40px; background: rgba(255,255,255,.92); border: 3px solid var(--tile-border); box-shadow: 0 6px 14px rgba(0,0,0,.12); font-weight: 800; font-size: clamp(20px, 5vw, 30px); white-space: nowrap; animation: fxBanner 1s ease-out forwards; }
   .fx-banner .fb-e { font-size: 1.7em; line-height: 1; }
@@ -484,9 +488,9 @@
   /* ---------- v15.1: streak milestone overlay (3 / 5 / 10 correct in a row) ----------
      Fixed, pointer-events:none, transform+opacity only, removed after ~1.3s. Purely visual — the
      spoken lines are the pre-existing ones. */
-  .fx-milestone { position: fixed; inset: 0; z-index: 58; pointer-events: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .4em; font-size: min(20px, 4.6vw); animation: fxMilestone 1.2s ease-out forwards; }
+  .fx-milestone { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 58; pointer-events: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .4em; font-size: min(20px, 4.6vw); animation: fxMilestone 1.2s ease-out forwards; }
   .fx-milestone .ms-rb { width: 20em; height: 10em; overflow: hidden; display: flex; align-items: flex-end; justify-content: center; }
-  .fx-milestone .ms-rb i { display: block; width: 10em; height: 10em; border-radius: 50%; flex: none;
+  .fx-milestone .ms-rb i { display: block; width: 10em; height: 10em; border-radius: 50%; flex: none; margin-bottom: -5em;
     box-shadow: 0 0 0 .7em #ff6b6b, 0 0 0 1.4em #ffb84d, 0 0 0 2.1em #ffe45e, 0 0 0 2.8em #6bcb77, 0 0 0 3.5em #4ecdc4, 0 0 0 4.2em #6b8fff, 0 0 0 4.9em #c56bff; }
   .fx-milestone .ms-row { font-size: 3.4em; line-height: 1; white-space: nowrap; text-shadow: 0 4px 10px rgba(0,0,0,.18); }
   .fx-milestone .ms-row span { display: inline-block; animation: fxMsStar .5s cubic-bezier(.3,1.5,.5,1) both; }
@@ -529,6 +533,11 @@
   .wave { animation: foxWave 1.8s ease-in-out 2; transform-origin: 50% 90%; }
   @keyframes foxWave { 0%,100%{transform:rotate(0)} 12%{transform:rotate(-16deg) translateY(-4px)} 28%{transform:rotate(14deg)} 44%{transform:rotate(-14deg) translateY(-3px)} 60%{transform:rotate(12deg)} 76%{transform:rotate(0)} }
   @media (prefers-reduced-motion: reduce) { .wave { animation: none; } }
+
+  /* v15.1: honor reduced motion for the pre-existing infinite loops too (item/tap animations that carry meaning stay). */
+  @media (prefers-reduced-motion: reduce) {
+    .seek-obj, .picker-tile-arcade, #domainTransition .dt-fox, .drag-chip .dc-in { animation: none; }
+  }
 
   /* ---------- interlude ---------- */
   #interlude .bigEmoji { font-size: 110px; animation: bounce 1s infinite; }
@@ -5158,6 +5167,7 @@ function celebrateCorrect(el, domKey){
 // Fire-and-forget; one at a time; never touches audio, timers or game state.
 function showMilestone(level){
   try {
+    if (fxReduced()) return;
     const old = document.querySelector(".fx-milestone");
     if (old && old.parentNode) old.parentNode.removeChild(old);
     const ov = document.createElement("div");
