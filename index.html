@@ -443,8 +443,18 @@
   .drag-chip .dc-letter { color: #8e5bd1; font-size: 1.05em; }
   @keyframes dragBob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
   @keyframes dragNudge { 0%,100%{transform:translateY(0) scale(1)} 30%{transform:translateY(-16px) scale(1.12)} 60%{transform:translateY(0) scale(.96)} }
-  #board.drag-board { max-height: 56vh; }
-  #board.drag-board .tile { min-height: 96px; cursor: default; }
+  /* QA pass 15: cap the target grid by what is left AFTER the HUD/prompt bar/gaps and the 116px chip
+     zone (~360px of fixed chrome), not just 56vh — at 1024x600 landscape (Fire HD 8) the 2x2 grid took
+     336px and pushed the chip ~100px below the fold (screen scrolled, chip mostly off-screen). Floor =
+     two 96px rows + gap so targets never shrink below the 44px+ tap size. */
+  #board.drag-board { max-height: max(224px, min(56vh, calc(100vh - 372px))); }
+  /* ...and the target emoji scales with height too (vh term), else a 110px emoji is clipped by .tile's
+     overflow:hidden once the rows shrink to ~100px on a short landscape screen. */
+  #board.drag-board .tile { min-height: 96px; cursor: default; font-size: clamp(48px, min(14vw, 11vh), 110px); }
+  /* very short landscape screens (Silk with its toolbars: ~853x480): 4 targets go in ONE row so the chip stays on screen */
+  @media (max-height: 560px) and (min-aspect-ratio: 3/2) {
+    #board.drag-board.drag4 { grid-template-columns: repeat(4, 1fr) !important; max-height: max(112px, calc(100vh - 372px)); }
+  }
   .tile.drop-hover { border-color: var(--accent); background: #fff6ea; transform: scale(1.05); }
 
   /* ---------- v8: voice recording booth ---------- */
@@ -6856,7 +6866,7 @@ function resetDragUI(){
   const z = $("dragZone");
   if (z){ z.innerHTML = ""; z.style.display = "none"; }
   const b = $("board");
-  if (b) b.classList.remove("drag-board");
+  if (b) b.classList.remove("drag-board", "drag4");
 }
 // The chip for `it` (null if the zone now holds a different item's chip, or none).
 function dragChipFor(it){
@@ -7017,6 +7027,7 @@ function renderDragBoard(it, order, ctx){
   board.style.gridTemplateColumns = order.length === 3 ? "1fr 1fr 1fr" : "1fr 1fr";
   board.classList.remove("compact");
   board.classList.add("drag-board");
+  board.classList.toggle("drag4", order.length === 4); // see the short-landscape rule in the .drag-board CSS
   board.innerHTML = "";
   order.forEach((ti) => {
     const tile = document.createElement("div");
