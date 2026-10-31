@@ -24,6 +24,14 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# 2026-10-31: English clips are now ElevenLabs (tools/gen_audio_11labs.sh). Filenames are
+# sha(string), so running this Samantha pipeline would silently OVERWRITE them. Refuse
+# unless explicitly overridden.
+if [ -s tools/eleven_ledger.json ] && [ "${TG_ALLOW_SAMANTHA:-}" != "1" ]; then
+  echo "!! tools/eleven_ledger.json exists: English clips are ElevenLabs now. Use tools/gen_audio_11labs.sh." >&2
+  echo "   (set TG_ALLOW_SAMANTHA=1 to override and overwrite them with macOS say)" >&2
+  exit 2
+fi
 
 VOICE="Samantha"
 RATE=175
