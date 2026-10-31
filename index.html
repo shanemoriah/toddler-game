@@ -6108,6 +6108,11 @@ let _stkBase = { pid: null, ids: null, full: false }; // full = a whole-history 
 const _stkArcadeLaunch = new Set();
 function stickerNoteArcadeLaunch(){ try { if (state.activeProfileId) _stkArcadeLaunch.add(state.activeProfileId); } catch(e){} }
 function stickerDeriveHistory(){ return stickerDerive(loadSessions(), loadCompletions(), _stkArcadeLaunch.has(state.activeProfileId) ? null : loadArcadeStats(), {}); }
+// v15.4: same derive for ANY local profile (reads its namespaced keys directly) — used to silently baseline siblings after a pull.
+function stickerDeriveHistoryFor(id){
+  const rd = (k, dflt) => { try { const v = JSON.parse(localStorage.getItem(`${k}:${id}`)); return v == null ? dflt : v; } catch(e){ return dflt; } };
+  return stickerDerive(sanitizeSessionsArr(rd("tg_sessions", [])), rd("tg_completions", {}), (id === state.activeProfileId && _stkArcadeLaunch.has(id)) ? null : rd("tg_arcade", {}), {});
+}
 function stickerRebase(only){
   try {
     const pid = state.activeProfileId; if (!pid) return;
@@ -6115,6 +6120,20 @@ function stickerRebase(only){
     for (const k of Object.keys(stickerDeriveHistory())) if (!only || only.has(k)) cur.add(k);
     _stkBase = { pid, ids: cur, full: !!(!only || (_stkBase.pid === pid && _stkBase.full)) }; // QA16: a post-pull delta (only) made before the child taps the profile card must not suppress the full baseline in enterPlayForProfile()
   } catch(e){}
+}
+// v15.4: post-pull delta baseline for every non-active local profile. Only for a sibling that ALREADY has stored stickers: one with an empty record keeps
+// getting the full first-entry baseline at activation (enterPlayForProfile), which already covers the delta, and persisting here would defeat that test.
+// Owed-but-uncarded ids were derivable BEFORE the pull (in `pre`), so they are never touched and still celebrate on re-entry.
+function stickerRebaseSiblings(sibPre){
+  const nowIso = new Date().toISOString();
+  for (const p of loadProfiles().profiles){
+    if (p.id === state.activeProfileId) continue;
+    let stored; try { stored = mergeStickers(JSON.parse(localStorage.getItem(`tg_stickers:${p.id}`) || "{}"), null); } catch(e){ continue; }
+    if (!Object.keys(stored).length) continue;
+    const pre = sibPre[p.id] || new Set(), derived = stickerDeriveHistoryFor(p.id), add = {};
+    for (const k of Object.keys(derived)) if (!pre.has(k) && !(k in stored)) add[k] = derived[k] || nowIso;
+    if (Object.keys(add).length) persistSet(`tg_stickers:${p.id}`, JSON.stringify(mergeStickers(stored, add)));
+  }
 }
 function stickerAwardNow(){
   if (!state.activeProfileId) return [];
@@ -8701,9 +8720,14 @@ async function syncPullAndMerge(){
     const local = buildLocalSyncBlob();
     const merged = mergeState(remote, local); // server's copy first — matches src/index.js's mergeState(existing, incoming) argument order for identical output
     let preKeys = null; try { preKeys = new Set(Object.keys(stickerDeriveHistory())); } catch(e){}
+    // v15.4: every OTHER local profile gets the same treatment, persisted instead of held in _stkBase (that is single-profile): snapshot what each
+    // sibling could derive before the pull; after it, history that ARRIVED is silently stored, so the sibling never cards for it on a later switch.
+    const sibPre = {};
+    try { for (const p of loadProfiles().profiles) if (p.id !== state.activeProfileId) sibPre[p.id] = new Set(Object.keys(stickerDeriveHistoryFor(p.id))); } catch(e){}
     applySyncBlobLocally(merged);
     // v15.3: history that ARRIVED via this pull is "past", not a fresh reward — add only the delta (post minus pre) to the baseline, see stickerRebase()
     try { const post = Object.keys(stickerDeriveHistory()).filter(k => !(preKeys && preKeys.has(k))); if (post.length) stickerRebase(new Set(post)); } catch(e){}
+    try { stickerRebaseSiblings(sibPre); } catch(e){}
     setSyncStatus("synced");
   } catch(e){ setSyncStatus("offline"); }
 }
