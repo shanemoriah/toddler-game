@@ -330,7 +330,7 @@
      Fixed full-screen host is pointer-events:none (the game/results buttons underneath stay tappable); only the
      card itself takes taps (tap = dismiss). z-index 62 sits above every other fx layer (burst 55, milestone 58).
      The peel-in is transform+opacity only (scale + rotate from 0, 600ms). */
-  .fx-sticker { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 62; display: flex; align-items: flex-start; justify-content: center; padding-top: 5vh; pointer-events: none; }
+  .fx-sticker { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 62; display: flex; align-items: flex-start; justify-content: center; padding-top: 76px; pointer-events: none; }
   .fx-sticker .sk-card { pointer-events: auto; cursor: pointer; background: #fff; border: 5px solid #ffd166; border-radius: 28px; padding: 14px 28px 16px; text-align: center; max-width: 86vw;
     box-shadow: 0 8px 0 rgba(0,0,0,.08), 0 18px 40px rgba(0,0,0,.28); animation: skCardIn .25s ease-out both; touch-action: manipulation; }
   .fx-sticker .sk-title { font-size: 24px; font-weight: 800; color: var(--accent); margin-bottom: 10px; }
@@ -5908,7 +5908,9 @@ function enterPlayForProfile(p, age, name, silent){
   // #stars' own max-height:52px cap (see its CSS rule) already bounds the pure layout blast radius.
   $("stars").innerHTML = "";
   $("quitBtn").style.display = "block";
-  stickerRebase(); // v15.3: sticker book baseline — see stickerRebase()
+  // v15.3: sticker book baseline — only for a profile with NO stored stickers yet (pre-v15.3 profile / wiped tablet re-derived from synced history).
+  // A same-profile re-entry or a profile that already has its record must never absorb stickers earned (but not yet celebrated) in a previous visit.
+  if (!(_stkBase.pid === p.id && _stkBase.ids) && Object.keys(loadStickers()).length === 0) stickerRebase();
   if (silent){ showPicker(); return; }
   // v9: name-free greeting so it's cacheable as one bundled clip regardless
   // of which child is playing — see collectAllSayStrings()'s doc comment.
@@ -6097,11 +6099,14 @@ function stickerDeriveForActive(){ return stickerDerive(loadSessions(), loadComp
 // must land in the book silently rather than re-celebrate on every launch. Deliberately NOT refreshed after later syncs: a
 // PUT response applied 2s after a save would otherwise absorb a sticker earned moments ago, before its card.
 let _stkBase = { pid: null, ids: null };
-function stickerRebase(){
+// `only` (optional Set of ids): add just those (used by the post-pull delta). Session-local event flags are deliberately NOT
+// part of the baseline derive — a brave guess / streak flagged this session is a reward owed, not history.
+function stickerDeriveHistory(){ return stickerDerive(loadSessions(), loadCompletions(), loadArcadeStats(), {}); }
+function stickerRebase(only){
   try {
     const pid = state.activeProfileId; if (!pid) return;
     const cur = (_stkBase.pid === pid && _stkBase.ids) ? _stkBase.ids : new Set();
-    for (const k of Object.keys(stickerDeriveForActive())) cur.add(k);
+    for (const k of Object.keys(stickerDeriveHistory())) if (!only || only.has(k)) cur.add(k);
     _stkBase = { pid, ids: cur };
   } catch(e){}
 }
@@ -6371,7 +6376,7 @@ function showPicker(){
   $("mapBtn").style.display = "none"; // v4 (mod 2): only shown while inside a module
   renderPicker();
   show("pickerScreen");
-  if (stickerPendingFor().length) stickerAwardMoment({ screen: "pickerScreen", delay: 600 }); // v15.3: a card the child tapped away from earlier is still owed
+  if (!_stk && stickerPendingFor().length) stickerAwardMoment({ screen: "pickerScreen", delay: 600 }); // v15.3: a card the child tapped away from earlier is still owed
 }
 // v7: 17 domains no longer fit as one flat grid without feeling like a wall of tiles, so
 // they're grouped into labeled sections (each domain carries a `section` tag on its
@@ -8674,8 +8679,10 @@ async function syncPullAndMerge(){
     const remote = await res.json();
     const local = buildLocalSyncBlob();
     const merged = mergeState(remote, local); // server's copy first — matches src/index.js's mergeState(existing, incoming) argument order for identical output
+    let preKeys = null; try { preKeys = new Set(Object.keys(stickerDeriveHistory())); } catch(e){}
     applySyncBlobLocally(merged);
-    stickerRebase(); // v15.3: history just restored from the family blob is "past", not a fresh reward — see stickerRebase()
+    // v15.3: history that ARRIVED via this pull is "past", not a fresh reward — add only the delta (post minus pre) to the baseline, see stickerRebase()
+    try { const post = Object.keys(stickerDeriveHistory()).filter(k => !(preKeys && preKeys.has(k))); if (post.length) stickerRebase(new Set(post)); } catch(e){}
     setSyncStatus("synced");
   } catch(e){ setSyncStatus("offline"); }
 }
