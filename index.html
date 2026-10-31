@@ -3056,6 +3056,74 @@ function makeDragShapeItem(d, pool, arity){
     targets, tiles: targets.map(t => t.html), correct: choices.indexOf(d) };
 }
 
+/* =====================================================================
+   v15.2: COLOR SORT (dragColors) — drag an object that has ONE obvious color into the basket of
+   that color. Defs are per OBJECT (not per color) so every spoken string is deterministic for the
+   audio enumeration: "The apple is red! Drag it to the red basket." The 10 basic colors reuse
+   COLOR_DEFS' hexes and ages (b = color age + 3). Baskets are one SVG per target, tinted with the
+   color; the chip is the object's emoji (emoji pass the same tofu filter as every other bank — a
+   color whose objects ALL fail simply never appears as a target).
+   Distractor baskets: red/orange/pink, blue/purple and black/brown never share an item below
+   DRAG_COLOR_CONFUSABLE_B (and never with each other), the perceptual-distance rule the Colors
+   domain's own hex tuning established — see COLOR_DEFS' comment.
+   ===================================================================== */
+// [emoji, noun, "is"|"are", color]
+let DRAG_COLOR_OBJECTS = [
+  ["🍎","apple","is","red"],["🍓","strawberry","is","red"],
+  ["🍌","banana","is","yellow"],["🐥","chick","is","yellow"],
+  ["🥦","broccoli","is","green"],["🐸","frog","is","green"],
+  ["🫐","blueberries","are","blue"],["🐳","whale","is","blue"],
+  ["🍊","orange","is","orange"],["🥕","carrot","is","orange"],
+  ["🍇","grapes","are","purple"],
+  ["🐷","pig","is","pink"],["🌸","flower","is","pink"],
+  ["🎱","ball","is","black"],["🌑","moon","is","black"],
+  ["☁️","cloud","is","white"],["⛄","snowman","is","white"],
+  ["🍫","chocolate","is","brown"],["🐻","bear","is","brown"],
+];
+DRAG_COLOR_OBJECTS = filterEmojiSupported(DRAG_COLOR_OBJECTS, o => o[0], 8);
+const DRAG_COLOR_BASIC = ["red","blue","yellow","green","orange","pink","purple","black","white","brown"];
+const DRAG_COLOR_HEX = Object.fromEntries(COLOR_DEFS.map(([n,h]) => [n, h]));
+const DRAG_COLOR_AGE = Object.fromEntries(COLOR_DEFS.map(([n,,a]) => [n, a]));
+const DRAG_COLOR_DEFS = DRAG_COLOR_OBJECTS.map(([emoji, noun, verb, color]) =>
+  ({ label:noun, emoji, noun, verb, color, hex:DRAG_COLOR_HEX[color], age:DRAG_COLOR_AGE[color] + 3 }));
+const DRAG_COLOR_CONFUSABLE_GROUPS = [["red","orange","pink"],["blue","purple"],["black","brown"]];
+const DRAG_COLOR_CONFUSABLE_B = 48;
+function dragColorsConfuse(a, b){
+  return a !== b && DRAG_COLOR_CONFUSABLE_GROUPS.some(g => g.includes(a) && g.includes(b));
+}
+function colorBasketSVG(hex){
+  const edge = hex === "#fafafa" ? "#b5b5b5" : "rgba(0,0,0,.3)";
+  return `<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">`
+    + `<path d="M27 44 C27 8, 73 8, 73 44" fill="none" stroke="${edge}" stroke-width="10" stroke-linecap="round"/>`
+    + `<path d="M27 44 C27 8, 73 8, 73 44" fill="none" stroke="${hex}" stroke-width="5.5" stroke-linecap="round"/>`
+    + `<path d="M14 44 L86 44 L78 88 Q77 93 72 93 L28 93 Q23 93 22 88 Z" fill="${hex}" stroke="${edge}" stroke-width="3" stroke-linejoin="round"/>`
+    + `<path d="M17 58 H83 M19 72 H81 M35 46 L37 92 M50 46 V92 M65 46 L63 92" stroke="rgba(0,0,0,.16)" stroke-width="2.5" fill="none"/>`
+    + `<rect x="10" y="38" width="80" height="12" rx="6" fill="${hex}" stroke="${edge}" stroke-width="3"/>`
+    + `<rect x="16" y="41" width="68" height="3" rx="1.5" fill="rgba(255,255,255,.4)"/>`
+    + `</svg>`;
+}
+function dragColorDistractors(d, k){
+  const gated = d.age < DRAG_COLOR_CONFUSABLE_B;
+  const picks = [];
+  for (const c of shuffle(DRAG_COLOR_BASIC.filter(c => c !== d.color))){
+    if (picks.length >= k) break;
+    if (gated && (dragColorsConfuse(c, d.color) || picks.some(p => dragColorsConfuse(p, c)))) continue;
+    picks.push(c);
+  }
+  return picks;
+}
+function makeDragColorItem(d, pool, arity){
+  const n = dragArity(arity);
+  const colors = shuffle([d.color, ...dragColorDistractors(d, n - 1)]);
+  const targets = colors.map(c => ({ html: colorBasketSVG(DRAG_COLOR_HEX[c]), label: c + " basket", isTarget: c === d.color }));
+  return { kind:"drag", label:d.label, b:d.age, c:1/colors.length, s:4,
+    prompt:`Drag the ${d.noun} to the ${d.color} basket!`,
+    say:`The ${d.noun} ${d.verb} ${d.color}! Drag ${d.verb === "are" ? "them" : "it"} to the ${d.color} basket.`,
+    explain:`The ${d.noun} ${d.verb} ${d.color}! ${d.verb === "are" ? "They go" : "It goes"} in the ${d.color} basket.`,
+    drag:{ html:`<span class="dc-obj">${d.emoji}</span>`, say:`${capFirst(d.noun)}!` },
+    targets, tiles: targets.map(t => t.html), correct: colors.indexOf(d.color) };
+}
+
 const DOMAINS = [
   { key:"vocabulary", label:"Words", emoji:"🐶", section:"Words & Sounds",
     defs: VOCAB_WORDS.map(([w,e,a,th]) => ({ label:w, word:w, emoji:e, age:a, theme:th })),
@@ -3148,6 +3216,8 @@ const DOMAINS = [
   // ---- v15.2: more drag domains, appended after v15's three (same never-reorder rule) ----
   { key:"dragShapes", label:"Shape Sorter", emoji:"🧩", section:"Numbers & Shapes",
     defs: DRAG_SHAPE_DEFS, make: makeDragShapeItem },
+  { key:"dragColors", label:"Color Sort", emoji:"🎨", section:"Numbers & Shapes",
+    defs: DRAG_COLOR_DEFS, make: makeDragColorItem },
 ];
 
 // QA pass 15: "Play everything!" PLAY order, deliberately separate from DOMAINS[]'s array order (which
