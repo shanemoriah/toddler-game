@@ -8497,12 +8497,13 @@ function buildLocalSyncBlob(){
   const d = loadProfiles();
   const perProfile = {};
   for (const p of d.profiles){
-    let sessions = [], checklist = [], completions = { total: 0, lockedUntil: {} }, arcade = {};
+    let sessions = [], checklist = [], completions = { total: 0, lockedUntil: {} }, arcade = {}, stickers = {};
     try { sessions = sanitizeSessionsArr(JSON.parse(localStorage.getItem(`tg_sessions:${p.id}`) || "[]")); } catch(e){} // v14.2 (QA pass 9): see sanitizeSessionsArr's own comment — this profile may not be the active one loadSessions() covers
     try { checklist = JSON.parse(localStorage.getItem(`tg_checklist:${p.id}`) || "[]"); } catch(e){}
     try { completions = JSON.parse(localStorage.getItem(`tg_completions:${p.id}`) || "{}") || completions; } catch(e){}
     try { arcade = JSON.parse(localStorage.getItem(`tg_arcade:${p.id}`) || "{}") || {}; } catch(e){}
-    perProfile[p.id] = { sessions, checklist, completions, arcade: normalizeArcadeStats(arcade) };
+    try { stickers = mergeStickers(JSON.parse(localStorage.getItem(`tg_stickers:${p.id}`) || "{}"), null); } catch(e){} // v15.3: sticker book (junk-filtered); completions above already carries its v15.3 `counts` as stored
+    perProfile[p.id] = { sessions, checklist, completions, arcade: normalizeArcadeStats(arcade), stickers };
   }
   return { v: 1, updatedAt: new Date().toISOString(), profiles: d.profiles, perProfile };
 }
@@ -8520,8 +8521,16 @@ function applySyncBlobLocally(blob){
   for (const [id, bundle] of Object.entries(blob.perProfile || {})){
     persistSet(`tg_sessions:${id}`, JSON.stringify(bundle.sessions || []));
     persistSet(`tg_checklist:${id}`, JSON.stringify(bundle.checklist || []));
-    persistSet(`tg_completions:${id}`, JSON.stringify(bundle.completions || {}));
+    // v15.3: completions + stickers are applied as a UNION with whatever is already local rather than a plain overwrite.
+    // Both merges are monotone (max / earliest-key-union), so for a v15.3 Worker this equals the server's result; for a
+    // not-yet-redeployed (pre-v15.3) Worker — whose bundle merge whitelists the 4 old keys and so DROPS `completions.counts`
+    // and `stickers` from every response — it keeps this device's own counts/stickers instead of wiping them.
+    let lsComp = null; try { const r = localStorage.getItem(`tg_completions:${id}`); lsComp = r ? JSON.parse(r) : null; } catch(e){}
+    persistSet(`tg_completions:${id}`, JSON.stringify(mergeCompletions(lsComp, bundle.completions)));
     persistSet(`tg_arcade:${id}`, JSON.stringify(normalizeArcadeStats(bundle.arcade)));
+    let lsStk = null; try { const r = localStorage.getItem(`tg_stickers:${id}`); lsStk = r ? JSON.parse(r) : null; } catch(e){}
+    const mergedStk = mergeStickers(lsStk, bundle.stickers);
+    if (Object.keys(mergedStk).length) persistSet(`tg_stickers:${id}`, JSON.stringify(mergedStk));
   }
 }
 // v14.2 (QA pass 9): sync-worker/src/index.js enforces a hard 1MB (MAX_BODY_BYTES) cap on BOTH
