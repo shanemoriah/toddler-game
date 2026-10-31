@@ -326,6 +326,23 @@
   .sk-slot.empty .sk-face { background: rgba(255,255,255,.55); border: 4px dashed #d9c9e0; box-shadow: none; transform: none; }
   .sk-q { font-size: 32px; font-weight: 800; color: #d6c5de; line-height: 1; }
   .sk-cap { font-size: 11px; color: #8a7d66; line-height: 1.2; text-align: center; max-width: 96px; }
+  /* ---------- v15.3: "New sticker!" award card ----------
+     Fixed full-screen host is pointer-events:none (the game/results buttons underneath stay tappable); only the
+     card itself takes taps (tap = dismiss). z-index 62 sits above every other fx layer (burst 55, milestone 58).
+     The peel-in is transform+opacity only (scale + rotate from 0, 600ms). */
+  .fx-sticker { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 62; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+  .fx-sticker .sk-card { pointer-events: auto; cursor: pointer; background: #fff; border: 5px solid #ffd166; border-radius: 28px; padding: 14px 28px 16px; text-align: center; max-width: 86vw;
+    box-shadow: 0 8px 0 rgba(0,0,0,.08), 0 18px 40px rgba(0,0,0,.28); animation: skCardIn .25s ease-out both; touch-action: manipulation; }
+  .fx-sticker .sk-title { font-size: 24px; font-weight: 800; color: var(--accent); margin-bottom: 10px; }
+  .fx-sticker .sk-slot { width: auto; margin: 0 auto; }
+  .fx-sticker .sk-face { width: 132px; height: 132px; border-width: 8px; animation: skPeel .6s cubic-bezier(.2,1.25,.4,1) both; }
+  .fx-sticker .sk-e { font-size: 66px; }
+  .fx-sticker .sk-star { font-size: 34px; top: -10px; right: -6px; }
+  .fx-sticker .sk-name { margin-top: 10px; font-size: 16px; font-weight: 700; color: #8a7d66; }
+  .fx-sticker .sk-more { margin-top: 6px; font-size: 13px; color: #a99; }
+  @keyframes skCardIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes skPeel { from { transform: scale(0) rotate(-200deg); opacity: 0; } 55% { opacity: 1; } to { transform: scale(1) rotate(var(--rot, -3deg)); opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .fx-sticker .sk-card, .fx-sticker .sk-face { animation: none; } }
   /* ---------- v7: picker section headers (17 tiles grouped into 4 labeled sections) ---------- */
   .picker-section-head { grid-column: 1/-1; text-align: left; font-weight: 800; color: #8a7d66; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; margin-top: 10px; }
   .picker-section-head:first-of-type { margin-top: 2px; }
@@ -3395,6 +3412,7 @@ function collectAllSayStrings(){
   add("And this is the game's own voice path.");
   MASCOT_LINES.forEach(add); // v9.3: tapMascot() encouragement lines — see its own comment
   add(LOCKED_DOMAIN_LINE); // v9.5: locked picker tile tap — see lockedTileTap()'s own comment
+  add(STICKER_EARN_LINE); // v15.3: "New sticker!" award card — see stickerSpeakWhenIdle()
   // v10: Mix-It-Up arcade — intro/interlude/streak-celebration lines (defined further down,
   // next to the rest of the arcade code — forward reference is safe, this function only ever
   // RUNS from loadAudioManifest()/tools/dump_say_strings.js, long after every top-level const
@@ -5803,6 +5821,7 @@ function braveGuess(){
 function show(id){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   $(id).classList.add("active");
+  if (_stk && _stk.screen !== id) stickerCardsAbort(); // v15.3: a pending/visible "New sticker!" card never follows the child onto another screen
   idleReset(); // v15.1: any screen change re-arms the 20s idle-attract timer
 }
 function monthsFromBday(iso){
@@ -6125,6 +6144,65 @@ function renderStickerBook(){
     }
   }
   grid.innerHTML = html;
+}
+
+/* ---------- the "New sticker!" card (award moment) ---------- */
+let _stk = null, _stkTok = 0;
+function stickerCardsAbort(){
+  const s = _stk; _stk = null;
+  if (!s) return;
+  clearTimeout(s.timer); clearTimeout(s.burstT);
+  if (s.el && s.el.parentNode) s.el.parentNode.removeChild(s.el);
+}
+function stickerSpeakWhenIdle(tries){
+  try {
+    if (!_stk) return;
+    if (isAnyAudioPlaying() && tries < 4){ setTimeout(() => stickerSpeakWhenIdle(tries + 1), 500); return; }
+    if (!isAnyAudioPlaying()) speak(STICKER_EARN_LINE);
+  } catch(e){}
+}
+function stickerShowCard(tok){
+  const S = _stk;
+  if (!S || S.token !== tok) return;
+  const host = $(S.screen);
+  if (!host || !host.classList.contains("active")){ stickerCardsAbort(); return; } // the child already moved on — never pop a card over a different screen
+  if (S.i >= S.ids.length){ stickerCardsAbort(); return; }
+  if (S.el && S.el.parentNode) S.el.parentNode.removeChild(S.el);
+  const id = S.ids[S.i], info = stickerSlotInfo(id);
+  if (!info){ S.i++; stickerShowCard(tok); return; }
+  const gold = id.startsWith("g_");
+  const ov = document.createElement("div");
+  ov.className = "fx-sticker";
+  const more = (S.i === S.ids.length - 1 && S.more > 0) ? `<div class="sk-more">…and ${S.more} more in your sticker book!</div>` : "";
+  ov.innerHTML = `<div class="sk-card"><div class="sk-title">${gold ? "Gold sticker!" : "New sticker!"}</div>` +
+    `<div class="sk-slot earned${gold ? " gold" : ""}${info.kind === "ms" ? " ms" : ""}" style="--ring:${info.ring};--rot:${stickerRot(id)}deg">${stickerFaceHTML(info, gold)}</div>` +
+    `<div class="sk-name">${info.label}</div>${more}</div>`;
+  S.el = ov;
+  document.body.appendChild(ov);
+  const next = () => {
+    if (!_stk || _stk.token !== tok || _stk.el !== ov) return;
+    clearTimeout(S.timer); clearTimeout(S.burstT);
+    S.i++; stickerShowCard(tok);
+  };
+  ov.querySelector(".sk-card").addEventListener("click", next);
+  S.timer = setTimeout(next, STICKER_CARD_MS);
+  S.burstT = setTimeout(() => { try { if (_stk && _stk.token === tok && _stk.el === ov) burstFrom(ov.querySelector(".sk-face"), FX_RAINBOW); } catch(e){} }, fxReduced() ? 0 : 450);
+  if (S.i === 0) stickerSpeakWhenIdle(0);
+}
+// Derive + persist + (if anything is new) queue the card(s). `screen` = the screen the card may appear
+// over (aborts if another is active by then); `delay` = ms before the first card. Never touches game
+// state/timers. Returns the newly earned ids (also for tests).
+function stickerAwardMoment(opts){
+  opts = opts || {};
+  try {
+    const fresh = stickerAwardNow();
+    stickerCardsAbort();
+    if (!fresh.length) return fresh;
+    const tok = ++_stkTok;
+    _stk = { token: tok, ids: fresh.slice(0, STICKER_MAX_CARDS), more: Math.max(0, fresh.length - STICKER_MAX_CARDS), i: 0, screen: opts.screen || "pickerScreen", el: null, timer: null, burstT: null };
+    _stk.timer = setTimeout(() => stickerShowCard(tok), opts.delay === undefined ? 600 : opts.delay);
+    return fresh;
+  } catch(e){ return []; }
 }
 
 /* ---------- v11: "Who's playing?" child-profile chooser ----------
@@ -6717,6 +6795,7 @@ function finishDomainCelebration(){
     show("interlude");
     fanfare(); confetti(24);
     speak(`Hooray! Great job with ${dom.spokenLabel || dom.label}!`); // v13: see spokenLabel's own comment
+    stickerAwardMoment({ screen: "interlude", delay: 2400 }); // v15.3: after the Hooray line has had time to play
     return;
   }
   // "Play everything!" — v9.5: firstPlayableIndex() skips any locked domain at its turn
@@ -6733,6 +6812,7 @@ function finishDomainCelebration(){
   show("interlude");
   fanfare(); confetti(24);
   speak(`Hooray! Great job with ${dom.spokenLabel || dom.label}!`); // v13: see spokenLabel's own comment
+  stickerAwardMoment({ screen: "interlude", delay: 2400 }); // v15.3
 }
 
 function progressPct(ds){
@@ -7804,6 +7884,7 @@ function endGame(){
   const ovM = /(\d+)/.exec($("overallAge").textContent);
   if (ovM) countUpText($("overallAge"), +ovM[1], n => `≈ ${n} months`);
   if (vocabEstimate !== null) countUpText($("vocabEstimate"), vocabEstimate, n => `~${n} words`);
+  stickerAwardMoment({ screen: "resultsScreen", delay: 1200 }); // v15.3: after the reveal/count-up; overlay only, never delays results
 }
 
 /* ---------- session history (localStorage "tg_sessions:<profileId>", v11) ---------- */
@@ -9603,6 +9684,7 @@ function exitArcadeSession(sess){
   ttsCancel(); stopClip(); // v8-style sanctioned interrupt path
   state.sessionMode = "single";
   showPicker();
+  stickerAwardMoment({ screen: "pickerScreen", delay: 600 }); // v15.3: arcade "end screen" is the picker — brave guess / first arcade / 10-streak stickers land here
 }
 function startArcade(){ // Mix-It-Up — picker tile onclick target, name unchanged from v10
   state.arcade.bags = { vocab: [], functions: [], seekfind: [], dragsounds: [] }; // fresh bags every entry, per the task
