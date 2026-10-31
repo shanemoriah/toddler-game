@@ -3509,7 +3509,7 @@ function collectAllSayStrings(){
       let it;
       try { it = dom.make(d, dom.defs, ARITY); } catch(e){ continue; } // defensive only — every real def succeeds
       add(it.say);
-      add(`This one is the ${it.label}!`);
+      if (!it.explain && !it.revealText) add(`This one is the ${it.label}!`); // 17c: the generic line only ever plays when explain/revealText are both absent (speakExplain / arcade-timeout fallback chain)
       add(it.explain); // v12: shrug/second-miss/arcade-timeout explanation line — see the v12 EXPLAIN tables above
       if (it.drag) add(it.drag.say); // v15: the drag chip's own short spoken label (tap the chip)
       if (it.explainOptions) it.explainOptions.forEach(add); // v15: make() picks among several explain strings at random (Letter Match) — every one must be bundled
