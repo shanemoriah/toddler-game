@@ -553,6 +553,10 @@
   .bar-track { flex: 1; height: 18px; background: #f4ecdc; border-radius: 9px; position: relative; }
   .bar-fill { height: 100%; border-radius: 9px; background: var(--accent2); min-width: 4px; transition: width .8s; }
   .bar-fill.low { background: #ffc36b; }
+  /* v15.1: Results-screen bars grow in with a stagger (transform only; width stays static so layout never animates). Results only — Progress charts don't use .bar-fill. */
+  .bar-fill.grow { transform-origin: left center; animation: barGrow .7s cubic-bezier(.2,.8,.3,1) both; animation-delay: calc(var(--i, 0) * 90ms + 150ms); }
+  @keyframes barGrow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+  @media (prefers-reduced-motion: reduce) { .bar-fill.grow { animation: none; } }
   .bar-val { width: 70px; font-weight: 700; flex-shrink: 0; }
   .chrono-mark { position: absolute; top: -4px; bottom: -4px; width: 3px; background: var(--accent); border-radius: 2px; }
   .big-stat { font-size: 34px; font-weight: 800; color: var(--accent); }
@@ -5139,6 +5143,25 @@ function maybeScoredMilestone(){
   } catch(e){}
 }
 
+// v15.1: ~800ms ease-out number tween for the Results screen. Writes only textContent of one small
+// element; token-guarded so a newer reveal (or a re-render) can never be overwritten by an older tween;
+// always lands on the exact final value.
+function countUpText(el, target, fmt, ms){
+  try {
+    if (fxReduced() || !el || !(target > 0) || !window.requestAnimationFrame) return;
+    const dur = ms || 800, token = (el._cu = (el._cu || 0) + 1);
+    let t0 = null;
+    const step = (t) => {
+      if (el._cu !== token) return;
+      if (t0 === null) t0 = t;
+      const k = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+      el.textContent = fmt(k < 1 ? Math.round(target * e) : target);
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  } catch(e){}
+}
+
 /* ---------- mute ---------- */
 function updateMuteBtn(){
   const btn = $("muteBtn");
@@ -7110,6 +7133,7 @@ function endGame(){
   // domain bars
   const bars = $("domainBars"); bars.innerHTML = "";
   const ageEqs = [];
+  let barIdx = 0; // v15.1: stagger index for the grow-in animation
   const maxScale = Math.max(age + 18, 54);
   for (const dom of DOMAINS){
     const fd = state.finalDomains[dom.key];
@@ -7134,7 +7158,7 @@ function endGame(){
     const row = document.createElement("div");
     row.className = "bar-row";
     row.innerHTML = `<div class="lbl">${dom.emoji} ${dom.label}${isQuickPeek ? ' <span style="font-size:10px;font-weight:700;color:#a9690f;background:#fdecc8;border-radius:6px;padding:1px 6px;vertical-align:middle">quick peek</span>' : ""}</div>
-      <div class="bar-track"><div class="bar-fill${fd.theta < age-6 ? " low" : ""}" style="width:${pct}%"></div>
+      <div class="bar-track"><div class="bar-fill grow${fd.theta < age-6 ? " low" : ""}" style="width:${pct}%;--i:${barIdx++}"></div>
       <div class="chrono-mark" style="left:${chronoPct}%"></div></div>
       <div class="bar-val">${fd.theta} mo</div>`;
     bars.appendChild(row);
@@ -7211,6 +7235,10 @@ function endGame(){
   saveSession(age, name, vocabEstimate, saved.length);
   refreshProgressBtn();
   show("resultsScreen");
+  // v15.1: score reveal counts up (final text is already in the DOM above, so a stalled rAF just shows the final value)
+  const ovM = /(\d+)/.exec($("overallAge").textContent);
+  if (ovM) countUpText($("overallAge"), +ovM[1], n => `≈ ${n} months`);
+  if (vocabEstimate !== null) countUpText($("vocabEstimate"), vocabEstimate, n => `~${n} words`);
 }
 
 /* ---------- session history (localStorage "tg_sessions:<profileId>", v11) ---------- */
