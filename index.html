@@ -303,6 +303,29 @@
   .picker-caption { font-size: 11px; color: #8a7d66; line-height: 1.25; }
   @keyframes gentleWobble { 0%,100%{transform:rotate(0)} 25%{transform:rotate(-4deg)} 75%{transform:rotate(4deg)} }
   .picker-tile.wobble { animation: gentleWobble .4s; }
+  /* ---------- v15.3: sticker book ---------- */
+  .picker-tile-stickers { background: #fff1c9; border-color: #f5b301; }
+  .picker-tile-stickers .picker-emoji { font-size: 48px; }
+  .sk-badge { top: -8px; right: -6px; min-width: 28px; height: 28px; padding: 0 8px; border-radius: 14px; background: #ff6b8b; color: #fff; font-size: 15px; font-weight: 800; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 0 rgba(0,0,0,.15); }
+  #stickerScreen { justify-content: flex-start; padding-top: 14px; }
+  .sk-album { width: 100%; max-width: 760px; padding: 14px 12px 20px; border-radius: 28px; border: 4px solid #f3d3e6;
+    background: radial-gradient(circle at 12% 8%, #fff 0, rgba(255,255,255,0) 40%), linear-gradient(160deg, #fff0f8 0%, #f1f6ff 55%, #f0fbf3 100%);
+    box-shadow: inset 0 0 0 3px #fff, 0 6px 0 #ecd2e0; }
+  #stickerGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 14px 8px; justify-items: center; }
+  .sk-head { grid-column: 1 / -1; justify-self: stretch; text-align: left; font-weight: 800; color: #8a7d66; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; margin-top: 6px; }
+  .sk-head:first-child { margin-top: 0; }
+  .sk-slot { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 96px; }
+  .sk-face { width: 80px; height: 80px; border-radius: 50%; background: #fff; border: 6px solid var(--ring, #ffb84d); display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 3px 0 rgba(0,0,0,.13); transform: rotate(var(--rot, 0deg)); }
+  .sk-e { font-size: 38px; line-height: 1; }
+  .sk-slot.ms .sk-face { border-radius: 30%; border-color: transparent;
+    background: linear-gradient(#fff, #fff) padding-box, linear-gradient(135deg, #ff6b6b, #ffb84d, #ffe45e, #6bcb77, #4ecdc4, #6b8fff, #c56bff) border-box; }
+  .sk-slot.gold .sk-face { border-color: #f5b301; box-shadow: 0 0 0 3px #ffe08a, 0 3px 0 rgba(0,0,0,.13), 0 0 14px rgba(245,179,1,.55); }
+  .sk-slot.ms.gold .sk-face { border-color: transparent; }
+  .sk-star { position: absolute; top: -6px; right: 6px; font-size: 22px; line-height: 1; color: #f5b301; text-shadow: 0 1px 0 #fff, 0 0 4px #fff; }
+  .sk-slot.empty .sk-face { background: rgba(255,255,255,.55); border: 4px dashed #d9c9e0; box-shadow: none; transform: none; }
+  .sk-q { font-size: 32px; font-weight: 800; color: #d6c5de; line-height: 1; }
+  .sk-cap { font-size: 11px; color: #8a7d66; line-height: 1.2; text-align: center; max-width: 96px; }
   /* ---------- v7: picker section headers (17 tiles grouped into 4 labeled sections) ---------- */
   .picker-section-head { grid-column: 1/-1; text-align: left; font-weight: 800; color: #8a7d66; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; margin-top: 10px; }
   .picker-section-head:first-of-type { margin-top: 2px; }
@@ -816,7 +839,16 @@
     <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">
       <button class="bigbtn" onclick="location.reload()">🔁 Play again</button>
       <button class="bigbtn alt" id="resultsProgressBtn" style="display:none" onclick="showProgress()">📈 Progress</button>
+      <button class="bigbtn" style="background:#f5b301;box-shadow:0 6px 0 #c48f00" onclick="showStickerBook('results')">🏅 My Stickers</button>
     </div>
+  </div>
+
+  <!-- STICKER BOOK (v15.3) -->
+  <div id="stickerScreen" class="screen">
+    <h2>🏅 My Stickers</h2>
+    <p class="subtitle" id="stickerCount" style="margin:0"></p>
+    <div class="sk-album"><div id="stickerGrid"></div></div>
+    <button class="bigbtn alt" onclick="stickerBookBack()">⬅ Back</button>
   </div>
 
   <!-- PROGRESS -->
@@ -6060,6 +6092,40 @@ function stickerView(){
   return stickerSlots().map(s => Object.assign({}, s, { earned: has(s.id), gold: !!(s.gid && has(s.gid)) }));
 }
 function stickerCount(){ return stickerView().filter(s => s.earned).length; }
+function stickerRot(id){ let h = 0; for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0; return (h % 11) - 5; } // deterministic -5..+5 deg
+function stickerSlotInfo(id){
+  const base = id.startsWith("g_") ? "d_" + id.slice(2) : id;
+  const s = stickerSlots().find(x => x.id === base);
+  return s ? Object.assign({}, s, { gold: id.startsWith("g_") }) : null;
+}
+function stickerFaceHTML(s, gold){
+  return `<div class="sk-face"><span class="sk-e">${s.emoji}</span></div>${gold ? '<span class="sk-star">★</span>' : ""}`;
+}
+
+/* ---------- the book page ---------- */
+function showStickerBook(back){
+  state.stickerBack = back === "results" ? "results" : "picker";
+  renderStickerBook();
+  show("stickerScreen");
+}
+function stickerBookBack(){
+  if (state.stickerBack === "results") show("resultsScreen"); else showPicker();
+}
+function renderStickerBook(){
+  const grid = $("stickerGrid"), view = stickerView();
+  const got = view.filter(s => s.earned).length;
+  $("stickerCount").textContent = `${got} of ${view.length} stickers`;
+  let html = "", lastSec = null;
+  for (const s of view){
+    if (s.section !== lastSec){ html += `<div class="sk-head">${s.section}</div>`; lastSec = s.section; }
+    if (s.earned){
+      html += `<div class="sk-slot earned${s.gold ? " gold" : ""}${s.kind === "ms" ? " ms" : ""}" data-sid="${s.id}" role="img" aria-label="${s.label} sticker${s.gold ? " (gold)" : ""}" style="--ring:${s.ring};--rot:${stickerRot(s.id)}deg">${stickerFaceHTML(s, s.gold)}<div class="sk-cap">${s.label}</div></div>`;
+    } else {
+      html += `<div class="sk-slot empty" data-sid="${s.id}" role="img" aria-label="Sticker not collected yet"><div class="sk-face"><span class="sk-q">?</span></div></div>`;
+    }
+  }
+  grid.innerHTML = html;
+}
 
 /* ---------- v11: "Who's playing?" child-profile chooser ----------
    Bug fix (2026-08-19): tapping an existing child's card used to prefill #startScreen's
@@ -6218,6 +6284,13 @@ function renderPicker(){
   all.innerHTML = `<div class="picker-emoji">🎉</div><div class="picker-label">Play everything!</div>`;
   attachTap(all, () => playEverything()); // v9.4: child-tappable
   grid.appendChild(all);
+  // v15.3: sticker book entry — big tile right next to "Play everything!", small count badge (hidden at 0).
+  let skGot = 0; try { skGot = stickerCount(); } catch(e){}
+  const skTile = document.createElement("div");
+  skTile.className = "picker-tile picker-tile-stickers";
+  skTile.innerHTML = `${skGot > 0 ? `<div class="picker-badge sk-badge">${skGot}</div>` : ""}<div class="picker-emoji">🏅</div><div class="picker-label">My Stickers</div>`;
+  attachTap(skTile, () => showStickerBook("picker"));
+  grid.appendChild(skTile);
   const sections = [];
   for (const dom of DOMAINS){
     let sec = sections.find(s => s.name === dom.section);
