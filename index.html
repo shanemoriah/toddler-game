@@ -330,13 +330,13 @@
      Fixed full-screen host is pointer-events:none (the game/results buttons underneath stay tappable); only the
      card itself takes taps (tap = dismiss). z-index 62 sits above every other fx layer (burst 55, milestone 58).
      The peel-in is transform+opacity only (scale + rotate from 0, 600ms). */
-  .fx-sticker { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 62; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+  .fx-sticker { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 62; display: flex; align-items: flex-start; justify-content: center; padding-top: 5vh; pointer-events: none; }
   .fx-sticker .sk-card { pointer-events: auto; cursor: pointer; background: #fff; border: 5px solid #ffd166; border-radius: 28px; padding: 14px 28px 16px; text-align: center; max-width: 86vw;
     box-shadow: 0 8px 0 rgba(0,0,0,.08), 0 18px 40px rgba(0,0,0,.28); animation: skCardIn .25s ease-out both; touch-action: manipulation; }
   .fx-sticker .sk-title { font-size: 24px; font-weight: 800; color: var(--accent); margin-bottom: 10px; }
   .fx-sticker .sk-slot { width: auto; margin: 0 auto; }
-  .fx-sticker .sk-face { width: 132px; height: 132px; border-width: 8px; animation: skPeel .6s cubic-bezier(.2,1.25,.4,1) both; }
-  .fx-sticker .sk-e { font-size: 66px; }
+  .fx-sticker .sk-face { width: 112px; height: 112px; border-width: 7px; animation: skPeel .6s cubic-bezier(.2,1.25,.4,1) both; }
+  .fx-sticker .sk-e { font-size: 56px; }
   .fx-sticker .sk-star { font-size: 34px; top: -10px; right: -6px; }
   .fx-sticker .sk-name { margin-top: 10px; font-size: 16px; font-weight: 700; color: #8a7d66; }
   .fx-sticker .sk-more { margin-top: 6px; font-size: 13px; color: #a99; }
@@ -5419,6 +5419,7 @@ function burstFrom(el, pal){
   }
   document.body.appendChild(box);
   setTimeout(() => { if (box.parentNode) box.parentNode.removeChild(box); }, 900);
+  return box; // v15.3: the sticker card lifts it above itself
 }
 function foxHop(){
   if (fxReduced()) return;
@@ -5907,6 +5908,7 @@ function enterPlayForProfile(p, age, name, silent){
   // #stars' own max-height:52px cap (see its CSS rule) already bounds the pure layout blast radius.
   $("stars").innerHTML = "";
   $("quitBtn").style.display = "block";
+  stickerRebase(); // v15.3: sticker book baseline — see stickerRebase()
   if (silent){ showPicker(); return; }
   // v9: name-free greeting so it's cacheable as one bundled clip regardless
   // of which child is playing — see collectAllSayStrings()'s doc comment.
@@ -6090,6 +6092,19 @@ function stickerDerive(sessions, completions, arcade, ev){
 function stickerDeriveForActive(){ return stickerDerive(loadSessions(), loadCompletions(), loadArcadeStats(), stickerEv()); }
 // Derive + union with the stored record, persist if anything changed, return the NEWLY earned ids in
 // display order (domain stickers, then golds, then milestones). Idempotent: a second call returns [].
+// Baseline (review finding): everything already derivable when a profile is activated (and again right after the on-load
+// family pull) was earned in the PAST — a wiped tablet (Fire kids browser) or a pre-v15.3 profile re-derives it all, and it
+// must land in the book silently rather than re-celebrate on every launch. Deliberately NOT refreshed after later syncs: a
+// PUT response applied 2s after a save would otherwise absorb a sticker earned moments ago, before its card.
+let _stkBase = { pid: null, ids: null };
+function stickerRebase(){
+  try {
+    const pid = state.activeProfileId; if (!pid) return;
+    const cur = (_stkBase.pid === pid && _stkBase.ids) ? _stkBase.ids : new Set();
+    for (const k of Object.keys(stickerDeriveForActive())) cur.add(k);
+    _stkBase = { pid, ids: cur };
+  } catch(e){}
+}
 function stickerAwardNow(){
   if (!state.activeProfileId) return [];
   const stored = loadStickers();
@@ -6098,8 +6113,9 @@ function stickerAwardNow(){
   const cand = {};
   for (const id of Object.keys(derived)) cand[id] = derived[id] || nowIso;
   const merged = mergeStickers(stored, cand);
-  const fresh = Object.keys(merged).filter(id => !(id in stored));
-  if (fresh.length || JSON.stringify(merged) !== JSON.stringify(stored)) saveStickers(merged);
+  const base = (_stkBase.pid === state.activeProfileId && _stkBase.ids) ? _stkBase.ids : null;
+  const fresh = Object.keys(merged).filter(id => !(id in stored) && !(base && base.has(id))); // base-known ids are persisted below but not returned (no card)
+  if (Object.keys(merged).length !== Object.keys(stored).length || JSON.stringify(merged) !== JSON.stringify(stored)) saveStickers(merged);
   const slotIdx = new Map(stickerSlots().map((s, i) => [s.id, i]));
   const ord = (id) => { const base = id.startsWith("g_") ? "d_" + id.slice(2) : id; return (id.startsWith("d_") ? 0 : id.startsWith("g_") ? 1 : 2) * 1000 + (slotIdx.get(base) || 0); };
   return fresh.sort((a, b) => ord(a) - ord(b));
@@ -6148,6 +6164,9 @@ function renderStickerBook(){
 
 /* ---------- the "New sticker!" card (award moment) ---------- */
 let _stk = null, _stkTok = 0;
+// Ids already persisted but whose card never got shown (child tapped away first) — re-queued at the next award moment / picker.
+let _stkPending = { pid: null, ids: [] };
+function stickerPendingFor(){ return _stkPending.pid === state.activeProfileId ? _stkPending.ids : []; }
 function stickerCardsAbort(){
   const s = _stk; _stk = null;
   if (!s) return;
@@ -6169,6 +6188,7 @@ function stickerShowCard(tok){
   if (S.i >= S.ids.length){ stickerCardsAbort(); return; }
   if (S.el && S.el.parentNode) S.el.parentNode.removeChild(S.el);
   const id = S.ids[S.i], info = stickerSlotInfo(id);
+  _stkPending.ids = _stkPending.ids.filter(x => x !== id); // shown (or unrenderable) -> no longer owed
   if (!info){ S.i++; stickerShowCard(tok); return; }
   const gold = id.startsWith("g_");
   const ov = document.createElement("div");
@@ -6186,7 +6206,7 @@ function stickerShowCard(tok){
   };
   ov.querySelector(".sk-card").addEventListener("click", next);
   S.timer = setTimeout(next, STICKER_CARD_MS);
-  S.burstT = setTimeout(() => { try { if (_stk && _stk.token === tok && _stk.el === ov) burstFrom(ov.querySelector(".sk-face"), FX_RAINBOW); } catch(e){} }, fxReduced() ? 0 : 450);
+  S.burstT = setTimeout(() => { try { if (_stk && _stk.token === tok && _stk.el === ov){ const b = burstFrom(ov.querySelector(".sk-face"), FX_RAINBOW); if (b) b.style.zIndex = 63; } } catch(e){} }, fxReduced() ? 0 : 450);
   if (S.i === 0) stickerSpeakWhenIdle(0);
 }
 // Derive + persist + (if anything is new) queue the card(s). `screen` = the screen the card may appear
@@ -6197,9 +6217,12 @@ function stickerAwardMoment(opts){
   try {
     const fresh = stickerAwardNow();
     stickerCardsAbort();
-    if (!fresh.length) return fresh;
+    const owed = stickerPendingFor();
+    const all = owed.concat(fresh.filter(i => !owed.includes(i)));
+    _stkPending = { pid: state.activeProfileId, ids: all.slice(0, STICKER_MAX_CARDS) };
+    if (!all.length) return fresh;
     const tok = ++_stkTok;
-    _stk = { token: tok, ids: fresh.slice(0, STICKER_MAX_CARDS), more: Math.max(0, fresh.length - STICKER_MAX_CARDS), i: 0, screen: opts.screen || "pickerScreen", el: null, timer: null, burstT: null };
+    _stk = { token: tok, ids: all.slice(0, STICKER_MAX_CARDS), more: Math.max(0, all.length - STICKER_MAX_CARDS), i: 0, screen: opts.screen || "pickerScreen", el: null, timer: null, burstT: null };
     _stk.timer = setTimeout(() => stickerShowCard(tok), opts.delay === undefined ? 600 : opts.delay);
     return fresh;
   } catch(e){ return []; }
@@ -6348,6 +6371,7 @@ function showPicker(){
   $("mapBtn").style.display = "none"; // v4 (mod 2): only shown while inside a module
   renderPicker();
   show("pickerScreen");
+  if (stickerPendingFor().length) stickerAwardMoment({ screen: "pickerScreen", delay: 600 }); // v15.3: a card the child tapped away from earlier is still owed
 }
 // v7: 17 domains no longer fit as one flat grid without feeling like a wall of tiles, so
 // they're grouped into labeled sections (each domain carries a `section` tag on its
@@ -8243,7 +8267,7 @@ function mergeCompletions(a, b){
 // v15.3: sticker book record { stickerId: isoDateEarned }. Union by key; a key on both sides keeps
 // the EARLIEST date (a sticker is earned once — the first time wins). Fully commutative +
 // idempotent: ties and unparseable dates fall back to the lexicographically smaller string.
-// Entries that aren't a [a-z0-9_]{1,40} key -> string value are dropped (never throws on junk), and
+// Entries that aren't a [A-Za-z0-9_]{1,48} key (domain keys are camelCase, e.g. d_dragSounds) -> string value are dropped (never throws on junk), and
 // a missing/non-object side (OLD client, brand-new code) just contributes nothing.
 function mergeStickers(a, b){
   const out = {};
@@ -8257,7 +8281,7 @@ function mergeStickers(a, b){
     if (!src || typeof src !== "object" || Array.isArray(src)) continue;
     for (const k of Object.keys(src)){
       const v = src[k];
-      if (!/^[a-z0-9_]{1,40}$/.test(k) || typeof v !== "string") continue;
+      if (!/^[A-Za-z0-9_]{1,48}$/.test(k) || typeof v !== "string") continue;
       if (!(k in out) || better(v, out[k])) out[k] = v;
     }
   }
@@ -8651,6 +8675,7 @@ async function syncPullAndMerge(){
     const local = buildLocalSyncBlob();
     const merged = mergeState(remote, local); // server's copy first — matches src/index.js's mergeState(existing, incoming) argument order for identical output
     applySyncBlobLocally(merged);
+    stickerRebase(); // v15.3: history just restored from the family blob is "past", not a fresh reward — see stickerRebase()
     setSyncStatus("synced");
   } catch(e){ setSyncStatus("offline"); }
 }

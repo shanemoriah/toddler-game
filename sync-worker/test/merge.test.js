@@ -321,3 +321,13 @@ test("worker handler: 413 on a merged-over-cap PUT leaves stored stickers intact
   const g = await call(env, "GET", `/v1/state/${code}`);
   assert.deepEqual(g.body.perProfile.p1.stickers, { m_first: "2026-10-01T00:00:00.000Z" });
 });
+
+// v15.3 review fix: domain keys are camelCase (dragSounds, zhColors, zhDragNumbers, ...) so sticker ids must survive the key filter.
+test("mergeStickers keeps camelCase domain-key ids (d_dragSounds, g_zhDragNumbers) and still drops junk", () => {
+  const ids = ["d_dragSounds","d_dragLetters","d_dragNumbers","d_dragShapes","d_dragColors","d_zhColors","d_zhNumbers","d_zhWords","g_zhDragNumbers","m_first"];
+  const rec = Object.fromEntries(ids.map(k => [k, "2026-10-01T00:00:00.000Z"]));
+  assert.deepEqual(Object.keys(mergeStickers(rec, null)).sort(), [...ids].sort());
+  assert.deepEqual(mergeStickers({ "d_has space": "x", ["d_" + "x".repeat(60)]: "2026-10-01T00:00:00.000Z" }, null), {});
+  const m = mergeState(null, { profiles: [profile("p1", "M", "2026-10-01T00:00:00.000Z")], perProfile: { p1: { ...bundle(), stickers: rec } } });
+  assert.deepEqual(Object.keys(m.perProfile.p1.stickers).sort(), [...ids].sort());
+});
