@@ -524,6 +524,12 @@
     .amb, .pos-amb-cloud, .pos-amb-spark { animation: none; }
   }
 
+  /* ---------- v15.1: idle attract — after 20s with no touch on the chooser/menu/picker the fox waves
+     (CSS only, two ~1.8s loops, then stops). Never runs during items (the shrug flow owns idle there). */
+  .wave { animation: foxWave 1.8s ease-in-out 2; transform-origin: 50% 90%; }
+  @keyframes foxWave { 0%,100%{transform:rotate(0)} 12%{transform:rotate(-16deg) translateY(-4px)} 28%{transform:rotate(14deg)} 44%{transform:rotate(-14deg) translateY(-3px)} 60%{transform:rotate(12deg)} 76%{transform:rotate(0)} }
+  @media (prefers-reduced-motion: reduce) { .wave { animation: none; } }
+
   /* ---------- interlude ---------- */
   #interlude .bigEmoji { font-size: 110px; animation: bounce 1s infinite; }
 
@@ -608,7 +614,7 @@
 
   <!-- WHO'S PLAYING (v11: child profile chooser — shown first whenever >=1 profile exists) -->
   <div id="whoScreen" class="screen">
-    <div style="font-size:70px">🦊</div>
+    <div class="idle-fox" style="font-size:70px">🦊</div>
     <h2>Who's playing?</h2>
     <p class="subtitle">Tap a card, or add a new player.</p>
     <div id="whoGrid" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(130px, 1fr));gap:14px;width:100%;max-width:760px;padding:8px"></div>
@@ -616,7 +622,7 @@
 
   <!-- START -->
   <div id="startScreen" class="screen active">
-    <div style="font-size:80px">🦊</div>
+    <div class="idle-fox" style="font-size:80px">🦊</div>
     <h1>Milo's Learning Adventure</h1>
     <p class="subtitle">A play-based look at words and concepts — colors, shapes, letters, numbers, positions, opposites — with a gentle developmental-age estimate. A grown-up plays along!</p>
     <p id="switchChildLink" style="display:none;font-size:13px;cursor:pointer;color:var(--accent2);text-decoration:underline;margin:-8px 0 0" onclick="showWhoScreen()">🔀 Switch child</p>
@@ -5192,6 +5198,33 @@ function countUpText(el, target, fmt, ms){
   } catch(e){}
 }
 
+/* ---------- v15.1: idle attract (menu / chooser / picker only) ---------- */
+const IDLE_ATTRACT_MS = 20000;
+let _idleTimer = null;
+function idleWaveEls(){ return [$("mascot"), ...document.querySelectorAll(".idle-fox")].filter(Boolean); }
+function idleOnAttractScreen(){
+  return ["whoScreen", "startScreen", "pickerScreen"].some(id => { const e = $(id); return e && e.classList.contains("active"); });
+}
+function idleReset(){
+  try {
+    if (_idleTimer){ clearTimeout(_idleTimer); _idleTimer = null; }
+    idleWaveEls().forEach(e => e.classList.remove("wave"));
+    _idleTimer = setTimeout(idleFire, IDLE_ATTRACT_MS);
+  } catch(e){}
+}
+function idleFire(){
+  _idleTimer = setTimeout(idleFire, IDLE_ATTRACT_MS); // keep cycling; every touch / screen change re-arms from scratch
+  try {
+    if (fxReduced() || document.hidden || !idleOnAttractScreen()) return;
+    const els = idleWaveEls();
+    els.forEach(e => { e.classList.remove("wave"); void e.offsetWidth; e.classList.add("wave"); });
+    setTimeout(() => els.forEach(e => e.classList.remove("wave")), 3800);
+  } catch(e){}
+}
+document.addEventListener("pointerdown", idleReset, true);
+document.addEventListener("keydown", idleReset, true);
+idleReset(); // arm once at load (the chooser/start screen is idle-eligible from the first paint)
+
 /* ---------- mute ---------- */
 function updateMuteBtn(){
   const btn = $("muteBtn");
@@ -5506,6 +5539,7 @@ function braveGuess(){
 function show(id){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   $(id).classList.add("active");
+  idleReset(); // v15.1: any screen change re-arms the 20s idle-attract timer
 }
 function monthsFromBday(iso){
   if (!iso) return null;
